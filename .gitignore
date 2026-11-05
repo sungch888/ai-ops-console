@@ -1,7 +1,0 @@
-node_modules/
-dist/.vite/
-collector/config.json
-collector/receipts.json
-collector/__pycache__/
-*.tsbuildinfo
-.DS_Store

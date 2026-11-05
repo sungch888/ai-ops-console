@@ -25,7 +25,7 @@ export default function GovernScope() {
   const [gCards, setGCards] = useState('8')
   const [gConn, setGConn] = useState('')
   const [gCls, setGCls] = useState<'公开' | '内部' | '敏感'>('内部')
-  const [gOwner, setGOwner] = useState('客户方')
+  const [gOwner, setGOwner] = useState('客户方侧')
   const [gNote, setGNote] = useState('')
   const [bindId, setBindId] = useState('')
   const [bindConn, setBindConn] = useState('')

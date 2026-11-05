@@ -1016,7 +1016,7 @@ class Engine {
       done(`✔ 抢占后：高保 ${st.pools.find((x) => x.id === 'hp')!.cards} 卡（利用率 ${poolUtil(st, 'hp')}%）· 共享 ${st.pools.find((x) => x.id === 'shared')!.cards} 卡（利用率 ${poolUtil(st, 'shared')}%）`)
       done('→ 被抢占方应用已收到副本降级通知，工单可回滚恢复原保障等级')
     } else if (id === 'incident') {
-      const q = run(this.submit({ type: 'quota_adjust', applicant: '调度行 · 场景演练', dept: '情报', level: '高保', reason: '重点事件高发时段业务事件报告调用激增，平台代理凭证临时提额以保障成文链路', spec: { credId: 'SA-0092', rpm: 360 } }))
+      const q = run(this.submit({ type: 'quota_adjust', applicant: '调度行 · 场景演练', dept: '信息', level: '高保', reason: '重点事件高发时段业务事件报告调用激增，平台代理凭证临时提额以保障成文链路', spec: { credId: 'SA-0092', rpm: 360 } }))
       if (q) this.close(q)
       const c = run(this.submit({ type: 'containment', applicant: '运行监测 · 场景演练', dept: '应用中心', level: '共享', reason: '事件高峰期间公开信息类应用并发拉高，先限流保护共享池，避免拖垮业务事件与咨询核心链路', spec: { kind: '智能体应用', name: '公开信息筛选', action: '限流保护', basis: '告警触发' } }))
       if (c) this.close(c)

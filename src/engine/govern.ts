@@ -41,13 +41,13 @@ const SEED: Governed[] = [
   G({ id: 'g-cp-cambricon', domain: '算力平台', name: '寒武纪本地推理池', source: '自建', vendor: '寒武纪', scale: 'GLM 系列 2 副本 / 4 卡', cards: 4, connectorId: '', wantDepth: 4, owner: '信息化管理部', cls: '内部', note: '渠道健康与权重可实时调整' }),
   G({ id: 'g-cp-train', domain: '算力平台', name: '模型训练平台（微调 / 带教）', source: '已建子系统', vendor: '子系统厂商', scale: '16 卡训练池 · LoRA 任务队列', cards: 16, connectorId: 'i-train', wantDepth: 4, owner: '信息化管理部', cls: '内部', note: '任务与卡位占用需接口回传才能纳入统一排期' }),
   G({ id: 'g-cp-video', domain: '算力平台', name: '视频图像专网 NPU 集群', source: '已建子系统', vendor: '视频平台厂商', scale: '24 卡 · 图像审核专用', cards: 24, connectorId: 'i-agent', wantDepth: 4, owner: '示例业务二部', cls: '内部', note: '专网侧调度指令需设备侧执行回执' }),
-  G({ id: 'g-cp-rent', domain: '算力平台', name: '第三方 GPU 扩租池', source: '第三方资源', vendor: '资源方', scale: '额度 8 卡 · 260 元/卡/日', cards: 8, connectorId: 'r-gpu', wantDepth: 4, owner: '客户方 + 资源方', cls: '内部', note: '启用后可在本地不足时补卡位；未启用则只能登记' }),
+  G({ id: 'g-cp-rent', domain: '算力平台', name: '第三方 GPU 扩租池', source: '第三方资源', vendor: '资源方', scale: '额度 8 卡 · 260 元/卡/日', cards: 8, connectorId: 'r-gpu', wantDepth: 4, owner: '客户方侧 + 资源方', cls: '内部', note: '启用后可在本地不足时补卡位；未启用则只能登记' }),
   G({ id: 'g-cp-edge', domain: '算力平台', name: '边缘推理盒子（基层站点 / 前端节点）', source: '边缘 / 终端', vendor: '多家硬件厂商', scale: '12 个站点 · 每站 1-2 卡', cards: 18, connectorId: 'r-extdata', wantDepth: 3, owner: '属地机关事业单位', cls: '内部', note: '站点分散，需现场运维配合，暂不纳入统一调度' }),
 
   // 算力资源
   G({ id: 'g-res-cards', domain: '算力资源', name: '推理卡位池（88 卡总量）', source: '自建', vendor: '自建机房', scale: '已分配 30 卡 · 空闲 42 卡 · 训练 16 卡', cards: 88, connectorId: '', wantDepth: 4, owner: '信息化管理部', cls: '内部', note: '扩容 / 回收 / 抢占全部走工单与变更窗口' }),
   G({ id: 'g-res-storage', domain: '算力资源', name: '分布式存储与向量库存储', source: '自建', vendor: '自建', scale: '480 TB · 配额与用量台账', cards: 0, connectorId: '', wantDepth: 4, owner: '信息化管理部', cls: '内部', note: '配额调整走变更单' }),
-  G({ id: 'g-res-backup', domain: '算力资源', name: '外部备份与冷存储', source: '第三方资源', vendor: '客户方指定服务商', scale: '120 TB · SFTP 批量交换', cards: 0, connectorId: 'r-backup', wantDepth: 3, owner: '客户方', cls: '敏感', note: '保留期与恢复演练频次未定，暂不做平台侧排程' }),
+  G({ id: 'g-res-backup', domain: '算力资源', name: '外部备份与冷存储', source: '第三方资源', vendor: '客户方侧指定服务商', scale: '120 TB · SFTP 批量交换', cards: 0, connectorId: 'r-backup', wantDepth: 3, owner: '客户方侧', cls: '敏感', note: '保留期与恢复演练频次未定，暂不做平台侧排程' }),
   G({ id: 'g-res-net', domain: '算力资源', name: '跨网链路与带宽（示例单位信息网 / 视频专网 / 接入区）', source: '自建', vendor: '网络运维', scale: '3 条链路 · 带宽与可用率台账', cards: 0, connectorId: '', wantDepth: 4, owner: '信息化管理部', cls: '内部', note: '链路切换属网络侧操作，平台只展示与告警' }),
 
   // 智能体
@@ -55,7 +55,7 @@ const SEED: Governed[] = [
   G({ id: 'g-ag-interview', domain: '智能体', name: '咨询问答助手', source: '已建子系统', vendor: '子系统厂商', scale: '高保 · 2 副本', cards: 0, connectorId: 'i-agent', wantDepth: 4, owner: '示例业务五部', cls: '内部', note: '可限流、可暂停，恢复须归口确认' }),
   G({ id: 'g-ag-image', domain: '智能体', name: '交通违规图像审核', source: '已建子系统', vendor: '子系统厂商', scale: '灰度 · 2 副本 / 4 卡', cards: 0, connectorId: 'i-agent', wantDepth: 4, owner: '示例业务二部', cls: '内部', note: '灰度批次与副本可调' }),
   G({ id: 'g-ag-opinion', domain: '智能体', name: '公开信息筛选', source: '已建子系统', vendor: '子系统厂商', scale: '共享 · 限流保护中', cards: 0, connectorId: 'i-agent', wantDepth: 4, owner: '示例业务四部', cls: '敏感', note: '处置动作与通知闭环已打通' }),
-  G({ id: 'g-ag-12345', domain: '智能体', name: '12345 热线转办智能体', source: '外部厂商', vendor: '第三方服务商', scale: '接入区 · 日调用 3.2 万次', cards: 0, connectorId: 'r-extdata', wantDepth: 3, owner: '客户方', cls: '内部', note: '外部智能体：可度量，处置需服务商执行' }),
+  G({ id: 'g-ag-12345', domain: '智能体', name: '12345 热线转办智能体', source: '外部厂商', vendor: '第三方服务商', scale: '接入区 · 日调用 3.2 万次', cards: 0, connectorId: 'r-extdata', wantDepth: 3, owner: '客户方侧', cls: '内部', note: '外部智能体：可度量，处置需服务商执行' }),
   G({ id: 'g-ag-train', domain: '智能体', name: '新人带教智能体', source: '已建子系统', vendor: '子系统厂商', scale: '训练池承载', cards: 0, connectorId: 'i-train', wantDepth: 3, owner: '训练处', cls: '内部', note: '训练平台侧的下线动作待回执确认' }),
 
   // Skill
@@ -67,9 +67,9 @@ const SEED: Governed[] = [
   // MCP
   G({ id: 'g-mcp-addr', domain: 'MCP', name: '标准地址解析 MCP 服务', source: '自建', vendor: '自建', scale: '3 副本 · 51.2 万次/日', cards: 0, connectorId: 'i-mcp', wantDepth: 4, owner: '信息化管理部', cls: '内部', note: '双目录联动，可隔离出目录' }),
   G({ id: 'g-mcp-vehicle', domain: 'MCP', name: '车辆管理查询 MCP 服务', source: '已建子系统', vendor: '交通管理子系统', scale: '2 副本 · 36.4 万次/日', cards: 0, connectorId: 'i-mcp', wantDepth: 4, owner: '示例业务二部', cls: '敏感', note: '权限矩阵按角色 + 密级控制' }),
-  G({ id: 'g-mcp-case', domain: 'MCP', name: '业务系统查询 MCP 服务', source: '已建子系统', vendor: '调度行子系统', scale: '4 副本 · 141.4 万次/日', cards: 0, connectorId: 'i-mcp', wantDepth: 4, owner: '情报中心', cls: '敏感', note: '检索量与命中可度量，可隔离' }),
+  G({ id: 'g-mcp-case', domain: 'MCP', name: '业务系统查询 MCP 服务', source: '已建子系统', vendor: '调度行子系统', scale: '4 副本 · 141.4 万次/日', cards: 0, connectorId: 'i-mcp', wantDepth: 4, owner: '信息中枢', cls: '敏感', note: '检索量与命中可度量，可隔离' }),
   G({ id: 'g-mcp-video', domain: 'MCP', name: '视频图像检索 MCP 服务', source: '已建子系统', vendor: '视频子系统', scale: '已隔离出目录（演示）', cards: 0, connectorId: 'i-mcp', wantDepth: 4, owner: '信息化管理部', cls: '内部', note: '双目录摘除与恢复已演示' }),
-  G({ id: 'g-mcp-cross', domain: 'MCP', name: '跨网数据交换 MCP 服务', source: '外部厂商', vendor: '待确认厂商', scale: '待上架 · 依赖跨网通道', cards: 0, connectorId: 'r-extdata', wantDepth: 2, owner: '客户方', cls: '敏感', note: '跨网通道与密级边界未定，暂只能登记' }),
+  G({ id: 'g-mcp-cross', domain: 'MCP', name: '跨网数据交换 MCP 服务', source: '外部厂商', vendor: '待确认厂商', scale: '待上架 · 依赖跨网通道', cards: 0, connectorId: 'r-extdata', wantDepth: 2, owner: '客户方侧', cls: '敏感', note: '跨网通道与密级边界未定，暂只能登记' }),
 ]
 
 function syncDependents(list: Governed[]) {

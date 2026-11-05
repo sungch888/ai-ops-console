@@ -265,7 +265,7 @@ export function scan(st: EngineState = engine.get()): ExceptionRec[] {
   if (rent.used > rent.quota) {
     const live = connectors.filter((c) => c.kind === '外部算力资源' && c.enabled)
     out.push({
-      key: key('资源异常', 'rent-over'), kind: '资源异常', target: '外部扩租卡位', owner: '客户方 + 资源方', severity: '紧急', active: true,
+      key: key('资源异常', 'rent-over'), kind: '资源异常', target: '外部扩租卡位', owner: '客户方侧 + 资源方', severity: '紧急', active: true,
       ref: { connectorId: live[0]?.id ?? RENT_ID },
       title: `外部扩租已用 ${rent.used} 卡，超出配置额度 ${rent.quota} 卡`,
       evidence: [`已开扩租卡位 ${rent.used} 卡`, `接入配置额度 ${rent.quota} 卡 · ${rent.price} 元/卡/日`, '超额部分无合同依据且按外部成本入账'],
@@ -324,7 +324,7 @@ export function scan(st: EngineState = engine.get()): ExceptionRec[] {
   if (extTokensWan > extQuota && extQuota > 0) {
     const heavy = st.creds.filter((c) => c.status !== 'off').sort((a, b) => b.rpm - a.rpm)[0]
     out.push({
-      key: key('配额越界', 'llm-quota'), kind: '配额越界', target: '外部模型渠道 Token 配额', owner: '客户方', severity: '高', active: true, ref: { connectorId: LLM_CHANNEL_ID },
+      key: key('配额越界', 'llm-quota'), kind: '配额越界', target: '外部模型渠道 Token 配额', owner: '客户方侧', severity: '高', active: true, ref: { connectorId: LLM_CHANNEL_ID },
       title: `外部 Token 日用量 ${extTokensWan.toLocaleString('zh-CN')} 万超过配额 ${extQuota.toLocaleString('zh-CN')} 万`,
       evidence: ['外部渠道 Token 用量按路由权重分摊后统计', `配额来源：外部接入配置（${llmChannelConfig().name}）`, `超限 ${Math.round(((extTokensWan - extQuota) / extQuota) * 100)}%`],
       impact: '超限部分按外部成本入账，费用与合同口径不一致',
@@ -386,7 +386,7 @@ export function scan(st: EngineState = engine.get()): ExceptionRec[] {
     }
     if (pr.id === 'p-cmdb') {
       out.push({
-        key: key('接管缺口', 'probe-cmdb'), kind: '接管缺口', target: 'CMDB 台账与平台账本差 6 卡', owner: '客户方 + 信息化管理部', severity: '高', active: true,
+        key: key('接管缺口', 'probe-cmdb'), kind: '接管缺口', target: 'CMDB 台账与平台账本差 6 卡', owner: '客户方侧 + 信息化管理部', severity: '高', active: true,
         title: '资产台账 94 卡 · 平台账本 88 卡 · 差 6 卡（3 台设备）',
         evidence: [`数据来源：${PROBE_LABEL[pr.id]}（${pr.name} · ${pr.transport}）`, '台账有 / 平台无：910B-1102（2 卡）、910B-1147（2 卡）、T4-0310（2 卡）', '平台有 / 台账无：无', '对账口径待客户方确认（按序列号还是按机柜位）'],
         impact: '卡位总量与成本对不上：扩容审批依据失真，退役设备可能仍在通电',

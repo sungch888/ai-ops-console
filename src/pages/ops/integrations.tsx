@@ -57,7 +57,7 @@ export default function OpsIntegrations() {
   const [importText, setImportText] = useState('')
   const [nKind, setNKind] = useState<ConnKind>('外部算力资源')
   const [nName, setNName] = useState('')
-  const [nOwner, setNOwner] = useState('客户方')
+  const [nOwner, setNOwner] = useState('客户方侧')
   const [nTransport, setNTransport] = useState<string>('REST / JSON')
   const [nAuth, setNAuth] = useState<string>('AppKey + 签名')
   const [nItems, setNItems] = useState('')

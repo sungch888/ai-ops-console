@@ -109,9 +109,9 @@ export const credentials = [
 
 export const credOrders = [
   { id: 'WO-1104-08', type: '凭证申请', applicant: '示例业务六部 · 示例××', model: 'DeepSeek-V3', quota: 'RPM 120', status: 'review', time: '11-04 16:40' },
-  { id: 'WO-1104-05', type: '配额提升', applicant: '示例业务二部 · 平台代理', model: 'Qwen3-32B 微调', quota: 'TPM 60万→90万', status: 'pass', time: '11-04 10:22' },
+  { id: 'WO-1104-05', type: '配额提升', applicant: '示例业务二部部门 · 平台代理', model: 'Qwen3-32B 微调', quota: 'TPM 60万→90万', status: 'pass', time: '11-04 10:22' },
   { id: 'WO-1103-11', type: '凭证吊销', applicant: '安全值守', model: '—', quota: 'PK-2210（疑似泄露）', status: 'done', time: '11-03 21:07' },
-  { id: 'WO-1103-02', type: '凭证申请', applicant: '涉外 · 黄××', model: 'GLM-4-9B', quota: 'RPM 60', status: 'pending', time: '11-03 09:15' },
+  { id: 'WO-1103-02', type: '凭证申请', applicant: '涉外 · 示例××', model: 'GLM-4-9B', quota: 'RPM 60', status: 'pending', time: '11-03 09:15' },
 ]
 
 export const datasets = [
@@ -137,7 +137,7 @@ export const traces = [
   { id: 'tr-9f3a7c21e8b4', time: '11-04 21:47:12', user: '示例××（示范市01单位）', app: '报告撰写助手', kb: '典型案例库', tools: '业务系统查询', model: 'Qwen3-32B 微调', tokens: 8642, sec: 'pass', result: '正常返回' },
   { id: 'tr-77b2d90c1f3a', time: '11-04 21:41:55', user: '系统 · 交通违规识别', app: '违法图像审核', kb: '—', tools: 'OCR 插件', model: 'Qwen2.5-VL（灰度）', tokens: 4210, sec: 'pass', result: '正常返回' },
   { id: 'tr-5e18aa02d977', time: '11-04 21:36:08', user: '示例××（示范市02单位）', app: '个人对话', kb: '—', tools: '—', model: 'DeepSeek-V3', tokens: 2380, sec: 'block', result: '注入攻击已拦截' },
-  { id: 'tr-40cc19b7e2aa', time: '11-04 21:22:41', user: '黄××（示范市03单位）', app: '咨询问答助手', kb: '咨询话术库', tools: '法规库检索', model: 'GLM-4-9B', tokens: 6120, sec: 'mask', result: '敏感字段已脱敏' },
+  { id: 'tr-40cc19b7e2aa', time: '11-04 21:22:41', user: '示例××（示范市03单位）', app: '咨询问答助手', kb: '咨询话术库', tools: '法规库检索', model: 'GLM-4-9B', tokens: 6120, sec: 'mask', result: '敏感字段已脱敏' },
   { id: 'tr-2b88e04f6c12', time: '11-04 20:58:33', user: '罗××（示范市03单位）', app: '个人对话', kb: '—', tools: '—', model: 'DeepSeek-V3', tokens: 980, sec: 'pass', result: '正常返回' },
   { id: 'tr-1d64f7a2b903', time: '11-04 20:44:19', user: '系统 · 公开信息监测', app: '公开信息筛选', kb: '公开信息案例库', tools: '—', model: 'Qwen3-32B 微调', tokens: 15230, sec: 'pass', result: '正常返回' },
 ]
