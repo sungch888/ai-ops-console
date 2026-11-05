@@ -1,7 +1,7 @@
 # AI 运营管理平台 · 演示版（脱敏公开版）
 
 面向「算力 / 模型 / 应用」三中心统一运行管理的**演示原型**：前端可交互、流程有门禁、数据可追溯来源。
-用于选型与方案交流，**不是可交付的生产系统**。
+用于选型与方案交流，**作为正式版本的初级版本迭代**（升级路线见 `docs-src/architecture.md`）。
 
 仓库名：`ai-ops-console` · 许可证：MIT
 
@@ -26,8 +26,8 @@
 ## 快速开始
 
 ```bash
-# 直接跑演示（不需要装依赖，dist 已包含在仓库里）
-python3 serve.py            # 或 ./start.sh（Mac/Linux）、双击 start.bat（Windows，无 Python 会自动改用 PowerShell）
+# 直接跑演示（Python 标准库，不用装第三方包；dist 已在仓库里）
+python3 server/server.py    # 或 ./start.sh（Mac/Linux）、双击 start.bat（Windows，无 Python 自动改用 PowerShell）
 
 # 改代码后重新构建
 npm install                 # 或 pnpm install
@@ -35,6 +35,18 @@ npm run build
 ```
 
 浏览器打开 `http://127.0.0.1:8090/`，演示账号免密：管理员 A / 运营 B / 开发者 C / 用户 D。
+
+## 数据存哪里
+
+**业务状态存数据库，浏览器本地不存任何东西**（不用 localStorage / sessionStorage / IndexedDB）。
+
+- 数据服务：`server/server.py`（Python 标准库 + SQLite），既托管页面也提供 `/api`。
+- 数据文件：`server/data/aiops.db`（演示数据落这里，已 gitignore；拷走文件就等于带走数据）。
+- 表：状态快照 `kv_store` + 投影表 `orders` / `order_trace` / `events` / `notifications` / `accounts` /
+  `role_permissions` / `entities` / `settings` + 写入审计 `audit_log`（`server/schema.sql`）。
+- 自检与查询：`/api/health`、`/api/orders?status=待审批`、`/api/audit?limit=50`、
+  `/api/entities?kind=connector`、`/api/export`（全量导出，便于换库迁移）。
+- 接口契约：`docs-src/api-contract.md`；换 PostgreSQL 的做法：`docs-src/architecture.md`。
 
 ## 只读采集层
 
@@ -54,13 +66,16 @@ python3 collector/collect.py --config collector/config.json --loop 30   # 接真
 |---|---|
 | `src/` | React 19 + TypeScript 前端；`src/engine/` 是演示引擎（工单、准入校验、例外监控、接管深度、整改闭环、权限矩阵） |
 | `dist/` | 构建产物，可直接起服务 |
+| `server/` | 数据服务（`server.py`）与表结构（`schema.sql`），存 SQLite 数据库 |
 | `collector/` | 只读采集脚本与配置样例 |
-| `docs-src/operation-manual.md` / `.docx` | 系统操作说明书（36 个小节，含表单校验规则表与常见问题） |
+| `docs-src/operation-manual.md` / `.docx` | 系统操作说明书（37 个小节，含表单校验规则表与常见问题） |
+| `docs-src/api-contract.md` | 数据服务接口契约（接口、状态键、分页、失败语义） |
+| `docs-src/architecture.md` | 当前结构、数据模型与 v2.2 → v3.x 正式版迭代计划 |
 | `serve.py` `start.bat` `start.ps1` `start.sh` `README-START.txt` | 启动与打包 |
 
 ## 还没做（别当成已交付）
 
-告警规则中心与例外监控两套尚未打通；多租户 / 项目组上下文切换；移动端布局适配；审计长期留存与分页；整改闭环接真实工单与值班系统；安全设备真实联动；真实统一身份认证；国密改造与密评。
+真实身份认证与服务端鉴权（演示仍是免密）；多人并发写的一致性保护；告警规则中心与例外监控两套尚未打通；多租户 / 项目组上下文切换；移动端布局适配；审计长期留存与分页；整改闭环接真实工单与值班系统；安全设备真实联动；真实统一身份认证；国密改造与密评。
 
 ## 授权
 

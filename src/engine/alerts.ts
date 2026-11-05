@@ -7,6 +7,8 @@
 import { useSyncExternalStore } from 'react'
 import { engine, poolUtil, freeCards, type EngineState } from './engine'
 import { notifyStore } from './ops'
+import { dbRead, dbWrite, dbSeed } from './db'
+
 
 export type AlertDim = '渠道' | '资源池' | '全局' | '凭证' | '应用'
 export type AlertMetric = 'p95延迟' | '错误率' | '配额占用率' | '利用率' | '空闲卡位' | '数量' | '成功率' | '调用失败率' | '解析失败率'
@@ -54,22 +56,23 @@ const RULE_KEY = 'dsh-demo-alert-rules-v1'
 const BASE_KEY = 'dsh-demo-alert-baseline-v1'
 
 let rules: AlertRule[] = loadRules()
+dbSeed(RULE_KEY, rules)
 let baselines: Record<string, number[]> = loadBaselines()
 const listeners = new Set<() => void>()
 let evaluating = false
 const lastAt: Record<string, number> = {}
 
 function loadRules(): AlertRule[] {
-  try { const r = localStorage.getItem(RULE_KEY); return r ? JSON.parse(r) as AlertRule[] : structuredClone(DEFAULT_RULES) } catch { return structuredClone(DEFAULT_RULES) }
+  try { const r = dbRead(RULE_KEY); return r ? JSON.parse(r) as AlertRule[] : structuredClone(DEFAULT_RULES) } catch { return structuredClone(DEFAULT_RULES) }
 }
 function loadBaselines(): Record<string, number[]> {
-  try { const r = localStorage.getItem(BASE_KEY); return r ? JSON.parse(r) as Record<string, number[]> : {} } catch { return {} }
+  try { const r = dbRead(BASE_KEY); return r ? JSON.parse(r) as Record<string, number[]> : {} } catch { return {} }
 }
 function persist() {
   try {
-    localStorage.setItem(RULE_KEY, JSON.stringify(rules))
-    localStorage.setItem(BASE_KEY, JSON.stringify(baselines))
-  } catch { /* 演示忽略 */ }
+    dbWrite(RULE_KEY, JSON.stringify(rules))
+    dbWrite(BASE_KEY, JSON.stringify(baselines))
+  } catch { /* 落库失败已在数据层记录 */ }
 }
 function emit() { rules = [...rules]; listeners.forEach((l) => l()) }
 function nowStr() {

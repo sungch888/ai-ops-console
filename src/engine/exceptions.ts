@@ -12,6 +12,8 @@ import { containersOf } from './inference'
 import { ledgerOf } from './ledger'
 import { rectifyStore } from './rectify'
 import { PROBE_IDS, PROBE_LABEL } from './connectors'
+import { dbRead, dbWrite, dbSeed } from './db'
+
 
 export type ExcKind = '旁路接入' | '旁路调用' | '接管缺口' | '资源异常' | '配额越界' | '目录不一致'
 export type ExcSeverity = '紧急' | '高' | '中'
@@ -65,11 +67,11 @@ interface HandledRec { key: string; kind: ExcKind; title: string; target: string
 interface MonitorSettings { intervalSec: number; autoBlockUrgent: boolean; notifyAll: boolean }
 
 function loadHandled(): Record<string, HandledRec> {
-  try { const r = localStorage.getItem(HANDLED_KEY); if (r) return JSON.parse(r) as Record<string, HandledRec> } catch { /* 演示环境忽略 */ }
+  try { const r = dbRead(HANDLED_KEY); if (r) return JSON.parse(r) as Record<string, HandledRec> } catch { /* 落库失败已在数据层记录 */ }
   return {}
 }
 function loadSettings(): MonitorSettings {
-  try { const r = localStorage.getItem(SETTINGS_KEY); if (r) return JSON.parse(r) as MonitorSettings } catch { /* 演示环境忽略 */ }
+  try { const r = dbRead(SETTINGS_KEY); if (r) return JSON.parse(r) as MonitorSettings } catch { /* 落库失败已在数据层记录 */ }
   return { intervalSec: 20, autoBlockUrgent: false, notifyAll: true }
 }
 
@@ -77,13 +79,14 @@ let cache: ExcView[] | null = null
 let cache2: ExcView[] | null = null
 let handled: Record<string, HandledRec> = loadHandled()
 let settings: MonitorSettings = loadSettings()
+dbSeed(SETTINGS_KEY, settings)
 let round = 0
 let lastScanAt = '未开始'
 const raised = new Set<string>()
 const listeners = new Set<() => void>()
 
-function persistHandled() { try { localStorage.setItem(HANDLED_KEY, JSON.stringify(handled)) } catch { /* 忽略 */ } }
-function persistSettings() { try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings)) } catch { /* 忽略 */ } }
+function persistHandled() { try { dbWrite(HANDLED_KEY, JSON.stringify(handled)) } catch { /* 落库失败已在数据层记录 */ } }
+function persistSettings() { try { dbWrite(SETTINGS_KEY, JSON.stringify(settings)) } catch { /* 落库失败已在数据层记录 */ } }
 function emit() { cache = null; cache2 = null; listeners.forEach((l) => l()) }
 
 const callsNum = (s: string) => (s.includes('万') ? Math.round(parseFloat(s) * 10000) : parseInt(s.replace(/[^\d]/g, ''), 10) || 0)

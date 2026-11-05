@@ -6,6 +6,8 @@
 import { useSyncExternalStore } from 'react'
 import { engine } from './engine'
 import { notifyStore } from './ops'
+import { dbRead, dbWrite, dbSeed } from './db'
+
 
 export type PolicyKind = '敏感词' | '脱敏规则' | '注入特征' | '输出过滤'
 export type PolicyAction = '提示' | '脱敏' | '拦截' | '转人工'
@@ -73,16 +75,17 @@ const DEFAULT_PROMPTS: PromptRef[] = [
 ]
 
 let policies: Policy[] = loadPolicies()
+dbSeed(KEY, policies)
 let prompts: PromptRef[] = loadPrompts()
 let changes: PolicyChange[] = []
 let seq = 1
 const listeners = new Set<() => void>()
 
 function loadPolicies(): Policy[] {
-  try { const raw = localStorage.getItem(KEY); if (!raw) return structuredClone(DEFAULT_POLICIES); const p = JSON.parse(raw) as Policy[]; return Array.isArray(p) && p.length ? p : structuredClone(DEFAULT_POLICIES) } catch { return structuredClone(DEFAULT_POLICIES) }
+  try { const raw = dbRead(KEY); if (!raw) return structuredClone(DEFAULT_POLICIES); const p = JSON.parse(raw) as Policy[]; return Array.isArray(p) && p.length ? p : structuredClone(DEFAULT_POLICIES) } catch { return structuredClone(DEFAULT_POLICIES) }
 }
 function loadPrompts(): PromptRef[] { return structuredClone(DEFAULT_PROMPTS) }
-function persist() { try { localStorage.setItem(KEY, JSON.stringify(policies)) } catch { /* 演示忽略 */ } }
+function persist() { try { dbWrite(KEY, JSON.stringify(policies)) } catch { /* 落库失败已在数据层记录 */ } }
 function emitP() { policies = [...policies]; changes = [...changes]; prompts = [...prompts]; listeners.forEach((l) => l()) }
 
 export const policyStore = {

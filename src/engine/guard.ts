@@ -4,6 +4,8 @@
  * 通过一个标准契约接进来：改配置即接真实引擎，不改页面
  * ===================================================================== */
 import { useSyncExternalStore } from 'react'
+import { dbRead, dbWrite } from './db'
+
 
 export type GuardStage = '前置检测' | '路由与推理' | '后置检测' | '判定与动作' | '审计与留痕'
 export type GuardScenario = '正常问答' | '含敏感词' | '越权查询' | '输出异常'
@@ -37,10 +39,10 @@ const runs: GuardRun[] = []
 const listeners = new Set<() => void>()
 
 function loadCfg(): GuardConfig {
-  try { const r = localStorage.getItem(KEY); if (r) return { ...DEFAULT_CONFIG, ...JSON.parse(r) as GuardConfig } } catch { /* 演示环境忽略 */ }
+  try { const r = dbRead(KEY); if (r) return { ...DEFAULT_CONFIG, ...JSON.parse(r) as GuardConfig } } catch { /* 落库失败已在数据层记录 */ }
   return { ...DEFAULT_CONFIG }
 }
-function persist() { try { localStorage.setItem(KEY, JSON.stringify(config)) } catch { /* 忽略 */ } }
+function persist() { try { dbWrite(KEY, JSON.stringify(config)) } catch { /* 落库失败已在数据层记录 */ } }
 function emit() { listeners.forEach((l) => l()) }
 const nowTime = () => new Date().toLocaleTimeString('zh-CN', { hour12: false }).slice(0, 8)
 

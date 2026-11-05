@@ -6,6 +6,8 @@
 import { useSyncExternalStore } from 'react'
 import { engine, poolUtil, type EngineState } from './engine'
 import { ledgerOf } from './ledger'
+import { dbRead, dbWrite } from './db'
+
 
 export type Quantization = 'FP16' | 'W8A8' | 'INT8'
 export interface EngineConfig { prefixCache: boolean; kvResident: boolean; quantization: Quantization; maxNumSeqs: number; batchWindowMs: number }
@@ -28,12 +30,12 @@ let restarts: Record<string, number> = {}
 
 function load(): EngineConfig {
   try {
-    const raw = localStorage.getItem(KEY)
+    const raw = dbRead(KEY)
     if (raw) { const p = JSON.parse(raw) as EngineConfig; if (p && typeof p.prefixCache === 'boolean' && p.quantization in QUANT_FACTOR) return { ...DEFAULT_CONFIG, ...p } }
   } catch { /* 演示环境忽略损坏配置 */ }
   return { ...DEFAULT_CONFIG }
 }
-function persist() { try { localStorage.setItem(KEY, JSON.stringify(config)) } catch { /* 忽略 */ } }
+function persist() { try { dbWrite(KEY, JSON.stringify(config)) } catch { /* 落库失败已在数据层记录 */ } }
 function emit() { listeners.forEach((f) => f()) }
 
 export const inferenceStore = {

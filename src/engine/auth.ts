@@ -4,6 +4,8 @@
  * 权限矩阵可编辑并立即生效；登录为演示账号免密（不收集真实口令）
  * ===================================================================== */
 import { useSyncExternalStore } from 'react'
+import { dbRead, dbWrite, dbRemove, dbSeed, setAuditAccount } from './db'
+
 
 export type Role = 'admin' | 'ops' | 'dev' | 'user'
 export type PermKey = 'app' | 'agent' | 'kb' | 'tool' | 'cred' | 'compute' | 'workflow' | 'gateway' | 'security' | 'audit' | 'matrix' | 'export' | 'integration' | 'analytics' | 'overview' | 'approve'
@@ -48,6 +50,7 @@ const DEFAULT_MATRIX: Matrix = {
 
 const MATRIX_KEY = 'dsh-demo-matrix-v1'
 const SESSION_KEY = 'dsh-demo-session-v1'
+const ACCOUNTS_KEY = 'dsh-demo-accounts-v1'
 
 /* ---------------- 权限矩阵存储 ---------------- */
 let matrix: Matrix = loadMatrix()
@@ -55,14 +58,14 @@ const matrixListeners = new Set<() => void>()
 
 function loadMatrix(): Matrix {
   try {
-    const raw = localStorage.getItem(MATRIX_KEY)
+    const raw = dbRead(MATRIX_KEY)
     if (!raw) return structuredClone(DEFAULT_MATRIX)
     const p = JSON.parse(raw) as Matrix
     if (!p.admin || !p.user) return structuredClone(DEFAULT_MATRIX)
     return p
   } catch { return structuredClone(DEFAULT_MATRIX) }
 }
-function saveMatrix() { try { localStorage.setItem(MATRIX_KEY, JSON.stringify(matrix)) } catch { /* 演示忽略 */ } }
+function saveMatrix() { try { dbWrite(MATRIX_KEY, JSON.stringify(matrix)) } catch { /* 落库失败已在数据层记录 */ } }
 function emitMatrix() { matrix = { ...matrix }; matrixListeners.forEach((l) => l()) }
 
 export const matrixStore = {
@@ -100,12 +103,18 @@ export function useMatrix() {
 let session: DemoAccount | null = loadSession()
 const sessionListeners = new Set<() => void>()
 
+/* 演示账号也入库存一份（正式版替换为真实用户表 / 统一身份认证） */
+try { dbSeed(MATRIX_KEY, matrix) } catch { /* 落库失败已在数据层记录 */ }
+try { dbWrite(ACCOUNTS_KEY, JSON.stringify(DEMO_ACCOUNTS)) } catch { /* 落库失败已在数据层记录 */ }
+
 function loadSession(): DemoAccount | null {
   try {
-    const raw = localStorage.getItem(SESSION_KEY)
+    const raw = dbRead(SESSION_KEY)
     if (!raw) return null
     const id = JSON.parse(raw) as string
-    return DEMO_ACCOUNTS.find((a) => a.id === id) ?? null
+    const acc = DEMO_ACCOUNTS.find((a) => a.id === id) ?? null
+    if (acc) setAuditAccount(acc.id)
+    return acc
   } catch { return null }
 }
 function emitSession() { sessionListeners.forEach((l) => l()) }
@@ -116,12 +125,13 @@ export const auth = {
   login(id: string) {
     const acc = DEMO_ACCOUNTS.find((a) => a.id === id) ?? null
     session = acc
-    try { localStorage.setItem(SESSION_KEY, JSON.stringify(acc?.id ?? '')) } catch { /* 演示忽略 */ }
+    setAuditAccount(acc?.id ?? '')
+    try { dbWrite(SESSION_KEY, JSON.stringify(acc?.id ?? '')) } catch { /* 落库失败已在数据层记录 */ }
     emitSession()
   },
   logout() {
     session = null
-    try { localStorage.removeItem(SESSION_KEY) } catch { /* 演示忽略 */ }
+    try { dbRemove(SESSION_KEY) } catch { /* 落库失败已在数据层记录 */ }
     emitSession()
   },
 }

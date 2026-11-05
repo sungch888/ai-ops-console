@@ -5,6 +5,8 @@
 import { type EngineState, MODEL_APPS } from './engine'
 import { rentConfig } from './connectors'
 import { apps as mockApps } from '../data/mock'
+import { dbRead, dbWrite } from './db'
+
 
 const CARD_RPM = 22 // 每张推理卡可持续承载调用数（次/分钟，演示折算口径）
 const TOKENS_PER_CALL = 820 // 平均单次调用 Token 数
@@ -35,10 +37,10 @@ const BUDGET_WEIGHTS: Record<string, number> = {
   '训练带教项目组': 0.1, '公开信息项目组': 0.07, '专项检索项目组': 0.06, '装备维保项目组': 0.04, '低空巡检试点项目组': 0.02,
 }
 export function getAllocMode(): AllocMode {
-  try { return localStorage.getItem(ALLOC_KEY) === 'budget' ? 'budget' : 'usage' } catch { return 'usage' }
+  try { return dbRead(ALLOC_KEY) === 'budget' ? 'budget' : 'usage' } catch { return 'usage' }
 }
 export function setAllocMode(mode: AllocMode) {
-  try { localStorage.setItem(ALLOC_KEY, mode) } catch { /* 演示环境忽略存储失败 */ }
+  try { dbWrite(ALLOC_KEY, mode) } catch { /* 落库失败已在数据层记录 */ }
 }
 export interface DistrictRow { city: string; name: string; calls: number; tokens: number; cost: number }
 

@@ -4,6 +4,8 @@
  * ===================================================================== */
 import { useSyncExternalStore } from 'react'
 import { engine, type EngineState } from './engine'
+import { dbRead, dbWrite, dbSeed } from './db'
+
 
 /* ---------------- 通知中心 ---------------- */
 export interface Notif { id: string; time: string; level: '一般' | '重要' | '紧急'; title: string; text: string; channels: string[]; read: boolean; handled: boolean; source: string }
@@ -20,18 +22,20 @@ const NOTIF_KEY = 'dsh-demo-notif-v1'
 const ROUTE_KEY = 'dsh-demo-route-v1'
 
 let notifs: Notif[] = loadNotifs()
+dbSeed(NOTIF_KEY, notifs)
 let routes: RouteRules = loadRoutes()
+dbSeed(ROUTE_KEY, routes)
 const nListeners = new Set<() => void>()
 let seq = 1
 
 function loadNotifs(): Notif[] {
-  try { const r = localStorage.getItem(NOTIF_KEY); return r ? JSON.parse(r) as Notif[] : [] } catch { return [] }
+  try { const r = dbRead(NOTIF_KEY); return r ? JSON.parse(r) as Notif[] : [] } catch { return [] }
 }
 function loadRoutes(): RouteRules {
-  try { const r = localStorage.getItem(ROUTE_KEY); return r ? JSON.parse(r) as RouteRules : structuredClone(DEFAULT_ROUTES) } catch { return structuredClone(DEFAULT_ROUTES) }
+  try { const r = dbRead(ROUTE_KEY); return r ? JSON.parse(r) as RouteRules : structuredClone(DEFAULT_ROUTES) } catch { return structuredClone(DEFAULT_ROUTES) }
 }
 function persist() {
-  try { localStorage.setItem(NOTIF_KEY, JSON.stringify(notifs.slice(0, 60))); localStorage.setItem(ROUTE_KEY, JSON.stringify(routes)) } catch { /* 演示忽略 */ }
+  try { dbWrite(NOTIF_KEY, JSON.stringify(notifs.slice(0, 60))); dbWrite(ROUTE_KEY, JSON.stringify(routes)) } catch { /* 落库失败已在数据层记录 */ }
 }
 function emitN() { notifs = [...notifs]; nListeners.forEach((l) => l()) }
 
@@ -127,11 +131,12 @@ const DEFAULT_REPORTS: ReportRec[] = [
   { id: 'R-03', name: 'Q3 容量评估报告', type: '季度', time: '10-31', state: '已报送', rows: 18, note: '含容量趋势与扩缩建议' },
 ]
 let reports: ReportRec[] = loadReports()
+dbSeed(REPORT_KEY, reports)
 const rListeners = new Set<() => void>()
 function loadReports(): ReportRec[] {
-  try { const r = localStorage.getItem(REPORT_KEY); return r ? JSON.parse(r) as ReportRec[] : structuredClone(DEFAULT_REPORTS) } catch { return structuredClone(DEFAULT_REPORTS) }
+  try { const r = dbRead(REPORT_KEY); return r ? JSON.parse(r) as ReportRec[] : structuredClone(DEFAULT_REPORTS) } catch { return structuredClone(DEFAULT_REPORTS) }
 }
-function emitR() { reports = [...reports]; try { localStorage.setItem(REPORT_KEY, JSON.stringify(reports)) } catch { /* 忽略 */ } rListeners.forEach((l) => l()) }
+function emitR() { reports = [...reports]; try { dbWrite(REPORT_KEY, JSON.stringify(reports)) } catch { /* 落库失败已在数据层记录 */ } rListeners.forEach((l) => l()) }
 
 export const reportStore = {
   get: () => reports,

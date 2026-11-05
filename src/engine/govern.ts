@@ -7,6 +7,8 @@
 import { useSyncExternalStore } from 'react'
 import { connectorStore, type Connector } from './connectors'
 import { engine } from './engine'
+import { dbRead, dbWrite, dbSeed } from './db'
+
 
 export type Domain = '算力平台' | '算力资源' | '智能体' | 'Skill' | 'MCP'
 export const DOMAINS: Domain[] = ['算力平台', '算力资源', '智能体', 'Skill', 'MCP']
@@ -79,16 +81,17 @@ function syncDependents(list: Governed[]) {
 const KEY = 'dsh-demo-govern-v1'
 const listeners = new Set<() => void>()
 let rows: Governed[] = load()
+dbSeed(KEY, rows)
 syncDependents(rows)
 
 function load(): Governed[] {
   try {
-    const raw = localStorage.getItem(KEY)
+    const raw = dbRead(KEY)
     if (raw) { const p = JSON.parse(raw) as Governed[]; if (Array.isArray(p) && p.length >= 15) return p }
-  } catch { /* 演示环境忽略 */ }
+  } catch { /* 落库失败已在数据层记录 */ }
   return SEED.map((g) => ({ ...g }))
 }
-function persist() { try { localStorage.setItem(KEY, JSON.stringify(rows)) } catch { /* 忽略 */ } }
+function persist() { try { dbWrite(KEY, JSON.stringify(rows)) } catch { /* 落库失败已在数据层记录 */ } }
 function emit() { listeners.forEach((l) => l()) }
 
 /** 纳管深度由接入配置实时推导（自建对象默认全接管） */

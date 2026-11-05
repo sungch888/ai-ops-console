@@ -5,6 +5,8 @@
  * ===================================================================== */
 import { useSyncExternalStore } from 'react'
 import { engine } from './engine'
+import { dbRead, dbWrite, dbSeed } from './db'
+
 
 export type RectStatus = '待接单' | '整改中' | '待复核' | '已关闭' | '已升级'
 export interface DutyRole { role: string; name: string; phone: string; lead: string; scope: string }
@@ -55,20 +57,22 @@ const now = () => new Date().toLocaleTimeString('zh-CN', { hour12: false }).slic
 const rank: Record<RectStatus, number> = { 已升级: 0, 待接单: 1, 整改中: 2, 待复核: 3, 已关闭: 4 }
 
 function loadRecs(): Record<string, RectifyRec> {
-  try { const r = localStorage.getItem(KEY); if (r) return JSON.parse(r) as Record<string, RectifyRec> } catch { /* 演示环境忽略 */ }
+  try { const r = dbRead(KEY); if (r) return JSON.parse(r) as Record<string, RectifyRec> } catch { /* 落库失败已在数据层记录 */ }
   return {}
 }
 function loadSettings(): DutySettings {
-  try { const r = localStorage.getItem(SKEY); if (r) return JSON.parse(r) as DutySettings } catch { /* 演示环境忽略 */ }
+  try { const r = dbRead(SKEY); if (r) return JSON.parse(r) as DutySettings } catch { /* 落库失败已在数据层记录 */ }
   return { responseMin: 15, dueMin: 90, autoDispatch: true }
 }
 
 let recs: Record<string, RectifyRec> = loadRecs()
+dbSeed(KEY, recs)
 let settings: DutySettings = loadSettings()
+dbSeed(SKEY, settings)
 let cache: RectifyRec[] | null = null
 const listeners = new Set<() => void>()
-function persist() { try { localStorage.setItem(KEY, JSON.stringify(recs)) } catch { /* 忽略 */ } }
-function persistSettings() { try { localStorage.setItem(SKEY, JSON.stringify(settings)) } catch { /* 忽略 */ } }
+function persist() { try { dbWrite(KEY, JSON.stringify(recs)) } catch { /* 落库失败已在数据层记录 */ } }
+function persistSettings() { try { dbWrite(SKEY, JSON.stringify(settings)) } catch { /* 落库失败已在数据层记录 */ } }
 function emit() { cache = null; listeners.forEach((l) => l()) }
 function roleOf(name: string): DutyRole { return DUTY_ROSTER.find((r) => r.role === name) ?? DUTY_ROSTER[4] }
 

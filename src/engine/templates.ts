@@ -6,6 +6,8 @@
 import { useSyncExternalStore } from 'react'
 import { engine } from './engine'
 import { notifyStore } from './ops'
+import { dbRead, dbWrite, dbSeed } from './db'
+
 
 export type TemplateKind = 'FAQ 知识库' | '操作手册' | '编排模板' | '提示词模板' | '处置预案' | '培训课件'
 export type TemplateStatus = '已发布' | '待审核' | '已停用'
@@ -40,16 +42,17 @@ export const DEFAULT_TEMPLATES: Template[] = [
 
 const listeners = new Set<() => void>()
 let templates: Template[] = load()
+dbSeed(KEY, templates)
 let seq = 10
 
 function load(): Template[] {
   try {
-    const raw = localStorage.getItem(KEY)
+    const raw = dbRead(KEY)
     if (raw) { const p = JSON.parse(raw) as Template[]; if (Array.isArray(p) && p.length >= 5) return p }
   } catch { /* 演示环境忽略损坏数据 */ }
   return DEFAULT_TEMPLATES.map((t) => ({ ...t }))
 }
-function persist() { try { localStorage.setItem(KEY, JSON.stringify(templates)) } catch { /* 忽略 */ } }
+function persist() { try { dbWrite(KEY, JSON.stringify(templates)) } catch { /* 落库失败已在数据层记录 */ } }
 function emit() { listeners.forEach((f) => f()) }
 function event(text: string, level: '一般' | '重要' = '一般') { engine.get().events.unshift({ time: new Date().toLocaleTimeString('zh-CN', { hour12: false }).slice(0, 5), level, text }); engine.refresh() }
 

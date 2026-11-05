@@ -2,11 +2,13 @@
  * 演示用「资源调配」引擎（纯前端可交互闭环）
  * 三条线：算力池扩缩 / 模型副本与路由权重 / 凭证配额
  * 能力：申请→审批（准入计算）→执行→生效验证→回收，全过程留痕
- * 状态持久化在 localStorage，可一键重置
+ * 状态持久化在数据服务的数据库（SQLite），浏览器本地不保存；可一键重置
  * ===================================================================== */
 import { useSyncExternalStore } from 'react'
 import { gatewayChannels, credentials as seedCreds } from '../data/mock'
 import { rentConfig, llmChannelConfig, connectorStore, readiness, type Connector } from './connectors'
+import { dbRead, dbWrite } from './db'
+
 
 const TOTAL_CARDS = 88
 const STORAGE_KEY = 'dsh-demo-engine-v4'
@@ -529,11 +531,13 @@ class Engine {
   private listeners = new Set<() => void>()
 
   constructor() {
-    this.state = this.load() || seedState()
+    const stored = this.load()
+    this.state = stored || seedState()
+    if (!stored) this.save()   // 首次运行：初始演示数据直接入库，之后一律以库为准
   }
   private load(): EngineState | null {
     try {
-      const raw = localStorage.getItem(STORAGE_KEY)
+      const raw = dbRead(STORAGE_KEY)
       if (!raw) return null
       const p = JSON.parse(raw) as EngineState
       if (!p.pools || p.pools.length !== 3) return null
@@ -548,7 +552,7 @@ class Engine {
     } catch { return null }
   }
   private save() {
-    try { localStorage.setItem(STORAGE_KEY, JSON.stringify(this.state)) } catch { /* 演示环境忽略 */ }
+    try { dbWrite(STORAGE_KEY, JSON.stringify(this.state)) } catch { /* 落库失败已在数据层记录 */ }
   }
   private emit() { this.save(); this.listeners.forEach((l) => l()) }
   subscribe = (l: () => void) => { this.listeners.add(l); return () => { this.listeners.delete(l) } }

@@ -7,6 +7,8 @@
  * 本模块不依赖引擎与通知模块，避免循环引用；需要通知时由页面侧调用。
  * ===================================================================== */
 import { useSyncExternalStore } from 'react'
+import { dbRead, dbWrite, dbSeed } from './db'
+
 
 export type IntStatus = '已定' | '待商定' | '待客户方提供'
 export type ConnMode = 'virtual' | 'real'
@@ -93,10 +95,11 @@ const DEFAULTS: Connector[] = [
 const KEY = 'dsh-demo-connectors-v1'
 const listeners = new Set<() => void>()
 let connectors: Connector[] = load()
+dbSeed(KEY, connectors)
 
 function load(): Connector[] {
   try {
-    const raw = localStorage.getItem(KEY)
+    const raw = dbRead(KEY)
     if (raw) {
       const parsed = JSON.parse(raw) as Connector[]
       if (Array.isArray(parsed) && parsed.length >= 10 && parsed.every((c) => c && typeof c.mode === 'string' && Array.isArray(c.prereq))) {
@@ -108,7 +111,7 @@ function load(): Connector[] {
   } catch { /* 演示环境忽略损坏配置 */ }
   return DEFAULTS.map((c) => ({ ...c, changes: [...(c.changes ?? [])], prereqDone: [...(c.prereqDone ?? [])] }))
 }
-function persist() { try { localStorage.setItem(KEY, JSON.stringify(connectors)) } catch { /* 忽略 */ } }
+function persist() { try { dbWrite(KEY, JSON.stringify(connectors)) } catch { /* 落库失败已在数据层记录 */ } }
 function emit() { listeners.forEach((l) => l()) }
 function stamp() { const d = new Date(); const p = (n: number) => String(n).padStart(2, '0'); return `${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}` }
 

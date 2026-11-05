@@ -4,6 +4,7 @@ import { auth, useSession, useMatrix, ROLE_LABEL, type PermKey } from './engine/
 import { useExceptions } from './engine/exceptions'
 import { useUnread } from './engine/ops'
 import { telemetryStore } from './engine/telemetry'
+import { useDbStatus } from './engine/db'
 import './engine/alerts'
 
 /* ---------- icons ---------- */
@@ -208,6 +209,13 @@ function Shell() {
   const unread = useUnread()
   const excList = useExceptions()
   const excOpen = excList.filter((e) => e.status === '待分析' && e.severity !== '中').length
+  const db = useDbStatus()
+  const dbLabel = db.status === 'online' ? '数据已存库'
+    : db.status === 'saving' ? '写入中 ' + db.pending
+    : db.status === 'failed' ? '写入失败 · 重试中'
+    : db.status === 'offline' ? '数据服务未连接 · 本次不保存'
+    : '连接数据服务…'
+  const dbBad = db.status === 'failed' || db.status === 'offline'
 
   if (!acc) return <P_LOGIN />
 
@@ -251,9 +259,11 @@ function Shell() {
           ))}
         </nav>
         <div className="sidebar-foot">
-          演示版本 v2.1（选型交流 · 内网可接真实数据）
+          演示版本 v2.2（选型交流 · 内网可接真实数据）
           <br />
           数据均为虚拟模拟 · 外部系统按清单虚拟接入
+          <br />
+          业务状态存数据服务（SQLite）· 浏览器本地不保存
           <br />
           当前角色可见菜单已按权限矩阵过滤
         </div>
@@ -269,6 +279,18 @@ function Shell() {
           </div>
           <div className="topbar-right">
             <span className="demo-badge">DEMO</span>
+            <span
+              className="mono"
+              title={db.lastError ? '数据服务：' + db.lastError : '业务状态写入数据服务的数据库（SQLite），浏览器本地不保存'}
+              style={{
+                fontSize: 11, padding: '2px 8px', borderRadius: 7, whiteSpace: 'nowrap',
+                border: '1px solid ' + (dbBad ? 'rgba(220,100,100,.45)' : 'rgba(60,130,210,.4)'),
+                color: dbBad ? '#ffb9b9' : '#9fd6ff',
+                background: dbBad ? 'rgba(120,30,30,.25)' : 'rgba(20,60,110,.3)',
+              }}
+            >
+              {dbLabel}
+            </span>
             <span className="mono">{date}</span>
             <span className="mono" style={{ color: '#bfe9ff' }}>{time}</span>
             <span
