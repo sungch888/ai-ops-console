@@ -121,3 +121,45 @@ CREATE INDEX IF NOT EXISTS idx_orders_created ON orders (created_at);
 CREATE INDEX IF NOT EXISTS idx_events_time ON events (time);
 CREATE INDEX IF NOT EXISTS idx_audit_at ON audit_log (at);
 CREATE INDEX IF NOT EXISTS idx_entities_kind ON entities (kind);
+
+-- --------------------------------------------------------------------------- v3.0 账号 / 会话 / 登录记录
+-- 演示版：口令用 PBKDF2-HMAC-SHA256 + 每账号随机盐存库；正式版接统一身份认证时，
+-- users 的来源换成身份源同步（或只留本地兜底账号），sessions 换 Redis / 会话服务。
+CREATE TABLE IF NOT EXISTS users(
+  id TEXT PRIMARY KEY,
+  username TEXT NOT NULL UNIQUE,
+  name TEXT,
+  role TEXT NOT NULL,
+  dept TEXT,
+  org TEXT,
+  domain TEXT,
+  note TEXT,
+  pw_salt TEXT NOT NULL,
+  pw_hash TEXT NOT NULL,
+  algo TEXT NOT NULL DEFAULT 'pbkdf2_sha256',
+  status TEXT NOT NULL DEFAULT 'active',
+  must_change INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT,
+  updated_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS sessions(
+  token TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  created_at TEXT NOT NULL,
+  expires_at REAL NOT NULL,
+  last_seen TEXT,
+  ip TEXT,
+  revoked INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
+
+CREATE TABLE IF NOT EXISTS login_log(
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  at TEXT NOT NULL,
+  username TEXT,
+  ok INTEGER NOT NULL,
+  reason TEXT,
+  ip TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_login_username ON login_log(username, at);

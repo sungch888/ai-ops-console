@@ -12,6 +12,9 @@ import { useSyncExternalStore } from 'react'
 
 const BASE = String((import.meta as any).env?.VITE_API_BASE ?? '') + '/api'
 
+/** 查询层（台账 / 审计 / 导出）直接用的接口基址 */
+export const API_BASE = BASE
+
 export type DbStatus = 'connecting' | 'online' | 'saving' | 'failed' | 'offline'
 
 interface Status {

@@ -1,10 +1,13 @@
 /* =====================================================================
- * 演示版身份与权限模型（真实生效：控制页面可见性、按钮可用性、数据范围）
- * 角色：平台管理员 / 运营值班 / 业务开发者 / 业务用户
- * 权限矩阵可编辑并立即生效；登录为演示账号免密（不收集真实口令）
+ * 身份与权限模型 v3.0
+ *   - 登录走数据服务：POST /api/login，服务端校验账号口令（PBKDF2 存库），
+ *     会话是 HttpOnly Cookie，前端拿不到 token，也改不了自己的角色
+ *   - 写入权限在服务端判定：前端把界面灰掉只是体验，真正的拦截在 /api
+ *   - 权限矩阵仍然可编辑并立即生效（改矩阵本身也要 matrix 权限）
+ * 演示账号有口令（见 DEMO_LOGIN），正式版换统一身份认证 / LDAP / OAuth
  * ===================================================================== */
 import { useSyncExternalStore } from 'react'
-import { dbRead, dbWrite, dbRemove, dbSeed, setAuditAccount } from './db'
+import { API_BASE, dbRead, dbWrite, dbSeed, setAuditAccount } from './db'
 
 
 export type Role = 'admin' | 'ops' | 'dev' | 'user'
@@ -49,8 +52,15 @@ const DEFAULT_MATRIX: Matrix = {
 }
 
 const MATRIX_KEY = 'dsh-demo-matrix-v1'
-const SESSION_KEY = 'dsh-demo-session-v1'
 const ACCOUNTS_KEY = 'dsh-demo-accounts-v1'
+
+/** 演示口令：仅用于演示与选型交流，正式版必须改强口令并接真实身份源 */
+export const DEMO_LOGIN: Record<string, { username: string; password: string }> = {
+  'U-0001': { username: 'admin', password: 'admin123' },
+  'U-0002': { username: 'ops', password: 'ops123' },
+  'U-0003': { username: 'dev', password: 'dev123' },
+  'U-0004': { username: 'user', password: 'user123' },
+}
 
 /* ---------------- 权限矩阵存储 ---------------- */
 let matrix: Matrix = loadMatrix()
@@ -99,39 +109,80 @@ export function useMatrix() {
   return useSyncExternalStore(matrixStore.subscribe, matrixStore.get, matrixStore.get)
 }
 
-/* ---------------- 会话 ---------------- */
-let session: DemoAccount | null = loadSession()
+/* ---------------- 会话（服务端会话，前端只有内存副本） ---------------- */
+let session: DemoAccount | null = null
+let serverPerms: { view: string[]; manage: string[]; cls?: string[] } | null = null
 const sessionListeners = new Set<() => void>()
 
 /* 演示账号也入库存一份（正式版替换为真实用户表 / 统一身份认证） */
 try { dbSeed(MATRIX_KEY, matrix) } catch { /* 落库失败已在数据层记录 */ }
 try { dbWrite(ACCOUNTS_KEY, JSON.stringify(DEMO_ACCOUNTS)) } catch { /* 落库失败已在数据层记录 */ }
 
-function loadSession(): DemoAccount | null {
-  try {
-    const raw = dbRead(SESSION_KEY)
-    if (!raw) return null
-    const id = JSON.parse(raw) as string
-    const acc = DEMO_ACCOUNTS.find((a) => a.id === id) ?? null
-    if (acc) setAuditAccount(acc.id)
-    return acc
-  } catch { return null }
-}
 function emitSession() { sessionListeners.forEach((l) => l()) }
+
+/** 统一用 text 再解析：数据服务返回非 JSON 时也不会抛 */
+async function parseBody(res: Response): Promise<any> {
+  try { return JSON.parse(await res.text()) } catch { return {} }
+}
+
+/** 服务端返回的用户行 → 前端账号对象（字段与 DEMO_ACCOUNTS 对齐） */
+function toAccount(u: any): DemoAccount | null {
+  if (!u) return null
+  const known = DEMO_ACCOUNTS.find((a) => a.id === String(u.id))
+  const role = (u.role as Role) || known?.role || 'user'
+  return {
+    id: String(u.id),
+    name: String(u.name ?? known?.name ?? u.username ?? ''),
+    role,
+    dept: String(u.dept ?? known?.dept ?? ''),
+    org: String(u.org ?? known?.org ?? ''),
+    domain: u.domain === '数据域' ? '数据域' : '用户域',
+    note: String(u.note ?? known?.note ?? ''),
+  }
+}
+
+/** 启动时问一次服务端：这个浏览器还带着有效会话吗？ */
+export async function restoreSession(): Promise<{ signedIn: boolean; error?: string }> {
+  try {
+    const res = await fetch(API_BASE + '/session')
+    const body: any = await parseBody(res)
+    session = body?.signed_in ? toAccount(body.user) : null
+    serverPerms = body?.perms ?? null
+    if (session) setAuditAccount(session.id)
+    emitSession()
+    return { signedIn: !!session }
+  } catch (e) {
+    session = null
+    return { signedIn: false, error: e instanceof Error ? e.message : String(e) }
+  }
+}
 
 export const auth = {
   get: () => session,
   subscribe: (l: () => void) => { sessionListeners.add(l); return () => { sessionListeners.delete(l) } },
-  login(id: string) {
-    const acc = DEMO_ACCOUNTS.find((a) => a.id === id) ?? null
-    session = acc
-    setAuditAccount(acc?.id ?? '')
-    try { dbWrite(SESSION_KEY, JSON.stringify(acc?.id ?? '')) } catch { /* 落库失败已在数据层记录 */ }
-    emitSession()
+  /** 服务端算出来的这个角色的权限点（用于对照前端矩阵） */
+  serverPerms: () => serverPerms,
+  async login(username: string, password: string): Promise<{ ok: boolean; error?: string }> {
+    try {
+      const res = await fetch(API_BASE + '/login', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username, password }),
+      })
+      const body: any = await parseBody(res)
+      if (!res.ok) return { ok: false, error: String(body?.error || ('登录失败（HTTP ' + res.status + '）')) }
+      session = toAccount(body.user)
+      serverPerms = body.perms ?? null
+      if (session) setAuditAccount(session.id)
+      emitSession()
+      return { ok: true }
+    } catch (e) {
+      return { ok: false, error: '数据服务不可用，无法登录：' + (e instanceof Error ? e.message : String(e)) }
+    }
   },
-  logout() {
+  async logout() {
+    try { await fetch(API_BASE + '/logout', { method: 'POST' }) } catch { /* 服务不可用时也要清掉本地会话 */ }
     session = null
-    try { dbRemove(SESSION_KEY) } catch { /* 落库失败已在数据层记录 */ }
+    serverPerms = null
     emitSession()
   },
 }

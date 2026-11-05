@@ -34,7 +34,17 @@ npm install                 # 或 pnpm install
 npm run build
 ```
 
-浏览器打开 `http://127.0.0.1:8090/`，演示账号免密：管理员 A / 运营 B / 开发者 C / 用户 D。
+浏览器打开 `http://127.0.0.1:8090/`，登录页选中账号会自动填好登录名与演示口令：
+`admin/admin123`（管理员 A）、`ops/ops123`（运营 B）、`dev/dev123`（开发者 C）、`user/user123`（用户 D）。
+**演示口令是弱口令，二次开发或交付前必须全部替换。**
+
+## 登录、会话与权限
+
+- 登录 `POST /api/login`，会话是 `HttpOnly` + `SameSite=Lax` Cookie（8 小时，访问时滑动续期）；前端没有 token，也改不了自己的角色。
+- 口令存库：PBKDF2-HMAC-SHA256（12 万次迭代）+ 每账号随机盐；接口不返回口令字段；比较用常数时间比较。
+- 同一账号 5 分钟内失败 5 次 → 429 暂时拒绝；成功与失败都写 `login_log`。
+- 权限在服务端判定：写状态键要对应权限点，批量写 / 重置要「资源调配」，查审计要「审计日志」查看权，导出要「报表导出」；
+  越权 403 并写 `denied_put` 审计。未登录访问 `/api`（health / login / logout / session 除外）返回 401。
 
 ## 数据存哪里
 
@@ -66,16 +76,16 @@ python3 collector/collect.py --config collector/config.json --loop 30   # 接真
 |---|---|
 | `src/` | React 19 + TypeScript 前端；`src/engine/` 是演示引擎（工单、准入校验、例外监控、接管深度、整改闭环、权限矩阵） |
 | `dist/` | 构建产物，可直接起服务 |
-| `server/` | 数据服务（`server.py`）与表结构（`schema.sql`），存 SQLite 数据库 |
+| `server/` | 数据服务（`server.py`）与表结构（`schema.sql`）：SQLite 存储 + 登录会话 + 权限判定 |
 | `collector/` | 只读采集脚本与配置样例 |
 | `docs-src/operation-manual.md` / `.docx` | 系统操作说明书（37 个小节，含表单校验规则表与常见问题） |
-| `docs-src/api-contract.md` | 数据服务接口契约（接口、状态键、分页、失败语义） |
+| `docs-src/api-contract.md` | 接口契约（登录与会话、权限点映射、状态键、过滤分页、CSV、失败语义） |
 | `docs-src/architecture.md` | 当前结构、数据模型与 v2.2 → v3.x 正式版迭代计划 |
 | `serve.py` `start.bat` `start.ps1` `start.sh` `README-START.txt` | 启动与打包 |
 
 ## 还没做（别当成已交付）
 
-真实身份认证与服务端鉴权（演示仍是免密）；多人并发写的一致性保护；告警规则中心与例外监控两套尚未打通；多租户 / 项目组上下文切换；移动端布局适配；审计长期留存与分页；整改闭环接真实工单与值班系统；安全设备真实联动；真实统一身份认证；国密改造与密评。
+接真实身份源（本版是本地账号 + 口令 + 服务端会话；SSO / LDAP / OAuth、CSRF 令牌、口令策略与首次改口令排在下一版）；多人并发写的一致性保护；告警规则中心与例外监控两套尚未打通；多租户 / 项目组上下文切换；移动端布局适配；审计长期留存与分页；整改闭环接真实工单与值班系统；安全设备真实联动；真实统一身份认证；国密改造与密评。
 
 ## 授权
 

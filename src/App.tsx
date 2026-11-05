@@ -81,7 +81,7 @@ const NAV: { group: string; items: { to: string; label: string; icon: string }[]
       { to: '/app/accounts', label: '跨平台运营', icon: 'accounts' },
     ],
   },
-  { group: '运营分析', items: [{ to: '/ops/workflow', label: '资源调配工作台', icon: 'schedule' }, { to: '/ops/alert-rules', label: '告警规则管理', icon: 'alert' }, { to: '/ops/analytics', label: '运营分析报表', icon: 'analytics' }, { to: '/ops/notifications', label: '通知中心', icon: 'bell' }, { to: '/ops/integrations', label: '外部对接清单', icon: 'link' }, { to: '/ops/apply', label: '申请与审批台', icon: 'accounts' }] },
+  { group: '运营分析', items: [{ to: '/ops/workflow', label: '资源调配工作台', icon: 'schedule' }, { to: '/ops/alert-rules', label: '告警规则管理', icon: 'alert' }, { to: '/ops/analytics', label: '运营分析报表', icon: 'analytics' }, { to: '/ops/records', label: '台账与审计（查库）', icon: 'trace' }, { to: '/ops/notifications', label: '通知中心', icon: 'bell' }, { to: '/ops/integrations', label: '外部对接清单', icon: 'link' }, { to: '/ops/apply', label: '申请与审批台', icon: 'accounts' }] },
 ]
 
 /** 路由 → 权限点（权限矩阵编辑后立即生效） */
@@ -90,7 +90,7 @@ const ROUTE_PERM: Record<string, PermKey> = {
   '/network': 'overview',
   '/compute/exceptions': 'compute', '/compute/cards': 'compute',
   '/model/deploy': 'gateway', '/model/monitor': 'gateway', '/model/litellm': 'gateway',
-  '/model/safety-flow': 'security', '/app/dify': 'app', '/ops/apply': 'workflow',
+  '/model/safety-flow': 'security', '/app/dify': 'app', '/ops/apply': 'workflow', '/ops/records': 'audit',
   '/govern': 'overview',
   '/': 'overview',
   '/compute/overview': 'compute', '/compute/schedule': 'compute', '/compute/storage': 'compute',
@@ -114,6 +114,7 @@ const TITLES: Record<string, string> = {
   '/model/safety-flow': '模型中心 · 模型安全检测流程',
   '/app/dify': '应用中心 · Dify / RAGFlow 纳管',
   '/ops/apply': '运营分析 · 申请与审批台',
+  '/ops/records': '运营分析 · 台账与审计（数据服务查询）',
   '/govern': '总览 · 统一接管范围',
   '/compute/overview': '算力中心 · 算力资源总览',
   '/compute/schedule': '算力中心 · 资源池与调度',
@@ -196,6 +197,7 @@ const P_M_LITELLM = React.lazy(() => import('./pages/model/litellm'))
 const P_M_SAFETY = React.lazy(() => import('./pages/model/safetyFlow'))
 const P_A_DIFY = React.lazy(() => import('./pages/app/dify'))
 const P_OPS_APPLY = React.lazy(() => import('./pages/ops/apply'))
+const P_OPS_RECORDS = React.lazy(() => import('./pages/ops/records'))
 
 function Shell() {
   const loc = useLocation()
@@ -259,11 +261,11 @@ function Shell() {
           ))}
         </nav>
         <div className="sidebar-foot">
-          演示版本 v2.2（选型交流 · 内网可接真实数据）
+          演示版本 v3.0（选型交流 · 内网可接真实数据）
           <br />
           数据均为虚拟模拟 · 外部系统按清单虚拟接入
           <br />
-          业务状态存数据服务（SQLite）· 浏览器本地不保存
+          业务状态存数据服务（SQLite）· 登录与权限在服务端判定
           <br />
           当前角色可见菜单已按权限矩阵过滤
         </div>
@@ -345,6 +347,7 @@ function Shell() {
             <Route path="/model/safety-flow" element={<P_M_SAFETY />} />
             <Route path="/app/dify" element={<P_A_DIFY />} />
             <Route path="/ops/apply" element={<P_OPS_APPLY />} />
+            <Route path="/ops/records" element={<P_OPS_RECORDS />} />
             <Route path="/compute/overview" element={<P_C_OVERVIEW />} />
             <Route path="/compute/schedule" element={<P_C_SCHEDULE />} />
             <Route path="/compute/storage" element={<P_C_STORAGE />} />
