@@ -1,0 +1,57 @@
+{
+  "_note": "Read-only pull config. Copy to collector/config.json, fill real addresses, keep secrets in environment variables (env:VAR). The collector never writes to these systems.",
+  "cards": {
+    "enabled": true,
+    "mode": "prometheus",
+    "prometheus": "env:PROM_BASE",
+    "query": "DCGM_FI_DEV_GPU_UTIL",
+    "query_hbm": "DCGM_FI_DEV_FB_USED",
+    "query_temp": "DCGM_FI_DEV_GPU_TEMP",
+    "query_power": "DCGM_FI_DEV_POWER_USAGE",
+    "fallback": true,
+    "node": "npu-smi node name when using the fallback",
+    "pool": "shared",
+    "_alt": "mode 'npu-smi' + command 'npu-smi info' on the node; mode 'both' tries Prometheus then npu-smi. Fallback is automatic when Prometheus has no rows."
+  },
+  "services": {
+    "enabled": true,
+    "metrics_url": "http://10.20.14.21:8081/metrics",
+    "timeout": 8,
+    "cards_per_instance": 2,
+    "pool": "hp"
+  },
+  "gateway": {
+    "enabled": true,
+    "base": "http://10.20.14.30:4000",
+    "master_key": "env:LITELLM_READONLY_KEY"
+  },
+  "routes": {
+    "enabled": true,
+    "base": "http://10.20.14.30:4000",
+    "master_key": "env:LITELLM_READONLY_KEY"
+  },
+  "apps": {
+    "enabled": true,
+    "owner": "信息化管理部",
+    "dify": {
+      "base": "https://dify.intra.local/console/api",
+      "login": true,
+      "email": "reader@intra.local",
+      "password": "env:DIFY_READER_PASSWORD",
+      "_alt": "or set api_key: env:DIFY_API_KEY and login:false"
+    },
+    "ragflow": {
+      "base": "http://ragflow.intra.local:9380",
+      "api_token": "env:RAGFLOW_API_TOKEN"
+    }
+  },
+  "deploy": {
+    "enabled": true,
+    "base": "env:DEPLOY_BASE",
+    "token": "env:DEPLOY_TOKEN",
+    "query": "status=done",
+    "drop_file": "collector/receipts.json",
+    "_alt": "either poll the container platform job API, or let ops drop receipts into collector/receipts.json; drop_file wins when set",
+    "_fields": "order_id result instances image nodes finished_at note"
+  }
+}
