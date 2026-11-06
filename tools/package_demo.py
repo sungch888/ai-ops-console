@@ -25,7 +25,7 @@ if _map_path and os.path.exists(_map_path):
     import json
     EXTERNAL_DOCS = json.load(open(_map_path, encoding='utf-8'))
 # Markdown -> Word / PDF, so the package ships formats that survive font differences.
-DOC_FORMATS = ('operation-manual', 'iteration-plan', 'confirmation-list')
+DOC_FORMATS = ('operation-manual', 'iteration-plan', 'confirmation-list', 'impl-notes')
 
 
 def build_doc_formats(stage_dir):
@@ -62,6 +62,9 @@ def main():
     n = 0
     for f in tracked():
         if f.startswith('server/data/') or f.startswith('docs-src/'):
+            continue
+        # dist 里是构建产物：只装本次构建出来的那份，仓库里残留的旧哈希文件名直接跳过
+        if f.startswith('dist/') and not os.path.isfile(os.path.join(ROOT, f)):
             continue
         dst = os.path.join(STAGE, f)
         os.makedirs(os.path.dirname(dst), exist_ok=True)

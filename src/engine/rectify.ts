@@ -6,6 +6,7 @@
 import { useSyncExternalStore } from 'react'
 import { engine } from './engine'
 import { dbRead, dbWrite, dbSeed } from './db'
+import { consoleStore, FALLBACK_DUTY, FALLBACK_ROUTES } from './console'
 
 
 export type RectStatus = '待接单' | '整改中' | '待复核' | '已关闭' | '已升级'
@@ -32,7 +33,9 @@ export interface RectifyRec {
 }
 export interface DutySettings { responseMin: number; dueMin: number; autoDispatch: boolean }
 
-/** 演示值班表：真实环境由客户方值班系统提供，这里只是当班人映射 */
+/** 代码默认值班表（服务读不到时兜底）。正式口径：排班来源可配 ——
+ * 试运行由建设团队安排（duty-source=local，在「配置中心 → 排班与派单」里改），
+ * 成熟后 duty-source=external，由客户方值班系统提供，本系统只做派单与升级跟踪。 */
 export const DUTY_ROSTER: DutyRole[] = [
   { role: '算力资源值班', name: '当班 · 陈××（网运）', phone: '内线 8021', lead: '值班长 · 刘××', scope: '算力池 / 卡位 / 扩租通道' },
   { role: '网络与接入值班', name: '当班 · 示例××（网运）', phone: '内线 8035', lead: '值班长 · 刘××', scope: '接入通道 / 入网白名单 / 来源 IP' },
@@ -74,7 +77,24 @@ const listeners = new Set<() => void>()
 function persist() { try { dbWrite(KEY, JSON.stringify(recs)) } catch { /* 落库失败已在数据层记录 */ } }
 function persistSettings() { try { dbWrite(SKEY, JSON.stringify(settings)) } catch { /* 落库失败已在数据层记录 */ } }
 function emit() { cache = null; listeners.forEach((l) => l()) }
-function roleOf(name: string): DutyRole { return DUTY_ROSTER.find((r) => r.role === name) ?? DUTY_ROSTER[4] }
+function dutyRosterLive(): DutyRole[] {
+  const st = consoleStore.get()
+  if (!st.fromServer) return DUTY_ROSTER
+  return st.shifts.filter((x) => x.enabled).map((x) => ({ role: x.role, name: x.name, phone: x.phone, lead: x.lead, scope: x.scope }))
+}
+/** 当前生效的派单映射（例外类型 → 岗位 → 超时升级岗位），来自配置中心 */
+export function dutyRoutesLive(): { kind: string; duty_role: string; escalate_role: string }[] {
+  const st = consoleStore.get()
+  return st.fromServer && st.routes.length ? st.routes.map((r) => ({ kind: r.kind, duty_role: r.duty_role, escalate_role: r.escalate_role })) : FALLBACK_ROUTES
+}
+export function dutyRosterView(): DutyRole[] { return dutyRosterLive() }
+function roleOf(name: string): DutyRole {
+  const list = dutyRosterLive()
+  return list.find((r) => r.role === name) ?? list[list.length - 1]
+}
+function escalateRoleFor(kind: string): string {
+  return dutyRoutesLive().find((r) => r.kind === kind)?.escalate_role || '值班长'
+}
 
 export const rectifyStore = {
   list(): RectifyRec[] {
@@ -103,7 +123,7 @@ export const rectifyStore = {
   /** 处置生效后自动开整改单并派给当班角色 */
   open(input: { key: string; excKind: string; excTitle: string; target: string; owner: string; severity: string; actionLabel: string; orderId?: string }, by = '例外监控') {
     if (recs[input.key] && recs[input.key].status !== '已关闭') return recs[input.key]
-    const role = roleOf(ASSIGN_BY_KIND[input.excKind] ?? '值班长')
+    const role = roleOf(consoleStore.dutyRoleFor(input.excKind)?.duty_role || ASSIGN_BY_KIND[input.excKind] || '值班长')
     const t = Date.now()
     const rec: RectifyRec = {
       key: input.key, excKind: input.excKind, excTitle: input.excTitle, target: input.target, owner: input.owner, severity: input.severity,
@@ -149,7 +169,7 @@ export const rectifyStore = {
     r.status = '待复核'
     r.log = [{ time: now(), actor: actor ?? r.assignee, text: `提交复核：${note.trim()}` }, ...r.log]
     persist(); emit()
-    engine.announce('一般', `整改单待复核：【${r.excKind}】${r.target} → ${roleOf('值班长').name} · 复核通过后才允许提交恢复工单`)
+    engine.announce('一般', `整改单待复核：【${r.excKind}】${r.target} → ${roleOf(escalateRoleFor(r.excKind)).name} · 复核通过后才允许提交恢复工单`)
     return { ok: true as const }
   },
 
@@ -158,7 +178,7 @@ export const rectifyStore = {
     if (!r) return { ok: false as const, reason: '未找到整改单' }
     if (r.status !== '待复核') return { ok: false as const, reason: `整改单当前是「${r.status}」，不能复核` }
     if (note.trim().length < 6) return { ok: false as const, reason: '复核结论要写清依据（不少于 6 字）' }
-    const who = actor ?? roleOf('值班长').name
+    const who = actor ?? roleOf(escalateRoleFor(r.excKind)).name
     if (pass) {
       r.status = '已关闭'
       r.log = [{ time: now(), actor: who, text: `复核通过并关闭：${note.trim()}` }, ...r.log]
@@ -182,7 +202,7 @@ export const rectifyStore = {
     let escalated = 0
     for (const r of Object.values(recs)) {
       if (r.status === '待接单' && t - r.dispatchedAt >= settings.responseMin * 60000) {
-        const lead = roleOf('值班长')
+        const lead = roleOf(escalateRoleFor(r.excKind))
         r.status = '已升级'
         r.log = [{ time: now(), actor: '例外监控', text: `超时 ${settings.responseMin} 分钟未接单，已升级至 ${lead.name}（${lead.phone}），上级 ${lead.lead}` }, ...r.log]
         escalated += 1

@@ -1,4 +1,4 @@
-# 数据服务接口契约（v3.0）
+# 数据服务接口契约（v3.6）
 
 数据服务：`server/server.py`（Python 3 标准库 + SQLite）。前端不再使用浏览器本地存储，
 所有业务状态的权威副本在数据库；浏览器只保留一份内存副本。
@@ -143,3 +143,89 @@ python3 server/server.py --reset             # 清空数据库后退出
 - 写入失败：自动退避重试（0.8s / 1.6s / 2.4s，最多 4 次）；仍失败则界面顶部持续显示
   「写入失败 · 重试中」和具体原因，**不会静默丢弃，也不会退回浏览器本地存储**。
 - 数据服务不可用时界面仍可操作（内存演示），但顶部显示「数据服务未连接 · 本次不保存」。
+
+## v3.1 ~ v3.6 新增接口
+
+写操作的通用前置条件（三条都在服务端守卫里，前端改了没用）：
+
+| 条件 | 不满足时 |
+|---|---|
+| 带有效会话 Cookie | 401 「未登录或会话已过期」 |
+| 写操作带 `X-CSRF-Token`（登录 / 会话探测时下发的 `csrf`，服务端存在 `sessions.csrf`，用 `hmac.compare_digest` 比对） | 403「跨站请求伪造防护」，并写审计 `denied_csrf` |
+| 账号不处于「必须改口令」状态（`POST /api/password/change` 与 `logout` 除外） | 403「还没改口令」，并写审计 `denied_password_pending` |
+
+### 身份与口令（v3.1）
+
+| 接口 | 权限 | 说明 |
+|---|---|---|
+| `GET /api/config` | 已登录 | 返回配置项、四个身份适配器状态、配置项中文名 |
+| `PUT /api/config` | 权限矩阵·操作 | `{"key":"auth-provider","value":"oauth2"}`；取值白名单校验，非法值 400 并回可选项 |
+| `GET /api/sessions` | 已登录（无矩阵查看权时只返回本人会话） | 会话列表：`ref` / 账号 / IP / 建立与最近活动时间 / 剩余分钟 / 是否当前会话 |
+| `POST /api/session/revoke` | 本人 or 矩阵查看权 | `{"ref":"..."}` 撤销会话；撤销本人会话同时清 Cookie |
+| `POST /api/password/change` | 本人 | `{"old_password","new_password"}`；成功后当前会话撤销、需重新登录 |
+| `POST /api/password/reset` | 权限矩阵·操作 | 管理员给某账号设临时口令，置为「下次登录必须改」，并撤销该账号全部会话 |
+| `POST /api/account/toggle` | 权限矩阵·操作 | `{"user_id":"U-0004","enabled":false}` 停用账号（登录 403 + 会话全撤） |
+| `POST /api/links/sync` | 权限矩阵·操作 | 影子同步：`{"provider":"cas","accounts":[{"external_id","name","role"}]}`；只读导入，按 `(provider, external_id)` 幂等，返回 `total / matched / unmatched` |
+| `GET /api/links` | 矩阵查看权（查询层） | 账号映射表，可按 `provider` / `matched` / `q` 过滤 |
+
+口令策略（服务端判定）：长度 ≥ 8、必须同时含字母与数字、不在常见弱口令表、不等于账号、不等于当前口令或最近 3 次用过的口令（`password_history`）、有效期 90 天（超期登录即置 `must_change=1`）。
+
+配置项（`settings` 表，可 `PUT /api/config` 修改）：
+
+| 配置项 | 取值 | 口径 |
+|---|---|---|
+| `auth-provider` | `local` / `cas` / `oauth2` / `ldap` | 先内建独立运行；外部适配器未配置时明确拒绝，不静默降级 |
+| `approval-source` | `local` / `external` | 外部来源时本系统只登记「待回写」并跟踪超时 |
+| `notify-channels` | `site` / `site,email` / `site,email,sms,im` | 一期只保证站内 + 邮件；短信 / IM 需客户方通道 |
+| `duty-source` | `local` / `external` | 试运行由建设团队排班；切外部后本系统只派单与跟踪 |
+| `command-ack-timeout-min` | 1 ~ 1440 | 处置指令超时未确认即转人工兜底 |
+
+### 审批来源与外部回写（v3.3）
+
+| 接口 | 权限 | 说明 |
+|---|---|---|
+| `POST /api/approval/create` | 工单审批权·操作 | 给已存在的工单登记「外部审批待回写」：`{"order_id","external_ref","due_minutes","note"}` → `state=待审`、`due_at` |
+| `POST /api/approval/decide` | 工单审批权·操作 | 平台内人工判定（`decision=approve|reject`） |
+| `POST /api/approval/callback` | 工单审批权·操作 | 外部系统回写，按 `(order_id, external_ref, decision)` 幂等；重复回写返回 `deduped:true` |
+| `GET /api/approvals` | 资源调配·查看 | 可按 `order` / `source` / `state` / `q` 过滤 |
+
+超时扫描（`GET /api/approvals` 时惰性执行）：`state=待审` 且 `due_at` 已过 → 标 `超时`，同时写 `fallback_tasks`（`kind=approval_overdue`）与审计 `approval_overdue`。
+
+### 排班与派单（v3.4）
+
+| 接口 | 权限 | 说明 |
+|---|---|---|
+| `GET /api/duty` | 资源调配·查看 | 值班岗位表（`duty_shifts`）：岗位 / 当班人 / 内线 / 上级 / 范围 / 是否启用 |
+| `GET /api/duty_routes` | 资源调配·查看 | 派单映射（例外类型 → 岗位 → 超时升级岗位） |
+| `POST /api/duty/shift` | 资源调配·操作 | 新增或修改岗位（按 `id` 覆盖） |
+| `POST /api/duty/route` | 资源调配·操作 | 修改某类例外的派单岗位与超时升级岗位 |
+
+### 处置指令与人工兜底（v3.6）
+
+| 接口 | 权限 | 说明 |
+|---|---|---|
+| `POST /api/commands/dry-run` | 处置下发·操作 | 预检：返回影响面清单（由平台台账推导）与预检项；`dry_run=1`，不产生外部调用 |
+| `POST /api/commands/issue` | 处置下发·操作（`emergency=true` 需「紧急处置」） | 必须已有预检记录 + `confirm:true`，否则 400；成功后写事件流与审计 |
+| `POST /api/commands/ack` | 处置下发·操作 | `{"id","ok":true/false,"reason"}`；失败即生成 `fallback_tasks` |
+| `POST /api/commands/rollback` | 处置下发·操作 | 生成反向指令（`rollback_of` 指向原指令），原指令标 `已回滚` |
+| `GET /api/commands` | 安全事件·查看 | 指令台账，可按 `status` / `target_class` / `dry_run` / `q` 过滤 |
+| `GET /api/fallback` | 安全事件·查看 | 人工兜底工单 |
+| `POST /api/fallback/claim` | 安全事件·操作 | 接管 / 关闭兜底工单，经办人写入 |
+
+状态机：`草稿 → 预检通过 → 已下发 →（设备已确认 / 失败 / 待人工兜底）→ 已回滚`。
+超时扫描（`GET /api/commands` 时惰性执行）：`已下发` 且超过 `command-ack-timeout-min` 未确认 → `待人工兜底` + 兜底工单 + 事件 + 审计。
+
+权限点新增两项（v3.6，权限矩阵页面可直接勾选）：
+
+| 权限点 | 中文 | 默认给谁 |
+|---|---|---|
+| `security_issue` | 处置下发 | 管理员、运营值班 |
+| `security_emergency` | 紧急处置 | 仅管理员 |
+
+### 新增数据表（v3.1 ~ v3.6）
+
+`identity_links`（账号映射，主键 `provider+external_id`）、`password_history`（口令历史）、
+`approvals`（审批登记与回写）、`duty_shifts` / `duty_routes`（排班与派单）、
+`commands`（处置指令）、`fallback_tasks`（人工兜底工单）。
+旧库原地升级：启动时 `PRAGMA table_info` + `ALTER TABLE ADD COLUMN` 补 `users.enabled / provider / pw_changed_at`
+与 `sessions.ref / csrf`，权限矩阵只补新权限点、不覆盖已改过的勾选。

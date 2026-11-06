@@ -53,9 +53,13 @@ export function useDbStatus(): Status {
 const enc = encodeURIComponent
 
 async function req(method: string, path: string, body?: unknown): Promise<any> {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+  const acc = accountHeader()
+  if (acc) headers['X-Demo-Account'] = acc
+  if (method !== 'GET' && csrfToken) headers['X-CSRF-Token'] = csrfToken
   const res = await fetch(BASE + path, {
     method,
-    headers: { 'Content-Type': 'application/json', ...(accountHeader() ? { 'X-Demo-Account': accountHeader() as string } : {}) },
+    headers,
     body: body === undefined ? undefined : JSON.stringify(body),
     cache: 'no-store',
   })
@@ -64,6 +68,19 @@ async function req(method: string, path: string, body?: unknown): Promise<any> {
   try { json = text ? JSON.parse(text) : null } catch { /* 非 JSON 响应 */ }
   if (!res.ok) throw new Error((json && json.error) || 'HTTP ' + res.status)
   return json
+}
+
+/** v3.1：跨站请求伪造防护。令牌由服务端在登录 / 会话探测时下发，只存内存，写操作必须带回。 */
+let csrfToken = ''
+export function setCsrfToken(t: string) { csrfToken = String(t || '') }
+export function getCsrfToken() { return csrfToken }
+
+/** 通用接口调用（配置中心 / 排班 / 审批 / 处置指令都用它） */
+export async function apiGet(path: string): Promise<any> {
+  return req('GET', path)
+}
+export async function apiSend(method: 'POST' | 'PUT' | 'DELETE', path: string, body?: unknown): Promise<any> {
+  return req(method, path, body)
 }
 
 /** 演示版：把当前演示账号随请求带上，供服务端审计列使用（不是安全认证） */

@@ -1,6 +1,6 @@
 import React, { useState } from 'react'
 import { Badge } from '../components/ui'
-import { auth, DEMO_ACCOUNTS, DEMO_LOGIN, ROLE_LABEL, type DemoAccount } from '../engine/auth'
+import { auth, changePassword, flagsNow, DEMO_ACCOUNTS, DEMO_LOGIN, ROLE_LABEL, type DemoAccount } from '../engine/auth'
 
 export default function Login() {
   const [domain, setDomain] = useState<'用户域' | '数据域'>('用户域')
@@ -11,6 +11,12 @@ export default function Login() {
   const [password, setPassword] = useState(DEMO_LOGIN['U-0001'].password)
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
+  // v3.1：演示口令是弱口令，服务端要求首次登录（或口令超 90 天）必须先换口令才能做任何写操作
+  const [needPw, setNeedPw] = useState<{ user: string; reason: string } | null>(null)
+  const [pw2, setPw2] = useState('')
+  const [pw3, setPw3] = useState('')
+  const [pwErr, setPwErr] = useState('')
+  const policy = flagsNow().policy
 
   const accounts = DEMO_ACCOUNTS.filter((a) => a.domain === domain)
   const acc = accounts.find((a) => a.id === picked) ?? accounts[0]
@@ -37,7 +43,22 @@ export default function Login() {
     setErr('')
     const r = await auth.login(username.trim(), password)
     setBusy(false)
-    if (!r.ok) setErr(r.error || '登录失败')
+    if (!r.ok) { setErr(r.error || '登录失败'); return }
+    if (r.mustChange) setNeedPw({ user: username.trim(), reason: r.changeReason || '首次登录必须改口令' })
+  }
+
+  const doChange = async () => {
+    if (!needPw) return
+    setPwErr('')
+    if (pw2 !== pw3) { setPwErr('两次输入的新口令不一致'); return }
+    setBusy(true)
+    const r = await changePassword(password, pw2)
+    setBusy(false)
+    if (!r.ok) { setPwErr(r.error || '改口令失败'); return }
+    setPassword(pw2)
+    const again = await auth.login(needPw.user, pw2)
+    if (!again.ok) { setErr(again.error || '口令已改，但重新登录失败，请用新口令登录'); setNeedPw(null); return }
+    setNeedPw(null); setPw2(''); setPw3('')
   }
 
   return (
@@ -108,6 +129,28 @@ export default function Login() {
             </div>
           ) : null}
 
+          {needPw ? (
+            <div className="mt14" style={{ marginTop: 14 }}>
+              <div className="callout warn">
+                <svg className="ci" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M12 4l9 16H3z" /><path d="M12 10v4M12 17v.5" /></svg>
+                <div>
+                  账号「{needPw.user}」登录成功，但<b>{needPw.reason}</b>：演示口令属于常见弱口令，不能带进正式环境。
+                  换完口令前，这个账号只能改口令、不能做任何写操作（服务端拦，返回 403）。
+                  <div className="row gap6 wrap" style={{ marginTop: 10 }}>
+                    <input className="btn sm" style={{ width: 210 }} type="password" value={pw2} placeholder="新口令（至少 {policy.min_len} 位，字母 + 数字）" onChange={(e) => setPw2(e.target.value)} />
+                    <input className="btn sm" style={{ width: 190 }} type="password" value={pw3} placeholder="再输一遍新口令" onChange={(e) => setPw3(e.target.value)}
+                      onKeyDown={(e) => { if (e.key === 'Enter') void doChange() }} />
+                    <button className="btn primary sm" disabled={busy} onClick={() => void doChange()}>{busy ? '提交中…' : '换口令并重新登录'}</button>
+                  </div>
+                  <div className="tiny faint" style={{ marginTop: 6 }}>
+                    口令策略：至少 {policy.min_len} 位、必须同时含字母和数字、不接受常见弱口令、不能与账号相同、不能复用当前口令或最近 {policy.reuse_check} 次用过的口令、有效期 {policy.max_age_days} 天。
+                  </div>
+                  {pwErr ? <div className="tiny" style={{ color: '#ff9a9a', marginTop: 6 }}>改口令被拒：{pwErr}（判定在数据服务里）</div> : null}
+                </div>
+              </div>
+            </div>
+          ) : null}
+
           {err ? (
             <div className="mt14" style={{ marginTop: 14 }}>
               <div className="callout warn">
@@ -127,7 +170,8 @@ export default function Login() {
           <div className="divider" />
           <div className="small" style={{ color: '#7f9cc7', lineHeight: 1.9 }}>
             演示口令（仅演示用，正式版必须改强口令）：<span className="mono">admin/admin123 · ops/ops123 · dev/dev123 · user/user123</span>。
-            口令在库里是 PBKDF2-HMAC-SHA256 + 每账号随机盐，接口不返回口令字段；会话 8 小时、每次访问滑动续期；同一账号 5 分钟内连错 5 次暂时拒绝登录，登录成功与失败都进 <span className="mono">login_log</span>。
+            口令在库里是 PBKDF2-HMAC-SHA256 + 每账号随机盐，接口不返回口令字段；<b>演示口令属弱口令，首次登录会被要求强制更换</b>（至少 {policy.min_len} 位、字母 + 数字、有效期 {policy.max_age_days} 天、不复用最近 {policy.reuse_check} 次）；
+            会话 8 小时、每次访问滑动续期，可在「账号与安全」里看当前会话并撤销；同一账号 5 分钟内连错 5 次暂时拒绝登录，登录成功与失败都进 <span className="mono">login_log</span>；写操作要带 <span className="mono">X-CSRF-Token</span>（服务端下发、只存内存）。
             生产环境接客户方侧统一身份认证（用户域 SSO / 数据域零信任），认证协议与账号来源为<b>待客户方确认项</b>，见「运营分析 · 外部对接清单」。
           </div>
         </div>

@@ -1,7 +1,7 @@
 import React from 'react'
 import { Kpi, Panel, PageHead, Badge, Table, Callout } from '../../components/ui'
 import { useNotifs, notifyStore } from '../../engine/ops'
-import { usePerm } from '../../engine/auth'
+import { flagsStore, usePerm } from '../../engine/auth'
 import { Chart, CHART_COLORS, AXIS_COLOR, SPLIT_COLOR, TOOLTIP_STYLE, GRID } from '../../components/Chart'
 
 const CHANNELS = ['站内看板', '短信', '即时通讯', '值班电话', '邮件']
@@ -81,6 +81,7 @@ export default function OpsNotifications() {
           </Panel>
           <Panel title="渠道路由规则" extra={perm.manage ? '可调整 · 立即对新通知生效' : '只读（当前角色不可修改）'} className="mt14" noPad>
             <div className="panel-body">
+              <Callout text={'配置项 notify-channels 当前是「' + (flagsStore.get().config['notify-channels'] || 'site') + '」：一期只保证站内看板 + 邮件（邮件走发送器插件，通道发不出去自动回落站内并留记录）；短信 / 即时通讯 / 值班电话等客户方要给通道与凭证后才打开，打开前这些开关点了也不会有真实送达。'} />
               <Table
                 head={['等级', '送达渠道（点击切换）']}
                 rows={(['紧急', '重要', '一般'] as const).map((lv) => [

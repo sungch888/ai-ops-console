@@ -3,7 +3,7 @@ import { Kpi, Panel, PageHead, Badge, Table, Callout } from '../../components/ui
 import { accounts } from '../../data/mock'
 import { useMatrix, matrixStore, usePerm, useSession, ROLE_LABEL, PERM_LABEL, CLS_LEVELS, type Role, type PermKey } from '../../engine/auth'
 
-const PERM_KEYS: PermKey[] = ['approve', 'overview', 'compute', 'gateway', 'cred', 'workflow', 'app', 'agent', 'kb', 'tool', 'security', 'audit', 'matrix', 'export', 'integration', 'analytics']
+const PERM_KEYS: PermKey[] = ['approve', 'overview', 'compute', 'gateway', 'cred', 'workflow', 'app', 'agent', 'kb', 'tool', 'security', 'security_issue', 'security_emergency', 'audit', 'matrix', 'export', 'integration', 'analytics']
 
 const AUDITS = [
   { time: '11-04 16:20', obj: 'SA-0074 平台代理密钥', act: '配额调整 TPM 60万→90万', res: 'ok' },

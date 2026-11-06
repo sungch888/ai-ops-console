@@ -39,7 +39,7 @@ const ICONS: Record<string, string> = {
 
 /* ---------- nav config ---------- */
 const NAV: { group: string; items: { to: string; label: string; icon: string }[] }[] = [
-  { group: '总览', items: [{ to: '/', label: '运营总览', icon: 'overview' }, { to: '/govern', label: '统一接管范围', icon: 'compute' }, { to: '/briefing', label: '投屏汇报首页', icon: 'screen' }, { to: '/network', label: '部署形态与网络分区', icon: 'compute' }] },
+  { group: '总览', items: [{ to: '/', label: '运营总览', icon: 'overview' }, { to: '/account', label: '账号与安全', icon: 'accounts' }, { to: '/govern', label: '统一接管范围', icon: 'compute' }, { to: '/briefing', label: '投屏汇报首页', icon: 'screen' }, { to: '/network', label: '部署形态与网络分区', icon: 'compute' }] },
   {
     group: '算力中心',
     items: [
@@ -81,7 +81,7 @@ const NAV: { group: string; items: { to: string; label: string; icon: string }[]
       { to: '/app/accounts', label: '跨平台运营', icon: 'accounts' },
     ],
   },
-  { group: '运营分析', items: [{ to: '/ops/workflow', label: '资源调配工作台', icon: 'schedule' }, { to: '/ops/alert-rules', label: '告警规则管理', icon: 'alert' }, { to: '/ops/analytics', label: '运营分析报表', icon: 'analytics' }, { to: '/ops/records', label: '台账与审计（查库）', icon: 'trace' }, { to: '/ops/notifications', label: '通知中心', icon: 'bell' }, { to: '/ops/integrations', label: '外部对接清单', icon: 'link' }, { to: '/ops/apply', label: '申请与审批台', icon: 'accounts' }] },
+  { group: '运营分析', items: [{ to: '/ops/workflow', label: '资源调配工作台', icon: 'schedule' }, { to: '/ops/alert-rules', label: '告警规则管理', icon: 'alert' }, { to: '/ops/analytics', label: '运营分析报表', icon: 'analytics' }, { to: '/ops/records', label: '台账与审计（查库）', icon: 'trace' }, { to: '/ops/notifications', label: '通知中心', icon: 'bell' }, { to: '/ops/integrations', label: '外部对接清单', icon: 'link' }, { to: '/ops/apply', label: '申请与审批台', icon: 'accounts' }, { to: '/ops/settings', label: '配置中心（来源与派单）', icon: 'link' }, { to: '/ops/commands', label: '处置指令台（预检/下发/兜底）', icon: 'security' }] },
 ]
 
 /** 路由 → 权限点（权限矩阵编辑后立即生效） */
@@ -100,6 +100,7 @@ const ROUTE_PERM: Record<string, PermKey> = {
   '/app/market': 'app', '/app/agents': 'agent', '/app/kb': 'kb', '/app/tools': 'tool', '/app/templates': 'app',
   '/app/security': 'security', '/app/accounts': 'matrix',
   '/ops/workflow': 'workflow', '/ops/alert-rules': 'analytics', '/ops/analytics': 'analytics', '/ops/notifications': 'overview', '/ops/integrations': 'integration',
+  '/ops/settings': 'workflow', '/ops/commands': 'security',
 }
 
 const TITLES: Record<string, string> = {
@@ -115,6 +116,9 @@ const TITLES: Record<string, string> = {
   '/app/dify': '应用中心 · Dify / RAGFlow 纳管',
   '/ops/apply': '运营分析 · 申请与审批台',
   '/ops/records': '运营分析 · 台账与审计（数据服务查询）',
+  '/account': '账号与安全（口令 / 会话 / 演示账号开关）',
+  '/ops/settings': '运营分析 · 配置中心（身份来源 / 审批来源 / 通知渠道 / 排班派单）',
+  '/ops/commands': '运营分析 · 处置指令台（预检 / 下发 / 确认 / 回滚 / 人工兜底）',
   '/govern': '总览 · 统一接管范围',
   '/compute/overview': '算力中心 · 算力资源总览',
   '/compute/schedule': '算力中心 · 资源池与调度',
@@ -198,6 +202,9 @@ const P_M_SAFETY = React.lazy(() => import('./pages/model/safetyFlow'))
 const P_A_DIFY = React.lazy(() => import('./pages/app/dify'))
 const P_OPS_APPLY = React.lazy(() => import('./pages/ops/apply'))
 const P_OPS_RECORDS = React.lazy(() => import('./pages/ops/records'))
+const P_ACCOUNT = React.lazy(() => import('./pages/account'))
+const P_OPS_SETTINGS = React.lazy(() => import('./pages/ops/settings'))
+const P_OPS_COMMANDS = React.lazy(() => import('./pages/ops/commands'))
 
 function Shell() {
   const loc = useLocation()
@@ -221,7 +228,7 @@ function Shell() {
 
   if (!acc) return <P_LOGIN />
 
-  const allowed = (to: string) => matrix[acc.role].view.includes(ROUTE_PERM[to] ?? 'overview')
+  const allowed = (to: string) => to === '/account' || matrix[acc.role].view.includes(ROUTE_PERM[to] ?? 'overview')
   const navGroups = NAV.map((g) => ({ ...g, items: g.items.filter((it) => allowed(it.to)) })).filter((g) => g.items.length > 0)
   const denied = !allowed(loc.pathname)
   const presentation = loc.pathname === '/briefing'
@@ -348,6 +355,9 @@ function Shell() {
             <Route path="/app/dify" element={<P_A_DIFY />} />
             <Route path="/ops/apply" element={<P_OPS_APPLY />} />
             <Route path="/ops/records" element={<P_OPS_RECORDS />} />
+            <Route path="/account" element={<P_ACCOUNT />} />
+            <Route path="/ops/settings" element={<P_OPS_SETTINGS />} />
+            <Route path="/ops/commands" element={<P_OPS_COMMANDS />} />
             <Route path="/compute/overview" element={<P_C_OVERVIEW />} />
             <Route path="/compute/schedule" element={<P_C_SCHEDULE />} />
             <Route path="/compute/storage" element={<P_C_STORAGE />} />

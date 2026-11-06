@@ -6,10 +6,12 @@
  *            本页写操作挂 workflow（提交申请）、审批与执行挂 approve，
  *            等价于任务要求的 { view, manage }。
  * ===================================================================== */
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Badge, Callout, Kpi, PageHead, Panel, Progress, Table } from '../../components/ui'
 import { Link } from 'react-router-dom'
 import { currentAccount, usePerm, ROLE_LABEL } from '../../engine/auth'
+import { flagsStore } from '../../engine/auth'
+import { consoleStore, useConsole } from '../../engine/console'
 import { useTelemetry } from '../../engine/telemetry'
 import {
   ORDER_STATUS_LABEL, TYPE_LABEL, engine, poolFree, poolUtil, useEngine,
@@ -61,6 +63,9 @@ export default function OpsApply() {
   const tele = useTelemetry()
   const perm = usePerm('workflow')
   const canApprove = usePerm('approve').manage
+  const cons = useConsole()
+  const [extPick, setExtPick] = useState<{ orderId: string; ref: string; due: number }>({ orderId: '', ref: '', due: 30 })
+  useEffect(() => { void consoleStore.refresh() }, [])
   const account = currentAccount()
   const applicant = account?.name ?? '演示用户'
   const dept = account?.dept ?? '演示单位'
@@ -368,6 +373,41 @@ export default function OpsApply() {
           />
           {pending.length === 0 ? <Callout text={`当前没有待审批的申请。审批通过后：Key 与训练算例要执行才生效；模型部署要先点「下发容器平台」再等执行回执。`} /> : null}
           {!canApprove ? <Callout warn text="当前角色无审批权（approve）：可提交申请，不能审批或执行。" /> : null}
+        </div>
+      </Panel>
+
+      <Panel title="审批来源与外部回写（审批来源是配置项，不是代码分支）" className="mt14" noPad>
+        <div className="panel-body">
+          <div className="tiny faint">
+            当前审批来源：<b>{flagsStore.get().config['approval-source'] === 'external' ? '外部审批系统（本系统登记待回写并跟踪超时）' : '平台内审批（本页审批台）'}</b>。
+            不论来源是哪边，工单状态机与审计是同一套；外部回写按「工单 + 外部单据号 + 决定」幂等，重复回写只生效一次。
+          </div>
+          <Table minWidth={1080} head={['工单', '审批来源', '外部单据号', '状态', '期望回写 / 判定时间', '备注与经办', '动作']} rows={cons.approvals.map((a) => [
+            <span className="mono small strong">{a.order_id}</span>,
+            <span className="tiny">{a.source === 'external' ? '外部审批系统' : '平台内'}</span>,
+            <span className="tiny mono">{a.external_ref || '—'}</span>,
+            <span>{a.state === '超时' ? <Badge tone="warn">超时未回写</Badge> : a.state === '已审' ? <Badge tone="good">已审</Badge> : a.state === '驳回' ? <Badge tone="bad">驳回</Badge> : <Badge tone="info">待审</Badge>}</span>,
+            <span className="tiny mono">{(a.decided_at || a.due_at || a.at || '').replace('T', ' ').replace('Z', '')}</span>,
+            <span className="tiny faint">{(a.note || '').slice(0, 60) || '—'}<div className="tiny faint">{a.actor || ''}</div></span>,
+            <div className="row gap6" style={{ flexWrap: 'wrap' }}>
+              <button className="btn sm ghost" disabled={!canApprove} onClick={() => void consoleStore.decideApproval(a.order_id, 'approve', a.external_ref || 'MANUAL-' + a.order_id, '平台内人工审批（外部超时后接管）').then((r) => setMsg({ tone: r.ok ? 'good' : 'bad', text: r.ok ? (r.deduped ? `${a.order_id} 这条回写之前已生效，未重复计算` : `${a.order_id} 已由平台内审批通过（同时写入审计）`) : `回写被拒：${r.error || ''}` }))}>人工审批</button>
+              <button className="btn sm ghost" disabled={!canApprove} onClick={() => void consoleStore.decideApproval(a.order_id, 'reject', a.external_ref || 'MANUAL-' + a.order_id, '平台内人工驳回').then((r) => setMsg({ tone: r.ok ? 'good' : 'bad', text: r.ok ? `${a.order_id} 已由平台内驳回（同时写入审计）` : `回写被拒：${r.error || ''}` }))}>人工驳回</button>
+            </div>,
+          ])} />
+          {cons.approvals.length === 0 ? <div className="tiny faint" style={{ marginTop: 6 }}>当前没有外部审批登记：需要走外部审批时，在下面给某张工单登记「外部单据号 + 期望回写时间」。</div> : null}
+          <div className="row gap6 wrap" style={{ marginTop: 10 }}>
+            <select className="btn sm" style={{ minWidth: 220 }} value={extPick.orderId} onChange={(e) => setExtPick({ ...extPick, orderId: e.target.value })}>
+              {st.orders.slice(0, 30).map((o) => <option key={o.id} value={o.id}>{o.id} · {o.title}</option>)}
+            </select>
+            <input className="btn sm" style={{ width: 170 }} value={extPick.ref} placeholder="外部单据号（如 OA-2026-0001）" onChange={(e) => setExtPick({ ...extPick, ref: e.target.value })} />
+            <select className="btn sm" style={{ width: 120 }} value={extPick.due} onChange={(e) => setExtPick({ ...extPick, due: Number(e.target.value) })}>
+              <option value={15}>15 分钟</option><option value={30}>30 分钟</option><option value={120}>2 小时</option><option value={1440}>24 小时</option>
+            </select>
+            <button className="btn sm primary" disabled={!canApprove} onClick={() => void consoleStore.createApproval(extPick.orderId, extPick.ref || ('OA-' + extPick.orderId), extPick.due, '走外部审批系统，超时未回写自动出兜底工单').then((r) => setMsg({ tone: r.ok ? 'good' : 'bad', text: r.ok ? `${extPick.orderId} 已登记外部审批待回写（期望 ${extPick.due} 分钟内）` : `登记被拒：${r.error || ''}` }))}>登记外部审批待回写</button>
+          </div>
+          <div className="tiny faint" style={{ marginTop: 8 }}>
+            超时未回写：这条审批在台账里标「超时」，同时生成一张人工兜底工单（处置指令台可见），并允许在平台内人工审批接管 —— 不会因为外部系统没回话就把业务卡死。
+          </div>
         </div>
       </Panel>
 

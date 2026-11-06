@@ -9,7 +9,8 @@ import { Kpi, Panel, PageHead, Badge, Table, Callout } from '../../components/ui
 import { Chart, CHART_COLORS, AXIS_COLOR, SPLIT_COLOR, TOOLTIP_STYLE, GRID } from '../../components/Chart'
 import { Link } from 'react-router-dom'
 import { monitorStore, monitorSummary, exceptions, MONITOR_RULES, type ExcView, type BlockAction } from '../../engine/exceptions'
-import { rectifyStore, DUTY_ROSTER, ASSIGN_BY_KIND, useRectify } from '../../engine/rectify'
+import { rectifyStore, dutyRosterView, dutyRoutesLive, useRectify } from '../../engine/rectify'
+import { consoleStore, useConsole } from '../../engine/console'
 import { connectorStore } from '../../engine/connectors'
 import { BLOCK_SCOPES, useEngine, engine, poolUtil } from '../../engine/engine'
 import { usePerm } from '../../engine/auth'
@@ -24,6 +25,9 @@ export default function ComputeExceptions() {
   const st = useEngine()
   const sum = monitorSummary()
   const rect = useRectify()
+  const cons = useConsole()
+  const dutyRoster = dutyRosterView()
+  const dutyRoutes = dutyRoutesLive()
   const perm = usePerm('compute')
   const [sel, setSel] = useState('')
   const [note, setNote] = useState('')
@@ -42,6 +46,7 @@ export default function ComputeExceptions() {
   const guides = [...(cur?.options ?? []), ...(cur?.mitigations ?? [])].filter((o) => o.kind === '整改引导')
 
   useEffect(() => {
+    consoleStore.refresh()          // 排班 / 派单映射从服务端读
     monitorStore.scanAndRaise()
     if (settings.intervalSec <= 0) return
     const t = setInterval(() => monitorStore.scanAndRaise(), settings.intervalSec * 1000)
@@ -309,14 +314,14 @@ export default function ComputeExceptions() {
           {rect.length === 0 ? <div className="tiny faint">当前没有整改单：做一次阻断处置就会自动开单，并派给对应值班角色（旁路接入 → 网络与接入值班 · 接管缺口 / 资源异常 → 算力资源值班 · 配额越界 → 安全值班 · 旁路调用 / 目录不一致 → 应用与智能体值班）。</div> : (
             <Table minWidth={1260} head={['例外', '处置动作 / 工单', '派给（当班）', '整改状态', '期限', '整改动作与记录']} rows={rectRows} />
           )}
-          <div className="tiny faint" style={{ marginTop: 8 }}>派单口径：{Object.entries(ASSIGN_BY_KIND).map(([k, v]) => `${k} → ${v}`).join(' · ')}。超时未接单自动升级至值班长（内线 8000），超整改期限在台账与事件流里同时标出。</div>
+          <div className="tiny faint" style={{ marginTop: 8 }}>派单口径（可在「配置中心 → 排班与派单」改）：{dutyRoutes.map((r) => `${r.kind} → ${r.duty_role}`).join(' · ')}。超时未接单自动升级到该例外类型设定的升级岗位，超整改期限在台账与事件流里同时标出。</div>
         </div>
       </Panel>
 
       <div className="grid g-21 mt14">
-        <Panel title="值班表与派单时限" noPad>
+        <Panel title="值班表与派单时限（排班可配：试运行由建设团队安排）" noPad>
           <div className="panel-body">
-            <Table minWidth={720} head={['值班角色', '当班人', '内线', '上级', '负责范围']} rows={DUTY_ROSTER.map((r) => [
+            <Table minWidth={720} head={['值班角色', '当班人', '内线', '上级', '负责范围']} rows={dutyRoster.map((r) => [
               <span className="small strong">{r.role}</span>,
               <span className="small">{r.name}</span>,
               <span className="tiny mono">{r.phone}</span>,

@@ -38,8 +38,8 @@ SCHEMA = os.path.join(HERE, 'schema.sql')
 STATIC_DIR = os.path.join(ROOT, 'dist')
 API_PREFIX = '/api'
 MAX_BODY = 8 * 1024 * 1024
-SCHEMA_VERSION = '2'
-SERVER_VERSION = '3.0.0'
+SCHEMA_VERSION = '3'
+SERVER_VERSION = '3.1.0'
 
 CONTENT_TYPES = {
     '.html': 'text/html; charset=utf-8',
@@ -79,6 +79,7 @@ def init_db() -> None:
     conn = db()
     with open(SCHEMA, encoding='utf-8') as f:
         conn.executescript(f.read())
+    upgrade_schema(conn)
     conn.execute('INSERT INTO meta(key, value) VALUES(?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value',
                  ('schema_version', SCHEMA_VERSION))
     conn.execute('INSERT INTO meta(key, value) VALUES(?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value',
@@ -130,6 +131,7 @@ PERM_LABEL_CN = {
     'workflow': '资源调配', 'app': '应用广场', 'agent': '智能体纳管', 'kb': '知识库纳管',
     'tool': '工具生态', 'security': '安全事件', 'audit': '审计日志', 'matrix': '权限矩阵',
     'export': '报表导出', 'integration': '外部对接', 'analytics': '运营分析', 'approve': '工单审批权',
+    'security_issue': '处置下发', 'security_emergency': '紧急处置',
 }
 
 # 写某个状态键需要哪个权限点（服务端判定，前端伪造角色无效）
@@ -154,21 +156,29 @@ KEY_PERM = {
     'dsh-demo-alert-baseline-v1': 'analytics',
     'dsh-demo-allocation-v1': 'analytics',
 }
-QUERY_PERM = {'audit': 'audit', 'export': 'export', 'accounts': 'matrix', 'permissions': 'matrix', 'users': 'matrix'}
-CSV_PERM = {'audit_log': 'audit', 'accounts': 'matrix', 'role_permissions': 'matrix'}
+QUERY_PERM = {'audit': 'audit', 'export': 'export', 'accounts': 'matrix', 'permissions': 'matrix', 'users': 'matrix',
+              'approvals': 'workflow', 'commands': 'security', 'fallback': 'security', 'links': 'matrix',
+              'duty': 'workflow', 'duty_routes': 'workflow'}
+MATRIX_KEYS = sorted([k for k, v in KEY_PERM.items() if v == 'matrix'])
+CSV_PERM = {'audit_log': 'audit', 'accounts': 'matrix', 'role_permissions': 'matrix',
+            'approvals': 'workflow', 'commands': 'security', 'fallback_tasks': 'security',
+            'identity_links': 'matrix', 'duty_shifts': 'workflow', 'duty_routes': 'workflow'}
 
 # 权限矩阵默认值（与前端默认一致；库里没有矩阵时服务端自己播种，保证登录即可判定）
 DEFAULT_MATRIX = {
     'admin': {
         'view': ['overview', 'compute', 'gateway', 'cred', 'workflow', 'app', 'agent', 'kb', 'tool',
-                 'security', 'audit', 'matrix', 'export', 'integration', 'analytics', 'approve'],
+                 'security', 'security_issue', 'security_emergency', 'audit', 'matrix', 'export',
+                 'integration', 'analytics', 'approve'],
         'manage': ['overview', 'compute', 'gateway', 'cred', 'workflow', 'app', 'agent', 'kb', 'tool',
-                   'security', 'audit', 'matrix', 'export', 'integration', 'analytics', 'approve'],
+                   'security', 'security_issue', 'security_emergency', 'audit', 'matrix', 'export',
+                   'integration', 'analytics', 'approve'],
         'cls': ['公开', '内部', '敏感']},
     'ops': {
         'view': ['overview', 'compute', 'gateway', 'cred', 'workflow', 'app', 'agent', 'kb', 'tool',
-                 'security', 'audit', 'export', 'integration', 'analytics', 'approve'],
-        'manage': ['compute', 'gateway', 'cred', 'workflow', 'security', 'export', 'analytics', 'approve'],
+                 'security', 'security_issue', 'audit', 'export', 'integration', 'analytics', 'approve'],
+        'manage': ['compute', 'gateway', 'cred', 'workflow', 'security', 'security_issue', 'export',
+                   'analytics', 'approve'],
         'cls': ['公开', '内部', '敏感']},
     'dev': {'view': ['overview', 'app', 'agent', 'kb', 'tool', 'workflow', 'cred', 'analytics'],
             'manage': ['workflow', 'agent'], 'cls': ['公开', '内部']},
@@ -187,10 +197,12 @@ def seed_users() -> int:
     ts = now_iso()
     for u in DEMO_USERS:
         salt = secrets.token_hex(16)
+        # pw_changed_at 故意留空：首次登录即要求改口令（演示口令是弱口令，不能带进正式环境）
         conn.execute('INSERT INTO users(id, username, name, role, dept, org, domain, note, pw_salt, pw_hash,'
-                     ' algo, status, must_change, created_at, updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+                     ' algo, status, must_change, created_at, updated_at, enabled, provider, pw_changed_at)'
+                     ' VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,?,NULL)',
                      (u['id'], u['username'], u['name'], u['role'], u['dept'], u['org'], u['domain'], u['note'],
-                      salt, hash_password(u['password'], salt), 'pbkdf2_sha256', 'active', 1, ts, ts))
+                      salt, hash_password(u['password'], salt), 'pbkdf2_sha256', 'active', 1, ts, ts, 'local'))
     return len(DEMO_USERS)
 
 
@@ -248,13 +260,291 @@ def session_user(handler):
     if stale:   # 滑动续期，最多每分钟写一次库
         conn.execute('UPDATE sessions SET expires_at=?, last_seen=? WHERE token=?',
                      (time.time() + SESSION_TTL, now_iso(), token))
+    handler.csrf = row['csrf'] or ''
+    handler.session_ref = row['ref'] or ''
     return dict(user)
 
 
 def public_user(u) -> dict:
     return {'id': u['id'], 'username': u['username'], 'name': u['name'], 'role': u['role'],
             'dept': u['dept'], 'org': u['org'], 'domain': u['domain'], 'note': u['note'],
+            'provider': u['provider'] if 'provider' in u.keys() else 'local',
+            'enabled': bool(u['enabled']) if 'enabled' in u.keys() else True,
             'must_change': bool(u['must_change'])}
+
+
+# --------------------------------------------------------------------------- v3.1 身份源适配器 / 口令策略 / CSRF
+# 口径：试运行用内建账号独立运行（auth-provider=local）；成熟后按「影子同步 → 双写核对 → 切主源」
+# 转移到客户方统一身份认证。外部协议未定也能先开工：provider 走同一套接口，未配置即明确拒绝。
+PASSWORD_MIN_LEN = 8
+PASSWORD_MAX_AGE_DAYS = 90          # 口令有效期，超期即强制改
+PASSWORD_REUSE_CHECK = 3            # 不许复用最近 N 次口令
+WEAK_PASSWORDS = {'admin123', 'ops123', 'dev123', 'user123', '12345678', '87654321',
+                  'password', 'passw0rd', 'abcd1234', 'abc12345', 'a1234567', '00000000'}
+CSRF_COOKIE = 'dsh_csrf'
+
+PROVIDERS = {
+    'local': {'label': '平台内建账号（默认 · 试运行独立运行）', 'ready': True, 'note': '账号与口令存 users 表'},
+    'cas': {'label': 'CAS 单点登录（适配器占位）', 'ready': False, 'note': '待客户方给协议版本与服务地址'},
+    'oauth2': {'label': 'OAuth2 / OIDC（适配器占位）', 'ready': False, 'note': '待客户方给签发方与字段映射'},
+    'ldap': {'label': 'LDAP 目录（适配器占位）', 'ready': False, 'note': '待客户方给目录基 DN 与字段映射'},
+}
+
+CONFIG_DEFAULTS = {
+    'auth-provider': 'local',
+    'approval-source': 'local',
+    'notify-channels': 'site',
+    'duty-source': 'local',
+    'command-ack-timeout-min': '30',
+}
+CONFIG_CHOICES = {
+    'auth-provider': list(PROVIDERS.keys()),
+    'approval-source': ['local', 'external'],
+    'notify-channels': ['site', 'site,email', 'site,email,sms,im'],
+    'duty-source': ['local', 'external'],
+}
+CONFIG_LABEL_CN = {'auth-provider': '身份来源', 'approval-source': '审批来源', 'notify-channels': '通知渠道',
+                   'duty-source': '排班来源', 'command-ack-timeout-min': '指令确认超时（分钟）'}
+
+DUTY_DEFAULT = [
+    ('D-01', '算力资源值班', '当班 · 陈××（网运）', '内线 8021', '值班长 · 刘××', '算力池与卡位异常'),
+    ('D-02', '网络与接入值班', '当班 · 示例××（网运）', '内线 8035', '值班长 · 刘××', '旁路接入与通道'),
+    ('D-03', '应用与智能体值班', '当班 · 李××（应用）', '内线 8048', '值班长 · 刘××', '智能体与知识库'),
+    ('D-04', '安全值班', '当班 · 赵××（安全）', '内线 8060', '值班长 · 刘××', '例外与配额越界'),
+    ('D-05', '值班长', '刘××', '内线 8000', '信息化管理部值班领导', '超时升级与决策'),
+]
+DUTY_ROUTES_DEFAULT = [
+    ('旁路接入', '网络与接入值班', '值班长'), ('旁路调用', '应用与智能体值班', '值班长'),
+    ('接管缺口', '算力资源值班', '值班长'), ('资源异常', '算力资源值班', '值班长'),
+    ('配额越界', '安全值班', '值班长'),
+]
+
+
+def ensure_columns(conn, table: str, cols) -> None:
+    """老库补新列：演示库允许原地升级，不要求删库重建。"""
+    have = {r['name'] for r in conn.execute('PRAGMA table_info(%s)' % table)}
+    for name, ddl in cols:
+        if name not in have:
+            conn.execute('ALTER TABLE %s ADD COLUMN %s %s' % (table, name, ddl))
+
+
+NEW_PERM_KEYS = ('security_issue', 'security_emergency')
+
+
+def migrate_matrix() -> int:
+    """旧库补新权限点：只往已有矩阵里加「处置下发 / 紧急处置」，不动用户手动改过的其它勾。"""
+    conn = db()
+    row = conn.execute("SELECT payload FROM kv_store WHERE key='dsh-demo-matrix-v1'").fetchone()
+    if not row:
+        return 0
+    try:
+        data = json.loads(row['payload'])
+    except Exception:
+        return 0
+    if not isinstance(data, dict):
+        return 0
+    changed = False
+    for role, block in DEFAULT_MATRIX.items():
+        cur = data.get(role)
+        if not isinstance(cur, dict):
+            continue
+        for kind in ('view', 'manage'):
+            have = list(cur.get(kind) or [])
+            add = [p for p in (block.get(kind) or []) if p in NEW_PERM_KEYS and p not in have]
+            if add:
+                cur[kind] = have + add
+                changed = True
+        data[role] = cur
+    if not changed:
+        return 0
+    project_state(conn, 'dsh-demo-matrix-v1', data, now_iso())
+    audit(conn, 'system', 'matrix_migrate', 'dsh-demo-matrix-v1',
+          '补入新权限点：' + ' / '.join(PERM_LABEL_CN[k] for k in NEW_PERM_KEYS))
+    return 1
+
+
+def upgrade_schema(conn) -> None:
+    ensure_columns(conn, 'users', [('enabled', "INTEGER NOT NULL DEFAULT 1"),
+                                   ('provider', "TEXT NOT NULL DEFAULT 'local'"),
+                                   ('pw_changed_at', 'TEXT')])
+    ensure_columns(conn, 'sessions', [('ref', 'TEXT'), ('csrf', 'TEXT')])
+
+
+def cfg(key: str, default: str = '') -> str:
+    row = db().execute('SELECT value FROM settings WHERE key=?', (key,)).fetchone()
+    return row['value'] if row else (CONFIG_DEFAULTS.get(key, default))
+
+
+def set_cfg(conn, key: str, value: str, actor: str) -> str:
+    value = str(value).strip()[:120]
+    choices = CONFIG_CHOICES.get(key)
+    if choices and value not in choices:
+        return '取值只能是 %s' % ' / '.join(choices)
+    if key == 'command-ack-timeout-min':
+        try:
+            n = int(value)
+        except Exception:
+            return '必须是分钟数（整数）'
+        value = str(max(1, min(1440, n)))
+    conn.execute('INSERT INTO settings(key, value, updated_at) VALUES(?,?,?) '
+                 'ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at',
+                 (key, value, now_iso()))
+    audit(conn, actor, 'config_put', key, value)
+    return ''
+
+
+def seed_config() -> int:
+    conn = db()
+    n = 0
+    for k, v in CONFIG_DEFAULTS.items():
+        if not conn.execute('SELECT 1 FROM settings WHERE key=?', (k,)).fetchone():
+            conn.execute('INSERT INTO settings(key, value, updated_at) VALUES(?,?,?)', (k, v, now_iso()))
+            n += 1
+    return n
+
+
+def seed_duty() -> int:
+    conn = db()
+    if conn.execute('SELECT COUNT(*) c FROM duty_shifts').fetchone()['c']:
+        return 0
+    ts = now_iso()
+    for d in DUTY_DEFAULT:
+        conn.execute('INSERT INTO duty_shifts(id, role, name, phone, lead, scope, enabled, updated_at)'
+                     ' VALUES(?,?,?,?,?,?,1,?)', d + (ts,))
+    for k, role, esc in DUTY_ROUTES_DEFAULT:
+        conn.execute('INSERT INTO duty_routes(kind, duty_role, escalate_role, updated_at) VALUES(?,?,?,?)',
+                     (k, role, esc, ts))
+    return len(DUTY_DEFAULT)
+
+
+def password_policy_error(username: str, pw: str, user_id: str) -> str:
+    if len(pw) < PASSWORD_MIN_LEN:
+        return '口令至少 %d 位' % PASSWORD_MIN_LEN
+    if len(pw) > 200:
+        return '口令过长（最多 200 位）'
+    if not re.search(r'[A-Za-z]', pw) or not re.search(r'[0-9]', pw):
+        return '口令要同时包含字母和数字'
+    low = pw.lower()
+    if low in WEAK_PASSWORDS:
+        return '口令过于简单（常见弱口令）'
+    if username and low == username.lower():
+        return '口令不能与账号相同'
+    conn = db()
+    rows = conn.execute('SELECT pw_salt, pw_hash FROM users WHERE id=?', (user_id,)).fetchall()
+    rows += conn.execute('SELECT pw_salt, pw_hash FROM password_history WHERE user_id=? ORDER BY id DESC LIMIT ?',
+                         (user_id, PASSWORD_REUSE_CHECK)).fetchall()
+    for r in rows:
+        if hmac.compare_digest(hash_password(pw, r['pw_salt']), r['pw_hash']):
+            return '不能复用当前口令或最近 %d 次用过的口令' % PASSWORD_REUSE_CHECK
+    return ''
+
+
+def change_password(conn, user_id: str, old_pw: str, new_pw: str, actor: str) -> tuple:
+    u = conn.execute('SELECT * FROM users WHERE id=?', (user_id,)).fetchone()
+    if not u:
+        return False, '账号不存在'
+    if old_pw and not hmac.compare_digest(hash_password(old_pw, u['pw_salt']), u['pw_hash']):
+        conn.execute('INSERT INTO login_log(at, username, ok, reason, ip) VALUES(?,?,?,?,?)',
+                     (now_iso(), u['username'], 0, '改口令时旧口令不正确', ''))
+        return False, '旧口令不正确'
+    err = password_policy_error(u['username'], new_pw, u['id'])
+    if err:
+        return False, err
+    salt = secrets.token_hex(16)
+    ts = now_iso()
+    conn.execute('INSERT INTO password_history(user_id, pw_salt, pw_hash, created_at) VALUES(?,?,?,?)',
+                 (u['id'], u['pw_salt'], u['pw_hash'], ts))
+    conn.execute('UPDATE users SET pw_salt=?, pw_hash=?, must_change=0, pw_changed_at=?, updated_at=? WHERE id=?',
+                 (salt, hash_password(new_pw, salt), ts, ts, u['id']))
+    audit(conn, actor, 'password_change', u['id'], '口令已更换，有效期 %d 天' % PASSWORD_MAX_AGE_DAYS)
+    return True, ''
+
+
+def pw_expired(u) -> bool:
+    ts = (u['pw_changed_at'] if 'pw_changed_at' in u.keys() else '') or u['created_at'] or ''
+    try:
+        seen = datetime.strptime(ts, '%Y-%m-%dT%H:%M:%SZ').replace(tzinfo=timezone.utc).timestamp()
+    except Exception:
+        return True
+    return time.time() - seen > PASSWORD_MAX_AGE_DAYS * 86400
+
+
+def sweep_commands(conn, actor: str = 'system') -> int:
+    """已下发但设备超时未确认 → 标「待人工兜底」并生成兜底工单（口径：我方先接住）。"""
+    try:
+        mins = int(cfg('command-ack-timeout-min', '30'))
+    except Exception:
+        mins = 30
+    cutoff = datetime.fromtimestamp(time.time() - mins * 60, timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+    rows = conn.execute("SELECT id, target_class, target, action FROM commands "
+                        "WHERE status='已下发' AND issued_at IS NOT NULL AND issued_at < ?", (cutoff,)).fetchall()
+    ts = now_iso()
+    for r in rows:
+        conn.execute("UPDATE commands SET status='待人工兜底', updated_at=?, fail_reason=? WHERE id=?",
+                     (ts, '设备未在 %d 分钟内确认' % mins, r['id']))
+        conn.execute('INSERT INTO fallback_tasks(id, kind, ref, title, detail, status, owner, created_at, updated_at)'
+                     ' VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO NOTHING',
+                     ('FB-%s' % r['id'], 'command_timeout', r['id'],
+                      '处置指令超时未确认，需人工接管：%s / %s' % (r['target_class'], r['action']),
+                      '原指令 %s，目标 %s；可用反向指令回滚' % (r['id'], r['target'] or ''),
+                      '待接管', '', ts, ts))
+        conn.execute('INSERT INTO events(time, level, text, source, created_at) '
+                     'SELECT ?, ?, ?, ?, ? WHERE NOT EXISTS (SELECT 1 FROM events WHERE time=? AND text=? AND source=?)',
+                     (ts, '严重', '处置指令 %s 超时未获设备确认，已转人工兜底（兜底工单 FB-%s）' % (r['id'], r['id']),
+                      'command', ts, ts, '处置指令 %s 超时未获设备确认，已转人工兜底（兜底工单 FB-%s）' % (r['id'], r['id']), 'command'))
+        audit(conn, actor, 'command_timeout', r['id'], '超过 %d 分钟未确认' % mins)
+    return len(rows)
+
+
+def public_config() -> dict:
+    out = {k: cfg(k) for k in CONFIG_DEFAULTS}
+    p = PROVIDERS.get(out['auth-provider'], {})
+    out['auth_provider_label'] = p.get('label', '')
+    out['auth_provider_ready'] = p.get('ready', False)
+    out['auth_provider_note'] = p.get('note', '')
+    return out
+
+
+def sweep_approvals(conn, actor: str = 'system') -> int:
+    """外部审批超时未回写 → 工单标「超时」并生成人工兜底（口径：我方先接住）。"""
+    now = now_iso()
+    rows = conn.execute("SELECT order_id, source, external_ref, due_at FROM approvals"
+                        " WHERE state='待审' AND due_at IS NOT NULL AND due_at < ?", (now,)).fetchall()
+    for r in rows:
+        conn.execute("UPDATE approvals SET state='超时' WHERE order_id=? AND source=? AND IFNULL(external_ref,'')=?"
+                     " AND state='待审'", (r['order_id'], r['source'], r['external_ref'] or ''))
+        fid = 'FB-AP-%s' % r['order_id']
+        conn.execute('INSERT INTO fallback_tasks(id, kind, ref, title, detail, status, owner, created_at, updated_at)'
+                     ' VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO NOTHING',
+                     (fid, 'approval_overdue', r['order_id'],
+                      '审批超时未回写，需人工跟进：工单 %s（来源 %s）' % (r['order_id'], r['source']),
+                      '期望回写时间 %s；可在工单详情里点「平台内人工审批」接管' % (r['due_at'] or ''),
+                      '待接管', '', now, now))
+        audit(conn, actor, 'approval_overdue', r['order_id'], '来源 %s 未在 %s 前回写' % (r['source'], r['due_at']))
+    return len(rows)
+
+
+def impact_of(conn, target_class: str, target: str, action: str) -> dict:
+    """下发前预检：影响面清单由平台台账推导（不是设备侧真实数据，界面须标注）。"""
+    like = '%' + (target or '').strip()[:60] + '%'
+    out = {'target_class': target_class, 'target': target, 'action': action, 'derived_from': '平台台账推导'}
+    affected = []
+    for kind in ('cred', 'model', 'managed', 'pool', 'channel'):
+        rows = conn.execute('SELECT id, name FROM entities WHERE kind=? AND (id LIKE ? OR name LIKE ?) LIMIT 40',
+                            (kind, like, like if target else '%')).fetchall()
+        for r in rows:
+            affected.append({'kind': kind, 'id': r['id'], 'name': r['name'] or ''})
+    online = conn.execute("SELECT COUNT(*) c FROM duty_shifts WHERE enabled=1").fetchone()['c']
+    device_ready = conn.execute('SELECT COUNT(*) c FROM entities WHERE kind=?', ('connector',)).fetchone()['c']
+    out['affected'] = affected[:40]
+    out['affected_count'] = len(affected)
+    out['precheck'] = {
+        '目标台账是否存在': bool(affected) or not target,
+        '在线值班可接手': online > 0,
+        '该类设备控制接口已接': device_ready > 0 and target_class != '未接设备',
+        '回滚入口': '反向指令模板可用',
+    }
+    return out
 
 
 # --------------------------------------------------------------------------- 投影
@@ -469,7 +759,8 @@ def _project_engine(conn, state: dict, updated_at: str) -> None:
 
 def clear_all(conn) -> None:
     for t in ('kv_store', 'settings', 'entities', 'orders', 'order_trace', 'events',
-              'notifications', 'accounts', 'role_permissions', 'audit_log'):
+              'notifications', 'accounts', 'role_permissions', 'audit_log',
+              'identity_links', 'approvals', 'duty_shifts', 'duty_routes', 'commands', 'fallback_tasks'):
         conn.execute('DELETE FROM %s' % t)
     conn.execute("DELETE FROM sqlite_sequence")
 
@@ -478,13 +769,16 @@ def clear_all(conn) -> None:
 def counts() -> dict:
     conn = db()
     out = {}
-    for t in ('kv_store', 'entities', 'orders', 'order_trace', 'events', 'notifications', 'role_permissions', 'audit_log'):
+    for t in ('kv_store', 'entities', 'orders', 'order_trace', 'events', 'notifications', 'role_permissions',
+              'audit_log', 'identity_links', 'approvals', 'commands', 'fallback_tasks'):
         out[t] = conn.execute('SELECT COUNT(*) c FROM %s' % t).fetchone()['c']
     return out
 
 
 TABLE_OF = {'orders': 'orders', 'events': 'events', 'audit': 'audit_log', 'notifications': 'notifications',
-            'accounts': 'accounts', 'entities': 'entities', 'permissions': 'role_permissions', 'settings': 'settings'}
+            'accounts': 'accounts', 'entities': 'entities', 'permissions': 'role_permissions', 'settings': 'settings',
+            'approvals': 'approvals', 'commands': 'commands', 'fallback': 'fallback_tasks',
+            'links': 'identity_links', 'duty': 'duty_shifts', 'duty_routes': 'duty_routes'}
 CSV_COLUMNS = {
     'orders': ['id', 'type', 'title', 'applicant', 'dept', 'level', 'status', 'target', 'amount', 'reason',
                'decided_by', 'reject_reason', 'created_at', 'updated_at'],
@@ -495,6 +789,13 @@ CSV_COLUMNS = {
     'role_permissions': ['role', 'perm_kind', 'perm', 'updated_at'],
     'settings': ['key', 'value', 'updated_at'],
     'accounts': ['id', 'name', 'role', 'dept', 'org', 'domain', 'note'],
+    'approvals': ['id', 'order_id', 'source', 'external_ref', 'state', 'decision', 'note', 'actor', 'due_at', 'at', 'decided_at'],
+    'commands': ['id', 'target_class', 'target', 'action', 'dry_run', 'status', 'emergency', 'issued_by',
+                 'issued_at', 'ack_at', 'ack_by', 'fail_reason', 'rollback_of', 'created_at'],
+    'fallback_tasks': ['id', 'kind', 'ref', 'title', 'status', 'owner', 'created_at', 'updated_at'],
+    'identity_links': ['provider', 'external_id', 'user_id', 'name', 'role', 'matched', 'source', 'last_seen'],
+    'duty_shifts': ['id', 'role', 'name', 'phone', 'lead', 'scope', 'enabled', 'updated_at'],
+    'duty_routes': ['kind', 'duty_role', 'escalate_role', 'updated_at'],
 }
 
 
@@ -503,6 +804,14 @@ def _flt(where, params, col, value, maxlen=120):
     if value:
         where.append('%s=?' % col)
         params.append(value[:maxlen])
+
+
+def _bit(where, params, col, value):
+    v = (value or '').strip().lower()
+    if v in ('1', 'true', 'yes', '是'):
+        where.append('%s=1' % col)
+    elif v in ('0', 'false', 'no', '否'):
+        where.append('%s=0' % col)
 
 
 def _like(where, params, cols, q):
@@ -564,6 +873,28 @@ def _query_plan(key: str, qs):
     elif table == 'settings':
         _like(where, params, ['key'], g('q'))
         order = 'ORDER BY key'
+    elif table == 'approvals':
+        _flt(where, params, 'order_id', g('order', 40)); _flt(where, params, 'source', g('source', 20))
+        _flt(where, params, 'state', g('state', 20)); _like(where, params, ['external_ref', 'note'], g('q'))
+        order = 'ORDER BY at DESC'
+    elif table == 'commands':
+        _flt(where, params, 'status', g('status', 30)); _flt(where, params, 'target_class', g('target_class', 40))
+        _bit(where, params, 'dry_run', g('dry_run')); _like(where, params, ['target', 'action', 'id'], g('q'))
+        order = 'ORDER BY created_at DESC'
+    elif table == 'fallback_tasks':
+        _flt(where, params, 'status', g('status', 20)); _flt(where, params, 'kind', g('kind', 30))
+        _like(where, params, ['title', 'ref'], g('q'))
+        order = 'ORDER BY created_at DESC'
+    elif table == 'identity_links':
+        _flt(where, params, 'provider', g('provider', 20)); _bit(where, params, 'matched', g('matched'))
+        _like(where, params, ['external_id', 'name'], g('q'))
+        order = 'ORDER BY provider, external_id'
+    elif table == 'duty_shifts':
+        _bit(where, params, 'enabled', g('enabled')); _like(where, params, ['role', 'name', 'scope'], g('q'))
+        order = 'ORDER BY id'
+    elif table == 'duty_routes':
+        _like(where, params, ['kind', 'duty_role'], g('q'))
+        order = 'ORDER BY kind'
     else:
         order = 'ORDER BY id'
     return table, where, params, order
@@ -587,9 +918,9 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(code)
         self.send_header('Content-Type', ctype)
         self.send_header('Content-Length', str(len(body)))
-        cookie = getattr(self, '_set_cookie', None)
-        if cookie:
-            self.send_header('Set-Cookie', cookie)
+        for cookie in getattr(self, '_set_cookies', []) or ([getattr(self, '_set_cookie', '')] if getattr(self, '_set_cookie', '') else []):
+            if cookie:
+                self.send_header('Set-Cookie', cookie)
         self.send_header('Cache-Control', 'no-store')
         self.end_headers()
         if self.command != 'HEAD':
@@ -611,14 +942,42 @@ class Handler(BaseHTTPRequestHandler):
             return None, '请求体不是合法 JSON：%s' % e
 
     # ---- 路由
+    CSRF_EXEMPT = {'login', 'logout'}
+    MUST_CHANGE_EXEMPT = {'login', 'logout', 'password/change'}
+
+    def _need(self, perm: str, kind: str = 'manage', action: str = 'denied_post') -> bool:
+        """统一的服务端权限判定：判定失败即 403 并留审计，前端怎么改都没用。"""
+        if has_perm(self.user, perm, kind):
+            return True
+        audit(db(), actor_of(self), action, perm, '角色 %s 缺少权限点 %s（%s）' % (self.user['role'], perm, kind))
+        self._json(HTTPStatus.FORBIDDEN, {'ok': False,
+            'error': '角色「%s」没有「%s」的%s权限（权限点 %s）'
+            % (self.user['role'], PERM_LABEL_CN.get(perm, perm), '操作' if kind == 'manage' else '查看', perm)})
+        return False
+
     def _guard(self, key: str) -> bool:
-        """除登录 / 会话探测 / 健康检查外，所有 /api 都要带有效会话。"""
+        """除登录 / 会话探测 / 健康检查外，所有 /api 都要带有效会话。
+        写操作额外要求：① X-CSRF-Token 与服务端会话里存的一致；② 未改口令的账号只能改口令。"""
         self.user = session_user(self)
         if key in PUBLIC_API:
             return True
         if not self.user:
             self._json(HTTPStatus.UNAUTHORIZED, {'ok': False, 'error': '未登录或会话已过期，请重新登录'})
             return False
+        if self.command in ('POST', 'PUT', 'DELETE'):
+            if key not in self.CSRF_EXEMPT:
+                got = self.headers.get('X-CSRF-Token') or ''
+                want = getattr(self, 'csrf', '') or ''
+                if not want or not hmac.compare_digest(got, want):
+                    audit(db(), actor_of(self), 'denied_csrf', key, '缺少或错误的 X-CSRF-Token')
+                    self._json(HTTPStatus.FORBIDDEN, {'ok': False,
+                        'error': '跨站请求伪造防护：请求缺少 X-CSRF-Token 或与会话不一致'})
+                    return False
+            if self.user['must_change'] and key not in self.MUST_CHANGE_EXEMPT:
+                audit(db(), actor_of(self), 'denied_password_pending', key, '账号未改口令，禁止写操作')
+                self._json(HTTPStatus.FORBIDDEN, {'ok': False,
+                    'error': '这个账号还没改口令（演示口令是弱口令），请先在「账号与安全」里更换口令'})
+                return False
         return True
 
     def do_GET(self):
@@ -724,7 +1083,40 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(HTTPStatus.OK, {'ok': True, 'signed_in': False})
             return self._json(HTTPStatus.OK, {'ok': True, 'signed_in': True, 'user': public_user(self.user),
                                              'perms': perms_of(self.user['role']),
-                                             'session_idle_minutes': round(SESSION_TTL / 60)})
+                                             'csrf': getattr(self, 'csrf', '') or '',
+                                             'session_ref': getattr(self, 'session_ref', '') or '',
+                                             'session_idle_minutes': round(SESSION_TTL / 60),
+                                             'config': public_config(),
+                                             'password_policy': {'min_len': PASSWORD_MIN_LEN,
+                                                                 'max_age_days': PASSWORD_MAX_AGE_DAYS,
+                                                                 'reuse_check': PASSWORD_REUSE_CHECK}})
+        if key == 'config':
+            return self._json(HTTPStatus.OK, {'ok': True, 'config': public_config(),
+                                             'providers': PROVIDERS,
+                                             'labels': CONFIG_LABEL_CN,
+                                             'perm_map': {k: v for k, v in KEY_PERM.items() if k in MATRIX_KEYS},
+                                             'note': '口径：先内建独立运行，外部来源做成适配器 + 配置开关；'
+                                                     '切换不改业务代码，未配置的来源会明确拒绝'})
+        if key == 'sessions':
+            mine_only = not has_perm(self.user, 'matrix', 'view')
+            sql = ('SELECT s.ref, s.user_id, s.created_at, s.last_seen, s.expires_at, s.ip, s.revoked,'
+                   ' u.username, u.name, u.role FROM sessions s JOIN users u ON u.id=s.user_id ')
+            params = []
+            if mine_only:
+                sql += 'WHERE s.user_id=? '
+                params.append(self.user['id'])
+            sql += 'ORDER BY s.created_at DESC'
+            rows = []
+            for r in query_rows(sql, params, 100, 0):
+                rows.append({**dict(r), 'expired': time.time() > r['expires_at'],
+                             'current': r['ref'] == getattr(self, 'session_ref', ''),
+                             'expires_left_min': max(0, round((r['expires_at'] - time.time()) / 60))})
+            return self._json(HTTPStatus.OK, {'ok': True, 'rows': rows, 'total': len(rows),
+                                             'mine_only': mine_only, 'ttl_minutes': round(SESSION_TTL / 60)})
+        if key == 'commands':
+            sweep_commands(conn)
+        elif key == 'approvals':
+            sweep_approvals(conn)
         plan = _query_plan(key, qs)
         if plan:
             table, where, params, order = plan
@@ -757,7 +1149,9 @@ class Handler(BaseHTTPRequestHandler):
         if key == 'tables':
             out = []
             for t in ('kv_store', 'entities', 'orders', 'order_trace', 'events', 'notifications',
-                      'accounts', 'role_permissions', 'settings', 'audit_log'):
+                      'accounts', 'role_permissions', 'settings', 'audit_log', 'users', 'sessions', 'login_log',
+                      'identity_links', 'password_history', 'approvals', 'duty_shifts', 'duty_routes',
+                      'commands', 'fallback_tasks'):
                 c = db().execute('SELECT COUNT(*) c FROM %s' % t).fetchone()['c']
                 col = 'updated_at' if db().execute("PRAGMA table_info(%s)" % t).fetchone() and any(
                     r['name'] == 'updated_at' for r in db().execute('PRAGMA table_info(%s)' % t)) else None
@@ -768,6 +1162,22 @@ class Handler(BaseHTTPRequestHandler):
 
     def _api_put(self, path: str) -> None:
         name = path[len(API_PREFIX):].strip('/')
+        if name == 'config':
+            if not self._need('matrix'):
+                return
+            payload, err = self._body()
+            if err:
+                return self._json(HTTPStatus.BAD_REQUEST, {'ok': False, 'error': err})
+            k = str((payload or {}).get('key') or '')[:60]
+            if k not in CONFIG_DEFAULTS:
+                return self._json(HTTPStatus.BAD_REQUEST, {'ok': False,
+                    'error': '不能改这个配置项', 'allowed': list(CONFIG_DEFAULTS.keys())})
+            msg = set_cfg(db(), k, str((payload or {}).get('value') or ''), actor_of(self))
+            if msg:
+                return self._json(HTTPStatus.BAD_REQUEST, {'ok': False, 'error': msg,
+                    'allowed': CONFIG_CHOICES.get(k, [])})
+            return self._json(HTTPStatus.OK, {'ok': True, 'key': k, 'config': public_config(),
+                'note': '只改配置就切换来源：业务代码与 /api 契约不变，未配置好的外部来源会明确拒绝而不是静默降级'})
         if not name.startswith('state/'):
             return self._json(HTTPStatus.NOT_FOUND, {'ok': False, 'error': '未知接口'})
         key = name[len('state/'):]
@@ -824,6 +1234,10 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(HTTPStatus.TOO_MANY_REQUESTS, {'ok': False,
                     'error': '该账号 %d 分钟内失败 %d 次，已暂时拒绝登录，请稍后再试' % (LOGIN_FAIL_WINDOW // 60, fails)})
             u = conn.execute('SELECT * FROM users WHERE username=?', (username,)).fetchone()
+            if u is not None and 'enabled' in u.keys() and not u['enabled']:
+                conn.execute('INSERT INTO login_log(at, username, ok, reason, ip) VALUES(?,?,?,?,?)',
+                             (now_iso(), username, 0, '账号已停用', ip))
+                return self._json(HTTPStatus.FORBIDDEN, {'ok': False, 'error': '这个账号已停用，请联系管理员开通'})
             ok = bool(u) and u['status'] == 'active' and hmac.compare_digest(
                 hash_password(password, u['pw_salt']), u['pw_hash'])
             reason = '' if ok else ('账号不存在' if not u else '口令不正确')
@@ -832,22 +1246,381 @@ class Handler(BaseHTTPRequestHandler):
             if not ok:
                 return self._json(HTTPStatus.UNAUTHORIZED, {'ok': False, 'error': '账号或口令不正确',
                                                            'remaining': max(0, LOGIN_FAIL_LIMIT - fails - 1)})
+            provider = cfg('auth-provider')
+            if provider != 'local':
+                # 口径：切到外部身份源后本地账号只留运维兜底；兜底账号由管理员逐个开
+                note = '（本地兜底账号）' if conn.execute('SELECT 1 FROM identity_links WHERE user_id=?', (u['id'],)).fetchone() else ''
+                audit(conn, u['id'], 'login_local_fallback', provider, '身份来源已切成 %s，本次用本地账号登录%s' % (provider, note))
+            must_change = bool(u['must_change']) or pw_expired(u)
+            why = '首次登录必须改口令' if u['must_change'] else ('口令已超过 %d 天未更换' % PASSWORD_MAX_AGE_DAYS)
+            if must_change and not u['must_change']:
+                conn.execute('UPDATE users SET must_change=1 WHERE id=?', (u['id'],))
             conn.execute('DELETE FROM sessions WHERE expires_at < ?', (time.time(),))
             token = secrets.token_urlsafe(32)
-            conn.execute('INSERT INTO sessions(token, user_id, created_at, expires_at, last_seen, ip) VALUES(?,?,?,?,?,?)',
-                         (token, u['id'], now_iso(), time.time() + SESSION_TTL, now_iso(), ip))
-            audit(conn, u['id'], 'login', 'session', '登录成功，会话有效期 %d 分钟' % (SESSION_TTL // 60))
-            self._set_cookie = '%s=%s; Path=/; HttpOnly; SameSite=Lax; Max-Age=%d' % (SESSION_COOKIE, token, SESSION_TTL)
+            ref = secrets.token_urlsafe(6)
+            csrf = secrets.token_urlsafe(24)
+            conn.execute('INSERT INTO sessions(token, user_id, created_at, expires_at, last_seen, ip, ref, csrf)'
+                         ' VALUES(?,?,?,?,?,?,?,?)', (token, u['id'], now_iso(), time.time() + SESSION_TTL, now_iso(), ip, ref, csrf))
+            audit(conn, u['id'], 'login', 'session', '登录成功，会话有效期 %d 分钟%s'
+                  % (SESSION_TTL // 60, '；' + why if must_change else ''))
+            self._set_cookies = [
+                '%s=%s; Path=/; HttpOnly; SameSite=Lax; Max-Age=%d' % (SESSION_COOKIE, token, SESSION_TTL),
+                '%s=%s; Path=/; SameSite=Lax; Max-Age=%d' % (CSRF_COOKIE, csrf, SESSION_TTL),
+            ]
             return self._json(HTTPStatus.OK, {'ok': True, 'user': public_user(u), 'perms': perms_of(u['role']),
-                                             'expires_in': SESSION_TTL})
+                                             'expires_in': SESSION_TTL, 'csrf': csrf, 'session_ref': ref,
+                                             'must_change': must_change, 'change_reason': why if must_change else '',
+                                             'password_policy': {'min_len': PASSWORD_MIN_LEN,
+                                                                'max_age_days': PASSWORD_MAX_AGE_DAYS,
+                                                                'reuse_check': PASSWORD_REUSE_CHECK}})
         if key == 'logout':
             token = _cookie_token(self)
             if token:
                 conn.execute('UPDATE sessions SET revoked=1 WHERE token=?', (token,))
             if self.user:
                 audit(conn, self.user['id'], 'logout', 'session', '')
-            self._set_cookie = '%s=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0' % SESSION_COOKIE
+            self._set_cookies = ['%s=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0' % SESSION_COOKIE,
+                                 '%s=; Path=/; SameSite=Lax; Max-Age=0' % CSRF_COOKIE]
             return self._json(HTTPStatus.OK, {'ok': True})
+
+        # ---- v3.1 口令与账号（改口令是自助操作，不需要额外权限点）
+        if key == 'password/change':
+            payload, err = self._body()
+            if err:
+                return self._json(HTTPStatus.BAD_REQUEST, {'ok': False, 'error': err})
+            old = str((payload or {}).get('old_password') or '')[:200]
+            new = str((payload or {}).get('new_password') or '')[:200]
+            ok, msg = change_password(conn, self.user['id'], old, new, actor_of(self))
+            if not ok:
+                return self._json(HTTPStatus.BAD_REQUEST, {'ok': False, 'error': '改口令失败：' + msg,
+                    'policy': {'min_len': PASSWORD_MIN_LEN, 'need_letter_and_digit': True,
+                               'max_age_days': PASSWORD_MAX_AGE_DAYS, 'reuse_check': PASSWORD_REUSE_CHECK}})
+            token = _cookie_token(self)
+            if token:
+                conn.execute('UPDATE sessions SET revoked=1 WHERE token=?', (token,))
+            audit(conn, actor_of(self), 'password_changed', self.user['id'], '改口令成功，需重新登录')
+            self._set_cookies = ['%s=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0' % SESSION_COOKIE,
+                                 '%s=; Path=/; SameSite=Lax; Max-Age=0' % CSRF_COOKIE]
+            return self._json(HTTPStatus.OK, {'ok': True, 'need_relogin': True,
+                'note': '口令已更换（有效期 %d 天），请重新登录' % PASSWORD_MAX_AGE_DAYS})
+        if key == 'password/reset':
+            if not self._need('matrix'):
+                return
+            payload, err = self._body()
+            if err:
+                return self._json(HTTPStatus.BAD_REQUEST, {'ok': False, 'error': err})
+            uid = str((payload or {}).get('user_id') or '')[:40]
+            tmp = str((payload or {}).get('temp_password') or '')[:200]
+            u = conn.execute('SELECT * FROM users WHERE id=?', (uid,)).fetchone()
+            if not u:
+                return self._json(HTTPStatus.NOT_FOUND, {'ok': False, 'error': '账号不存在'})
+            bad = password_policy_error(u['username'], tmp, u['id'])
+            if bad:
+                return self._json(HTTPStatus.BAD_REQUEST, {'ok': False, 'error': '临时口令不合策略：' + bad})
+            salt = secrets.token_hex(16)
+            ts = now_iso()
+            conn.execute('INSERT INTO password_history(user_id, pw_salt, pw_hash, created_at) VALUES(?,?,?,?)',
+                         (u['id'], u['pw_salt'], u['pw_hash'], ts))
+            conn.execute('UPDATE users SET pw_salt=?, pw_hash=?, must_change=1, pw_changed_at=? WHERE id=?',
+                         (salt, hash_password(tmp, salt), ts, u['id']))
+            conn.execute('UPDATE sessions SET revoked=1 WHERE user_id=?', (u['id'],))
+            audit(conn, actor_of(self), 'password_reset', u['id'], '管理员重置临时口令，下次登录必须更换')
+            return self._json(HTTPStatus.OK, {'ok': True, 'must_change': True})
+        if key == 'account/toggle':
+            if not self._need('matrix'):
+                return
+            payload, err = self._body()
+            if err:
+                return self._json(HTTPStatus.BAD_REQUEST, {'ok': False, 'error': err})
+            uid = str((payload or {}).get('user_id') or '')[:40]
+            enabled = 1 if (payload or {}).get('enabled') else 0
+            u = conn.execute('SELECT id FROM users WHERE id=?', (uid,)).fetchone()
+            if not u:
+                return self._json(HTTPStatus.NOT_FOUND, {'ok': False, 'error': '账号不存在'})
+            conn.execute('UPDATE users SET enabled=?, status=?, updated_at=? WHERE id=?',
+                         (enabled, 'active' if enabled else 'disabled', now_iso(), uid))
+            if not enabled:
+                n = conn.execute('UPDATE sessions SET revoked=1 WHERE user_id=?', (uid,)).rowcount
+                audit(conn, actor_of(self), 'account_disable', uid, '账号已停用，同时撤销 %d 个会话' % n)
+            else:
+                audit(conn, actor_of(self), 'account_enable', uid, '账号已开通')
+            return self._json(HTTPStatus.OK, {'ok': True, 'user_id': uid, 'enabled': bool(enabled)})
+        if key == 'session/revoke':
+            payload, _e = self._body()
+            ref = str((payload or {}).get('ref') or '')[:40]
+            mine = conn.execute('SELECT * FROM sessions WHERE ref=?', (ref,)).fetchone()
+            if not mine:
+                return self._json(HTTPStatus.NOT_FOUND, {'ok': False, 'error': '会话不存在或已撤销'})
+            if mine['user_id'] != self.user['id'] and not has_perm(self.user, 'matrix', 'view'):
+                audit(db(), actor_of(self), 'denied_post', 'session/revoke', '只能撤销自己的会话，除非有权限矩阵权限')
+                return self._json(HTTPStatus.FORBIDDEN, {'ok': False, 'error': '只能撤销自己的会话（撤销他人需要权限矩阵权限）'})
+            conn.execute('UPDATE sessions SET revoked=1 WHERE ref=?', (ref,))
+            audit(conn, actor_of(self), 'session_revoke', mine['user_id'], '撤销会话 %s' % ref)
+            if mine['user_id'] == self.user['id']:
+                self._set_cookies = ['%s=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0' % SESSION_COOKIE,
+                                     '%s=; Path=/; SameSite=Lax; Max-Age=0' % CSRF_COOKIE]
+            return self._json(HTTPStatus.OK, {'ok': True, 'revoked': ref})
+
+        # ---- v3.1 身份源：影子同步（外部账号只读导入，先比差异，不覆盖本地账号）
+        if key == 'links/sync':
+            if not self._need('matrix'):
+                return
+            payload, err = self._body()
+            if err:
+                return self._json(HTTPStatus.BAD_REQUEST, {'ok': False, 'error': err})
+            provider = str((payload or {}).get('provider') or cfg('auth-provider'))[:20]
+            accounts = (payload or {}).get('accounts')
+            if not isinstance(accounts, list) or not accounts:
+                return self._json(HTTPStatus.BAD_REQUEST, {'ok': False, 'error': 'body 需要 {"accounts": [{"external_id": …}]}'})
+            ts = now_iso()
+            matched = unmatched = 0
+            for a in accounts[:500]:
+                if not isinstance(a, dict):
+                    continue
+                ext = str(a.get('external_id') or '').strip()[:80]
+                if not ext:
+                    continue
+                uid = str(a.get('user_id') or '').strip()[:40]
+                user = conn.execute('SELECT id FROM users WHERE id=? OR username=?', (uid or ext, ext)).fetchone()
+                hit = 1 if user else 0
+                matched += hit
+                unmatched += 0 if hit else 1
+                conn.execute('INSERT INTO identity_links(provider, external_id, user_id, name, role, dept, matched,'
+                             ' source, first_seen, last_seen) VALUES(?,?,?,?,?,?,?,?, ?,?)'
+                             ' ON CONFLICT(provider, external_id) DO UPDATE SET user_id=excluded.user_id,'
+                             ' name=excluded.name, role=excluded.role, dept=excluded.dept,'
+                             ' matched=excluded.matched, last_seen=excluded.last_seen',
+                             (provider, ext, (user['id'] if user else None), str(a.get('name') or '')[:120],
+                              str(a.get('role') or '')[:40], str(a.get('dept') or '')[:120], hit, 'sync', ts, ts))
+            audit(conn, actor_of(self), 'links_sync', provider, '影子同步 %d 条：可对应 %d，待绑定 %d'
+                  % (len(accounts), matched, unmatched))
+            return self._json(HTTPStatus.OK, {'ok': True, 'provider': provider, 'total': len(accounts),
+                'matched': matched, 'unmatched': unmatched,
+                'note': '影子同步只读导入，不改本地账号；差异清零后才切主源'})
+
+        # ---- v3.3 审批来源：内建审批 / 外部回写（同一状态机，外部回写幂等）
+        if key in ('approval/create', 'approval/decide', 'approval/callback'):
+            if not self._need('approve'):
+                return
+            payload, err = self._body()
+            if err:
+                return self._json(HTTPStatus.BAD_REQUEST, {'ok': False, 'error': err})
+            oid = str((payload or {}).get('order_id') or '')[:40]
+            o = conn.execute('SELECT id, title, status FROM orders WHERE id=?', (oid,)).fetchone()
+            if not o:
+                return self._json(HTTPStatus.NOT_FOUND, {'ok': False, 'error': '工单不存在：%s（工单要先由业务操作产生）' % oid})
+            ts = now_iso()
+            source = str((payload or {}).get('source') or ('external' if key == 'approval/callback' else cfg('approval-source')))[:20]
+            if key == 'approval/create':
+                try:
+                    due_min = int((payload or {}).get('due_minutes') or 30)
+                except Exception:
+                    due_min = 30
+                due = datetime.fromtimestamp(time.time() + max(1, min(1440, due_min)) * 60, timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+                conn.execute('INSERT INTO approvals(order_id, source, external_ref, state, note, actor, due_at, at)'
+                             ' VALUES(?,?,?,?,?,?,?,?)',
+                             (oid, source, str((payload or {}).get('external_ref') or '')[:80], '待审',
+                              str((payload or {}).get('note') or '')[:500], actor_of(self), due, ts))
+                audit(conn, actor_of(self), 'approval_create', oid, '审批来源 %s，期望 %s 前回写' % (source, due))
+                return self._json(HTTPStatus.OK, {'ok': True, 'order_id': oid, 'source': source, 'due_at': due})
+            decision = str((payload or {}).get('decision') or '')[:20]
+            if decision not in ('approve', 'reject'):
+                return self._json(HTTPStatus.BAD_REQUEST, {'ok': False, 'error': 'decision 只能是 approve 或 reject'})
+            ext_ref = str((payload or {}).get('external_ref') or '')[:80]
+            dup = conn.execute("SELECT id FROM approvals WHERE order_id=? AND IFNULL(external_ref,'')=? AND decision=?",
+                               (oid, ext_ref, decision)).fetchone()
+            if dup:
+                return self._json(HTTPStatus.OK, {'ok': True, 'deduped': True, 'id': dup['id'],
+                    'note': '同一外部单据号的同一决定只生效一次（幂等回写）'})
+            state = '已审' if decision == 'approve' else '驳回'
+            cur = conn.execute("SELECT id FROM approvals WHERE order_id=? AND state='待审' ORDER BY at DESC LIMIT 1",
+                               (oid,)).fetchone()
+            if cur:
+                conn.execute('UPDATE approvals SET state=?, decision=?, note=?, actor=?, decided_at=? WHERE id=?',
+                             (state, decision, str((payload or {}).get('note') or '')[:500], actor_of(self), ts, cur['id']))
+                aid = cur['id']
+            else:
+                conn.execute('INSERT INTO approvals(order_id, source, external_ref, state, decision, note, actor,'
+                             ' due_at, at, decided_at) VALUES(?,?,?,?,?,?,?,?,?,?)',
+                             (oid, source, ext_ref, state, decision, str((payload or {}).get('note') or '')[:500],
+                              actor_of(self), ts, ts, ts))
+                aid = conn.execute('SELECT last_insert_rowid() id').fetchone()['id']
+            audit(conn, actor_of(self), 'approval_' + key.split('/')[1], oid,
+                  '工单 %s 由 %s 判定为 %s（外部单据号 %s）' % (oid, source, state, ext_ref or '-'))
+            conn.execute('INSERT INTO events(time, level, text, source, created_at) '
+                         'SELECT ?, ?, ?, ?, ? WHERE NOT EXISTS (SELECT 1 FROM events WHERE time=? AND text=? AND source=?)',
+                         (ts, '一般', '工单 %s 审批结果回写（来源 %s）：%s' % (oid, source, state), 'approval', ts,
+                          ts, '工单 %s 审批结果回写（来源 %s）：%s' % (oid, source, state), 'approval'))
+            return self._json(HTTPStatus.OK, {'ok': True, 'id': aid, 'state': state, 'source': source})
+
+        # ---- v3.6 控制指令：预检 / dry-run / 下发 / 确认 / 回滚 / 人工兜底
+        if key == 'commands/dry-run':
+            if not self._need('security_issue'):
+                return
+            payload, err = self._body()
+            if err:
+                return self._json(HTTPStatus.BAD_REQUEST, {'ok': False, 'error': err})
+            p = payload or {}
+            cls = str(p.get('target_class') or '')[:60]
+            tgt = str(p.get('target') or '')[:120]
+            act = str(p.get('action') or '')[:120]
+            if not cls or not act:
+                return self._json(HTTPStatus.BAD_REQUEST, {'ok': False, 'error': '要选目标设备类型与指令动作'})
+            info = impact_of(conn, cls, tgt, act)
+            cid = 'CMD-' + secrets.token_hex(4).upper()
+            ts = now_iso()
+            conn.execute('INSERT INTO commands(id, target_class, target, action, params, dry_run, status, impact,'
+                         ' precheck, emergency, issued_by, created_at, updated_at) VALUES(?,?,?,?,?,1,?,?,?,?,?,?,?)',
+                         (cid, cls, tgt, act, json.dumps(p.get('params') or {}, ensure_ascii=False), '预检通过',
+                          json.dumps(info, ensure_ascii=False), json.dumps(info['precheck'], ensure_ascii=False),
+                          1 if p.get('emergency') else 0, actor_of(self), ts, ts))
+            audit(conn, actor_of(self), 'command_dryrun', cid, 'dry-run：%s / %s，影响 %d 项（未产生外部调用）'
+                  % (cls, act, info['affected_count']))
+            return self._json(HTTPStatus.OK, {'ok': True, 'id': cid, 'dry_run': True, 'impact': info,
+                'note': '演练模式：只算影响，不发指令、不产生外部调用'})
+        if key == 'commands/issue':
+            payload, err = self._body()
+            if err:
+                return self._json(HTTPStatus.BAD_REQUEST, {'ok': False, 'error': err})
+            p = payload or {}
+            emergency = bool(p.get('emergency'))
+            if not self._need('security_emergency' if emergency else 'security_issue'):
+                return
+            cid = str(p.get('id') or '')[:40]
+            row = conn.execute('SELECT * FROM commands WHERE id=?', (cid,)).fetchone() if cid else None
+            if not row:
+                return self._json(HTTPStatus.BAD_REQUEST, {'ok': False,
+                    'error': '找不到预检记录：必须先做 dry-run 预检，再下发'})
+            if row['status'] not in ('预检通过', '失败'):
+                return self._json(HTTPStatus.BAD_REQUEST, {'ok': False,
+                    'error': '这条指令当前是「%s」，不能直接下发（必须先预检通过）' % row['status']})
+            if not p.get('confirm'):
+                audit(conn, actor_of(self), 'command_need_confirm', cid, '缺二次确认')
+                return self._json(HTTPStatus.BAD_REQUEST, {'ok': False,
+                    'error': '下发需要二次确认：看过影响面清单后点「确认下发」'})
+            info = impact_of(conn, row['target_class'], row['target'], row['action'])
+            ts = now_iso()
+            conn.execute("UPDATE commands SET status='已下发', dry_run=0, emergency=?, impact=?, precheck=?,"
+                         " issued_by=?, issued_at=?, updated_at=? WHERE id=?",
+                         (1 if emergency else 0, json.dumps(info, ensure_ascii=False),
+                          json.dumps(info['precheck'], ensure_ascii=False), actor_of(self), ts, ts, cid))
+            audit(conn, actor_of(self), 'command_issue', cid, '%s / %s 目标 %s，影响 %d 项%s'
+                  % (row['target_class'], row['action'], row['target'] or '-', info['affected_count'],
+                     '（紧急通道，不受变更窗口限制）' if emergency else ''))
+            txt = '处置指令 %s 已下发：%s / %s（目标 %s，影响 %d 项）' % (
+                cid, row['target_class'], row['action'], row['target'] or '-', info['affected_count'])
+            conn.execute('INSERT INTO events(time, level, text, source, created_at) '
+                         'SELECT ?, ?, ?, ?, ? WHERE NOT EXISTS (SELECT 1 FROM events WHERE time=? AND text=? AND source=?)',
+                         (ts, '严重', txt, 'command', ts, ts, txt, 'command'))
+            return self._json(HTTPStatus.OK, {'ok': True, 'id': cid, 'status': '已下发', 'impact': info})
+        if key == 'commands/ack':
+            if not self._need('security_issue'):
+                return
+            payload, err = self._body()
+            if err:
+                return self._json(HTTPStatus.BAD_REQUEST, {'ok': False, 'error': err})
+            cid = str((payload or {}).get('id') or '')[:40]
+            ok = bool((payload or {}).get('ok'))
+            row = conn.execute('SELECT * FROM commands WHERE id=?', (cid,)).fetchone()
+            if not row:
+                return self._json(HTTPStatus.NOT_FOUND, {'ok': False, 'error': '指令不存在'})
+            ts = now_iso()
+            if ok:
+                conn.execute("UPDATE commands SET status='设备已确认', ack_at=?, ack_by=?, updated_at=? WHERE id=?",
+                             (ts, actor_of(self), ts, cid))
+                audit(conn, actor_of(self), 'command_ack', cid, '设备已确认')
+            else:
+                why = str((payload or {}).get('reason') or '设备侧失败')[:200]
+                conn.execute("UPDATE commands SET status='失败', fail_reason=?, updated_at=? WHERE id=?",
+                             (why, ts, cid))
+                conn.execute('INSERT INTO fallback_tasks(id, kind, ref, title, detail, status, owner, created_at, updated_at)'
+                             ' VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO NOTHING',
+                             ('FB-%s' % cid, 'command_failed', cid,
+                              '处置指令失败，需人工接管：%s / %s' % (row['target_class'], row['action']),
+                              why, '待接管', '', ts, ts))
+                audit(conn, actor_of(self), 'command_fail', cid, why)
+            return self._json(HTTPStatus.OK, {'ok': True, 'id': cid, 'status': '设备已确认' if ok else '失败'})
+        if key == 'commands/rollback':
+            if not self._need('security_issue'):
+                return
+            payload, err = self._body()
+            if err:
+                return self._json(HTTPStatus.BAD_REQUEST, {'ok': False, 'error': err})
+            cid = str((payload or {}).get('id') or '')[:40]
+            row = conn.execute('SELECT * FROM commands WHERE id=?', (cid,)).fetchone()
+            if not row:
+                return self._json(HTTPStatus.NOT_FOUND, {'ok': False, 'error': '指令不存在'})
+            ts = now_iso()
+            rid = 'CMD-' + secrets.token_hex(4).upper()
+            conn.execute('INSERT INTO commands(id, target_class, target, action, params, dry_run, status, impact,'
+                         ' precheck, emergency, issued_by, issued_at, rollback_of, created_at, updated_at)'
+                         ' VALUES(?,?,?,?,?,0,?,?,?,?,?,?,?,?,?)',
+                         (rid, row['target_class'], row['target'], '回滚：' + (row['action'] or ''), row['params'],
+                          '已下发', row['impact'], row['precheck'], 0, actor_of(self), ts, cid, ts, ts))
+            conn.execute("UPDATE commands SET status='已回滚', updated_at=? WHERE id=?", (ts, cid))
+            audit(conn, actor_of(self), 'command_rollback', cid, '生成反向指令 %s' % rid)
+            return self._json(HTTPStatus.OK, {'ok': True, 'rollback_id': rid, 'id': cid, 'status': '已回滚'})
+        if key == 'fallback/claim':
+            if not self._need('security'):
+                return
+            payload, err = self._body()
+            if err:
+                return self._json(HTTPStatus.BAD_REQUEST, {'ok': False, 'error': err})
+            fid = str((payload or {}).get('id') or '')[:60]
+            row = conn.execute('SELECT id FROM fallback_tasks WHERE id=?', (fid,)).fetchone()
+            if not row:
+                return self._json(HTTPStatus.NOT_FOUND, {'ok': False, 'error': '兜底工单不存在'})
+            state = str((payload or {}).get('status') or '已接管')[:20]
+            if state not in ('已接管', '已关闭', '待接管'):
+                state = '已接管'
+            conn.execute('UPDATE fallback_tasks SET status=?, owner=?, updated_at=? WHERE id=?',
+                         (state, actor_of(self), now_iso(), fid))
+            audit(conn, actor_of(self), 'fallback_claim', fid, state)
+            return self._json(HTTPStatus.OK, {'ok': True, 'id': fid, 'status': state})
+
+        # ---- v3.4 排班与派单（试运行由建设团队安排：班次 / 当班人 / 派单 / 超时升级都可配）
+        if key == 'duty/shift':
+            if not self._need('workflow'):
+                return
+            payload, err = self._body()
+            if err:
+                return self._json(HTTPStatus.BAD_REQUEST, {'ok': False, 'error': err})
+            p = payload or {}
+            sid = str(p.get('id') or 'D-' + secrets.token_hex(2).upper())[:20]
+            role = str(p.get('role') or '')[:60]
+            if not role:
+                return self._json(HTTPStatus.BAD_REQUEST, {'ok': False, 'error': '要有值班岗位名'})
+            conn.execute('INSERT INTO duty_shifts(id, role, name, phone, lead, scope, enabled, updated_at)'
+                         ' VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET role=excluded.role,'
+                         ' name=excluded.name, phone=excluded.phone, lead=excluded.lead, scope=excluded.scope,'
+                         ' enabled=excluded.enabled, updated_at=excluded.updated_at',
+                         (sid, role, str(p.get('name') or '')[:120], str(p.get('phone') or '')[:60],
+                          str(p.get('lead') or '')[:120], str(p.get('scope') or '')[:200],
+                          0 if p.get('enabled') is False else 1, now_iso()))
+            audit(conn, actor_of(self), 'duty_shift_put', sid, '%s（%s）启用=%s'
+                  % (role, p.get('name') or '', p.get('enabled', True)))
+            return self._json(HTTPStatus.OK, {'ok': True, 'id': sid})
+        if key == 'duty/route':
+            if not self._need('workflow'):
+                return
+            payload, err = self._body()
+            if err:
+                return self._json(HTTPStatus.BAD_REQUEST, {'ok': False, 'error': err})
+            p = payload or {}
+            kind = str(p.get('kind') or '')[:60]
+            role = str(p.get('duty_role') or '')[:60]
+            if not kind or not role:
+                return self._json(HTTPStatus.BAD_REQUEST, {'ok': False, 'error': '要有例外类型与派单岗位'})
+            conn.execute('INSERT INTO duty_routes(kind, duty_role, escalate_role, updated_at) VALUES(?,?,?,?)'
+                         ' ON CONFLICT(kind) DO UPDATE SET duty_role=excluded.duty_role,'
+                         ' escalate_role=excluded.escalate_role, updated_at=excluded.updated_at',
+                         (kind, role, str(p.get('escalate_role') or '值班长')[:60], now_iso()))
+            audit(conn, actor_of(self), 'duty_route_put', kind, '%s → %s（超时升级 %s）'
+                  % (kind, role, p.get('escalate_role') or '值班长'))
+            return self._json(HTTPStatus.OK, {'ok': True, 'kind': kind})
+
+        if key not in ('state/bulk', 'reset', 'seed'):
+            return self._json(HTTPStatus.NOT_FOUND, {'ok': False, 'error': '未知接口', 'key': key})
         if not has_perm(self.user, 'workflow'):
             return self._json(HTTPStatus.FORBIDDEN, {'ok': False,
                 'error': '角色「%s」没有批量写入 / 重置演示数据的权限（需要权限点 资源调配）' % self.user['role']})
@@ -878,6 +1651,8 @@ class Handler(BaseHTTPRequestHandler):
                         total += project_state(conn, str(k), v, ts)
             if not conn.execute("SELECT 1 FROM kv_store WHERE key='dsh-demo-matrix-v1'").fetchone():
                 total += project_state(conn, 'dsh-demo-matrix-v1', DEFAULT_MATRIX, ts)
+            seed_config()        # 配置与排班属系统设置：重置演示数据时把默认值放回去
+            seed_duty()
             audit(conn, actor_of(self), 'reset', 'all', '清空后写入初始演示数据 %d 行' % total)
             return self._json(HTTPStatus.OK, {'ok': True, 'cleared': True, 'seeded_rows': total})
         if key == 'seed':
@@ -913,11 +1688,18 @@ def main() -> None:
     init_db()
     users = seed_users()
     perms = seed_default_matrix()
+    migrated = migrate_matrix()
+    cfgs = seed_config()
+    duty = seed_duty()
+    if migrated:
+        print('Matrix migrated: ' + ' / '.join(PERM_LABEL_CN[k] for k in NEW_PERM_KEYS))
 
     if args.reset:
         conn = db()
-        clear_all(conn)          # 只清业务数据；账号 / 会话 / 登录记录保留
+        clear_all(conn)          # 只清业务数据；账号 / 会话 / 登录记录 / 口令历史保留
         seed_default_matrix()
+        seed_config()
+        seed_duty()
         print('Database cleared:', DB_PATH, '(users/sessions/login_log kept)')
         return
 
