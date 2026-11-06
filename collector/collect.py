@@ -202,7 +202,95 @@ def parse_prom_text(txt):
     return out
 
 
+def collect_services_json(cfg):
+    """JSON 指标的推理服务（本机 / 局域网实连）。只读 GET /metrics 与 /health，不发推理请求。
+
+    适用：OpenAI 兼容 + 自带 JSON 指标的服务（如 /metrics 返回 engine / live / requests /
+    hardware / totals 这类结构）。可选 probe=true 时另外做一次很短的补全，用来在
+    服务空闲时也能测出首包与吞吐；默认关闭，避免给服务添负载。
+    """
+    base = env_or(cfg, "base").rstrip("/") or env_or(cfg, "metrics_url").rstrip("/")
+    if base.endswith("/metrics"):
+        base = base[: -len("/metrics")]
+    headers = {}
+    key = env_or(cfg, "api_key") or os.environ.get(str(cfg.get("api_key_env") or ""), "")
+    if key:
+        headers["Authorization"] = "Bearer %s" % key
+    timeout = int(cfg.get("timeout", 10))
+    metrics = http_json(base + "/metrics", headers, timeout=timeout)
+    if not isinstance(metrics, dict):
+        raise ValueError("/metrics 返回的不是 JSON 对象（这种服务请用 format=prometheus）")
+    health = {}
+    try:
+        health = http_json(base + "/health", {}, timeout=timeout)
+    except Exception:
+        health = {}
+    if not isinstance(health, dict):
+        health = {}
+
+    engine = metrics.get("engine") or {}
+    live = metrics.get("live") or {}
+    hw = metrics.get("hardware") or {}
+    static = metrics.get("hardware_static") or {}
+    totals = metrics.get("totals") or {}
+    reqs = [r for r in (metrics.get("requests") or []) if isinstance(r, dict)]
+    now = float(metrics.get("time") or time.time())
+    window = max(30, int(cfg.get("window_seconds", 300)))
+    recent = [r for r in reqs if now - float(r.get("time") or 0) <= window]
+
+    def pct(vals, p):
+        if not vals:
+            return 0.0
+        vals = sorted(vals)
+        i = min(len(vals) - 1, int(round(p * (len(vals) - 1))))
+        return round(vals[i], 1)
+
+    durs = [float(r.get("duration_s") or 0) * 1000 for r in recent if r.get("duration_s") is not None]
+    ttfts = [float(r.get("first_engine_token_s") or 0) * 1000 for r in recent if r.get("first_engine_token_s") is not None]
+    decode = [float(r.get("decode_tok_s") or 0) for r in recent if r.get("decode_tok_s") is not None]
+    bad = sum(1 for r in recent if str(r.get("finish") or "") not in ("stop", "length"))
+
+    model = str(engine.get("model") or health.get("model") or cfg.get("model") or "未标注模型")
+    loaded = bool(health.get("loaded", True)) or bool(live.get("state"))
+    row = {
+        "service": str(cfg.get("service") or model),
+        "model": model,
+        "version": str(engine.get("version") or health.get("service") or static.get("gpu_name") or ""),
+        "pool": str(cfg.get("pool", "hp")),
+        "instances": 1 if loaded else 0,
+        "ready": 1 if loaded else 0,
+        "cards": int(cfg.get("cards", 1)),
+        "qps": round(len(recent) / float(window), 3),
+        "tokens_per_sec": round(float(hw.get("tok_s") or hw.get("tok_s_mean") or (sum(decode) / len(decode) if decode else 0)), 1),
+        "ttft_ms": pct(ttfts, 0.5),
+        "p99_ms": pct(durs, 0.99),
+        "queue_depth": int(live.get("queued") or 0),
+        "kv_hit_pct": round(100.0 * float(totals.get("reused") or 0) / max(1.0, float(totals.get("prompt_tokens") or 1)), 1),
+        "hbm_pct": round(100.0 * float(hw.get("gpu_mem_used") or 0) / max(1.0, float(hw.get("gpu_mem_total") or 1)), 1),
+        "err_pct": round(100.0 * bad / max(1, len(recent)), 2),
+        "restarts": 0,
+    }
+    if cfg.get("probe"):
+        body = {"model": model, "messages": [{"role": "user", "content": "ping"}],
+                "max_tokens": 8, "temperature": 0}
+        t0 = time.time()
+        out = http_json(base + "/v1/chat/completions", headers, timeout=max(20, timeout), method="POST", body=body)
+        row["probe_ms"] = round((time.time() - t0) * 1000, 1)
+        usage = (out or {}).get("usage") or {}
+        row["probe_tokens"] = int(usage.get("completion_tokens") or 0)
+    note = "实连来源：%s（GET /metrics + /health，只读）；窗口 %d 秒内请求 %d 条；GPU %s · 显存占用 %s MiB / %s MiB · 卡温 %s ℃ · 功耗 %s W" % (
+        base, window, len(recent), static.get("gpu_name") or "?",
+        int(float(hw.get("gpu_mem_used") or 0) / 1048576), int(float(hw.get("gpu_mem_total") or 0) / 1048576),
+        hw.get("gpu_temp"), hw.get("gpu_power"))
+    row["_note"] = note
+    log("services(json): %s | 活跃 %s | 队列 %s | 吞吐 %s tok/s | 窗口内 %d 条请求" % (
+        model, hw.get("gpu_util"), row["queue_depth"], row["tokens_per_sec"], len(recent)))
+    return [row]
+
+
 def collect_services(cfg):
+    if str(cfg.get("format", "")).lower() in ("json", "openai", "strata"):
+        return collect_services_json(cfg)
     url = env_or(cfg, "metrics_url", "http://127.0.0.1:8081/metrics")
     txt = text_of(url, timeout=int(cfg.get("timeout", 8)))
     metrics = parse_prom_text(txt)

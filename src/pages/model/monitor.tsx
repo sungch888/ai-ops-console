@@ -10,6 +10,7 @@ import { Badge, Callout, Kpi, PageHead, Panel, Progress, State, Table } from '..
 import { AXIS_COLOR, CHART_COLORS, Chart, GRID, SPLIT_COLOR, TOOLTIP_STYLE } from '../../components/Chart'
 import { inferenceServices, sourceHint, telemetryStatus, telemetryStore, type InferenceService } from '../../engine/telemetry'
 import { engine, useEngine } from '../../engine/engine'
+import { monitorStore, sampleClock, sampleTime, useMonitor } from '../../engine/monitor'
 import { usePerm } from '../../engine/auth'
 
 /* 需要动作的判定口径（与例外监控「资源异常」规则同源） */
@@ -25,10 +26,15 @@ export default function ModelMonitor() {
   /* 权限点：auth.ts 的 PermKey 没有 'model'，模型中心各页统一挂 'gateway'（与 App.tsx 路由权限映射一致） */
   const perm = usePerm('gateway')
   const [nonce, setNonce] = useState(0)
+  const mon = useMonitor()
+  const canProbe = usePerm('compute').manage
+  const [tgt, setTgt] = useState({ name: '', base: '', api_key_env: '', interval_seconds: 30, window_seconds: 300 })
+  const [monMsg, setMonMsg] = useState<{ ok: boolean; text: string } | null>(null)
   const [msg, setMsg] = useState<{ tone: 'good' | 'bad'; text: string } | null>(null)
 
   /* 采集层落 services.json 后自动切「采集层」：订阅刷新，不改采集层代码 */
   useEffect(() => telemetryStore.subscribe(() => setNonce((n) => n + 1)), [])
+  useEffect(() => { void monitorStore.refresh() }, [])
 
   const tel = telemetryStatus()
   const hint = sourceHint('mindie')
@@ -260,6 +266,86 @@ export default function ModelMonitor() {
                 </>
               }
             />
+          </div>
+
+        </div>
+      </Panel>
+      <Panel title="平台内置监控探针（采样入库 · 只读拉取外部服务）" className="mt14" noPad
+        extra={<span className="tiny faint">探针线程 {mon.state?.thread ? '在跑' : '未起'} · 轮询 {mon.tick} 秒 · 成功 {mon.state?.probes ?? 0} 次 / 失败 {mon.state?.failures ?? 0} 次 · 库里 {mon.total} 条采样（保留 {mon.retention} 小时）</span>}>
+        <div className="panel-body">
+          {mon.error ? <Callout warn text={'监控读不到：' + mon.error} /> : null}
+          <Table minWidth={1080} head={['监控目标', '地址', '密钥环境变量', '间隔 / 窗口', '最近一轮', '操作']} rows={mon.targets.map((t) => [
+            <span className="small strong">{t.name}<div className="tiny mono faint">{t.id} · {t.enabled ? '启用' : '已停用'}</div></span>,
+            <span className="tiny mono">{t.base}</span>,
+            <span className="tiny mono">{t.api_key_env || '（不需要）'}{mon.keyEnvPresent[t.id] === false && t.api_key_env ? <span className="tag" style={{ marginLeft: 6, color: '#f5b83d' }}>环境变量没给</span> : null}</span>,
+            <span className="tiny">{t.interval_seconds} 秒 / 窗口 {t.window_seconds} 秒</span>,
+            <span className="tiny">{t.last_status === '已采集' ? <Badge tone="good">已采集</Badge> : t.last_status ? <Badge tone="bad">{t.last_status}</Badge> : <Badge tone="muted">还没采过</Badge>}{t.last_error ? <div className="tiny" style={{ color: '#ff9a9a', maxWidth: 260 }}>{t.last_error}</div> : null}</span>,
+            <div className="row gap6" style={{ flexWrap: 'wrap' }}>
+              <button className="btn sm ghost" disabled={!canProbe} onClick={() => void monitorStore.probe(t.id).then((r) => setMonMsg({ ok: !!r.ok, text: r.ok ? t.name + ' 已采一轮（样本写进 metric_samples）' : '采集被拒：' + (r.error || '') }))}>立即采一轮</button>
+              <button className="btn sm ghost" disabled={!canProbe} onClick={() => void monitorStore.saveTarget({ ...t, enabled: t.enabled ? 0 : 1 }).then((r) => setMonMsg({ ok: !!r.ok, text: r.ok ? (t.enabled ? t.name + ' 已停用' : t.name + ' 已启用') : '被拒：' + (r.error || '') }))}>{t.enabled ? '停用' : '启用'}</button>
+            </div>,
+          ])} />
+          {mon.targets.length === 0 ? <div className="tiny faint" style={{ marginTop: 6 }}>还没有监控目标：在下面填一台推理服务（要它暴露 <span className="mono">/metrics</span> 与 <span className="mono">/health</span>）。</div> : null}
+
+          <div className="row gap6 wrap" style={{ marginTop: 12 }}>
+            <input className="btn sm" style={{ width: 210 }} value={tgt.name} placeholder="目标显示名" onChange={(e) => setTgt({ ...tgt, name: e.target.value })} />
+            <input className="btn sm" style={{ width: 280 }} value={tgt.base} placeholder="http://内网地址:8081" onChange={(e) => setTgt({ ...tgt, base: e.target.value })} />
+            <input className="btn sm" style={{ width: 220 }} value={tgt.api_key_env} placeholder="取密钥的环境变量名（可空）" onChange={(e) => setTgt({ ...tgt, api_key_env: e.target.value })} />
+            <input className="btn sm" style={{ width: 110 }} value={tgt.interval_seconds} placeholder="间隔秒" onChange={(e) => setTgt({ ...tgt, interval_seconds: Number(e.target.value) || 30 })} />
+            <button className="btn sm primary" disabled={!canProbe || !tgt.name || !tgt.base}
+              onClick={() => void monitorStore.saveTarget({ ...tgt, probe: true }).then((r) => setMonMsg({ ok: !!r.ok, text: r.ok ? ((r.probe && r.probe.ok) ? tgt.name + ' 已挂上并采到第一轮' : tgt.name + ' 已挂上，但第一轮：' + ((r.probe && r.probe.error) || '未采')) : '被拒：' + (r.error || '') }))}>挂上目标并采一轮</button>
+            {!canProbe ? <span className="tiny faint">要「算力中心」操作权才能加目标或手动采</span> : null}
+          </div>
+          {monMsg ? <div className="tiny" style={{ marginTop: 8, color: monMsg.ok ? '#7ee2b8' : '#ff9a9a' }}>{monMsg.text}</div> : null}
+
+          {mon.samples.length > 1 ? (
+            <div className="grid g-21" style={{ marginTop: 12 }}>
+              <Panel title="时延趋势（最近采样）" bodyClass="tight">
+                <Chart height={190} option={{
+                  color: CHART_COLORS, tooltip: { ...TOOLTIP_STYLE, trigger: 'axis' }, grid: GRID,
+                  legend: { data: ['首包 TTFT', 'P99 时延'], top: 0, textStyle: { color: AXIS_COLOR, fontSize: 11.5 } },
+                  xAxis: { type: 'category', boundaryGap: false, data: mon.samples.slice().reverse().map((x) => sampleClock(x.at)), axisLine: { lineStyle: { color: SPLIT_COLOR } }, axisLabel: { color: AXIS_COLOR, fontSize: 10.5 } },
+                  yAxis: { type: 'value', name: '毫秒', axisLabel: { color: AXIS_COLOR }, splitLine: { lineStyle: { color: SPLIT_COLOR } } },
+                  series: [
+                    { name: '首包 TTFT', type: 'line', smooth: true, symbol: 'none', data: mon.samples.slice().reverse().map((x) => x.ttft_ms || 0) },
+                    { name: 'P99 时延', type: 'line', smooth: true, symbol: 'none', data: mon.samples.slice().reverse().map((x) => x.p99_ms || 0) },
+                  ],
+                }} />
+              </Panel>
+              <Panel title="算力侧趋势（同一轮采样）" bodyClass="tight">
+                <Chart height={190} option={{
+                  color: CHART_COLORS, tooltip: { ...TOOLTIP_STYLE, trigger: 'axis' }, grid: GRID,
+                  legend: { data: ['显存占用 %', '卡温 ℃', '卡利用率 %'], top: 0, textStyle: { color: AXIS_COLOR, fontSize: 11.5 } },
+                  xAxis: { type: 'category', boundaryGap: false, data: mon.samples.slice().reverse().map((x) => sampleClock(x.at)), axisLine: { lineStyle: { color: SPLIT_COLOR } }, axisLabel: { color: AXIS_COLOR, fontSize: 10.5 } },
+                  yAxis: { type: 'value', axisLabel: { color: AXIS_COLOR }, splitLine: { lineStyle: { color: SPLIT_COLOR } } },
+                  series: [
+                    { name: '显存占用 %', type: 'line', smooth: true, symbol: 'none', data: mon.samples.slice().reverse().map((x) => x.hbm_pct || 0) },
+                    { name: '卡温 ℃', type: 'line', smooth: true, symbol: 'none', data: mon.samples.slice().reverse().map((x) => x.gpu_temp_c || 0) },
+                    { name: '卡利用率 %', type: 'line', smooth: true, symbol: 'none', data: mon.samples.slice().reverse().map((x) => x.gpu_util || 0) },
+                  ],
+                }} />
+              </Panel>
+            </div>
+          ) : null}
+
+          <Table minWidth={1180} head={['采样时间', '目标 / 状态', 'QPS', '吞吐 tok/s', '首包 TTFT', 'P99', '队列', 'KV 复用命中', '显存 %', '卡温 / 功耗', '窗口内请求']} rows={mon.samples.slice(0, 14).map((x) => [
+            <span className="tiny mono">{sampleTime(x.at)}</span>,
+            <span className="tiny">{x.service}{x.status === '取数失败' ? <Badge tone="bad">取数失败</Badge> : null}{x.model ? <div className="tiny faint mono">{x.model}</div> : null}</span>,
+            <span className="num small">{x.qps}</span>,
+            <span className="num small">{x.tokens_per_sec}</span>,
+            <span className="num small">{x.ttft_ms}<span className="faint tiny"> ms</span></span>,
+            <span className="num small">{x.p99_ms}<span className="faint tiny"> ms</span></span>,
+            <span className="num small">{x.queue_depth}</span>,
+            <span className="num small">{x.kv_hit_pct}<span className="faint tiny"> %</span></span>,
+            <span className="num small">{x.hbm_pct}<span className="faint tiny"> %</span></span>,
+            <span className="tiny">{x.gpu_temp_c} ℃ / {x.gpu_power_w} W<div className="tiny faint">{x.gpu_name}</div></span>,
+            <span className="num small">{x.req_window}{x.status === '取数失败' ? <div className="tiny" style={{ color: '#ff9a9a', maxWidth: 240 }}>{(x.note || '').slice(0, 70)}</div> : null}</span>,
+          ])} />
+          <div className="tiny faint" style={{ marginTop: 8 }}>
+            探针只读：数据服务自己按目标各自的间隔去拉 <span className="mono">GET /metrics</span> 与 <span className="mono">/health</span>，
+            不向被监控的服务写任何东西；库里 <span className="mono">metric_samples</span> 是权威副本，界面只是读它。
+            取数失败也写一条样本（状态「取数失败」），断连在台账里看得见，不会悄悄变成空页。
+            密钥只在启动环境的环境变量里，库和前端都只存变量名。
           </div>
         </div>
       </Panel>

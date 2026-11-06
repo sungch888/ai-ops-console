@@ -268,7 +268,7 @@ function Shell() {
           ))}
         </nav>
         <div className="sidebar-foot">
-          演示版本 v3.0（选型交流 · 内网可接真实数据）
+          演示版本 v3.7（选型交流 · 内网可接真实数据）
           <br />
           数据均为虚拟模拟 · 外部系统按清单虚拟接入
           <br />

@@ -10,6 +10,7 @@ import { Badge, Callout, Kpi, PageHead, Panel, Progress, Table } from '../../com
 import { npuCards, sourceHint, telemetryStatus, telemetryStore, type NpuCard } from '../../engine/telemetry'
 import { TOTAL_CARDS, poolFree, poolUtil, useEngine } from '../../engine/engine'
 import { monitorStore } from '../../engine/exceptions'
+import { monitorStore as probeStore, sampleTime, useMonitor } from '../../engine/monitor'
 import { usePerm } from '../../engine/auth'
 
 /* 触阈值口径（与例外监控「资源异常」规则一致） */
@@ -27,10 +28,12 @@ export default function ComputeCards() {
   const st = useEngine()
   const perm = usePerm('compute')
   const [nonce, setNonce] = useState(0)
+  const mon = useMonitor()
   const [msg, setMsg] = useState<{ tone: 'good' | 'bad'; text: string } | null>(null)
 
   /* 采集层落数后自动切「采集层」：订阅一次刷新，不改采集层代码 */
   useEffect(() => telemetryStore.subscribe(() => setNonce((n) => n + 1)), [])
+  useEffect(() => { void probeStore.refresh() }, [])
 
   const tel = telemetryStatus()
   const hint = sourceHint('npu')
@@ -267,6 +270,31 @@ export default function ComputeCards() {
                 </>
               }
             />
+          </div>
+        </div>
+      </Panel>
+
+      <Panel title="实连 GPU（平台监控探针拉取，不是推导）" className="mt14" noPad
+        extra={<span className="tiny faint">探针采样入库后读 gpu_cards 表 · 最近更新 {mon.cards[0] ? sampleTime(mon.cards[0].updated_at) : '还没采过'}</span>}>
+        <div className="panel-body">
+          {mon.cards.length === 0 ? (
+            <div className="tiny faint">还没有实连卡：在「模型中心 · 推理服务监控」的探针面板挂一个监控目标，采到第一轮后这里就出现真实卡指标。</div>
+          ) : (
+            <Table minWidth={1100} head={['卡（实连）', '所在节点', '利用率', '显存占用', '温度', '功耗', '主机侧 CPU / 内存', '健康 / 说明']} rows={mon.cards.map((c) => [
+              <span className="small strong">{c.model || '未标注卡型'}<div className="tiny mono faint">{c.id}</div></span>,
+              <span className="tiny">{c.node}</span>,
+              <span><span className="num small">{c.util_pct}%</span><Progress value={Number(c.util_pct || 0)} tone={c.util_pct > UTIL_MAX ? 'warn' : ''} /></span>,
+              <span><span className="num small">{Math.round(c.mem_used_mib)} / {Math.round(c.mem_total_mib)} MiB</span><Progress value={c.mem_total_mib ? (c.mem_used_mib / c.mem_total_mib) * 100 : 0} tone="green" /></span>,
+              <span className="num small">{c.temp_c} ℃{c.temp_c > TEMP_MAX ? <Badge tone="warn">超阈值</Badge> : null}</span>,
+              <span className="num small">{c.power_w} W</span>,
+              <span className="tiny">{c.cpu_pct}% / {Math.round(c.ram_used_mib)} / {Math.round(c.ram_total_mib)} MiB</span>,
+              <span>{c.health === 'ok' ? <Badge tone="good">正常</Badge> : <Badge tone="warn">要注意</Badge>}<div className="tiny faint" style={{ maxWidth: 280 }}>{c.note}</div></span>,
+            ])} />
+          )}
+          <div className="tiny faint" style={{ marginTop: 8 }}>
+            口径要说清：上面这张表是<b>真实拉到的</b>卡指标（探针只读 GET 对方服务的 /metrics）；
+            本页上面的 64 张卡网格与下面触阈值统计仍是<b>平台推导的演示口径</b>（昇腾 910B 那套），两者不要混着看。
+            接昇腾真实卡时走同一张 <span className="mono">gpu_cards</span> 表，把 NPU Exporter 或 npu-smi 的读数写进来即可，页面不用改。
           </div>
         </div>
       </Panel>

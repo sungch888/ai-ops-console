@@ -29,6 +29,7 @@ from datetime import datetime, timezone
 from http import HTTPStatus
 from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import urllib.request
 from urllib.parse import parse_qs, urlparse
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -38,8 +39,8 @@ SCHEMA = os.path.join(HERE, 'schema.sql')
 STATIC_DIR = os.path.join(ROOT, 'dist')
 API_PREFIX = '/api'
 MAX_BODY = 8 * 1024 * 1024
-SCHEMA_VERSION = '3'
-SERVER_VERSION = '3.1.0'
+SCHEMA_VERSION = '4'
+SERVER_VERSION = '3.2.0'
 
 CONTENT_TYPES = {
     '.html': 'text/html; charset=utf-8',
@@ -158,11 +159,13 @@ KEY_PERM = {
 }
 QUERY_PERM = {'audit': 'audit', 'export': 'export', 'accounts': 'matrix', 'permissions': 'matrix', 'users': 'matrix',
               'approvals': 'workflow', 'commands': 'security', 'fallback': 'security', 'links': 'matrix',
-              'duty': 'workflow', 'duty_routes': 'workflow'}
+              'duty': 'workflow', 'duty_routes': 'workflow',
+              'samples': 'compute', 'gpu_cards': 'compute'}
 MATRIX_KEYS = sorted([k for k, v in KEY_PERM.items() if v == 'matrix'])
 CSV_PERM = {'audit_log': 'audit', 'accounts': 'matrix', 'role_permissions': 'matrix',
             'approvals': 'workflow', 'commands': 'security', 'fallback_tasks': 'security',
-            'identity_links': 'matrix', 'duty_shifts': 'workflow', 'duty_routes': 'workflow'}
+            'identity_links': 'matrix', 'duty_shifts': 'workflow', 'duty_routes': 'workflow',
+            'metric_samples': 'compute', 'gpu_cards': 'compute'}
 
 # 权限矩阵默认值（与前端默认一致；库里没有矩阵时服务端自己播种，保证登录即可判定）
 DEFAULT_MATRIX = {
@@ -496,6 +499,187 @@ def sweep_commands(conn, actor: str = 'system') -> int:
     return len(rows)
 
 
+MONITOR_TICK = 5                      # 监控线程轮询粒度（秒）
+SAMPLE_RETENTION_HOURS = 24           # 采样保留时长（小时）
+SAMPLE_MAX_ROWS = 20000               # 采样上限（超过按最旧的删）
+MONITOR_STATE = {'thread': False, 'last_run_at': '', 'last_error': '', 'probes': 0, 'failures': 0}
+
+
+def _get_json(url: str, headers=None, timeout: int = 10):
+    """只读 GET；监控探针不向外部系统写任何东西。"""
+    req = urllib.request.Request(url, method='GET')
+    req.add_header('User-Agent', 'aiops-data-service/%s' % SERVER_VERSION)
+    req.add_header('Accept', 'application/json')
+    for k, v in (headers or {}).items():
+        if v:
+            req.add_header(k, v)
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        raw = r.read().decode('utf-8', 'ignore')
+    return json.loads(raw) if raw.strip().startswith(('{', '[')) else raw
+
+
+def _pct(vals, p):
+    if not vals:
+        return 0.0
+    vals = sorted(vals)
+    return round(vals[min(len(vals) - 1, int(round(p * (len(vals) - 1))))], 1)
+
+
+def probe_model_target(t: dict):
+    """拉一台推理服务的 /metrics 与 /health，算出监控样本与卡指标。
+
+    兼容「JSON 指标」型服务（engine / live / requests / hardware / totals 这种结构）。
+    取不到就抛异常，由 record_probe 写一条『取数失败』样本 —— 断连也要看得见。
+    """
+    base = (t['base'] or '').rstrip('/')
+    if not base.startswith('http'):
+        raise ValueError('监控地址要是 http:// 或 https:// 开头')
+    headers = {}
+    key = os.environ.get(t['api_key_env'] or '', '')
+    if key:
+        headers['Authorization'] = 'Bearer %s' % key
+    metrics = _get_json(base + '/metrics', headers, timeout=12)
+    if not isinstance(metrics, dict):
+        raise ValueError('指标接口返回的不是 JSON 对象（这类服务要按 Prometheus 文本解析）')
+    try:
+        health = _get_json(base + '/health', None, timeout=8)
+    except Exception:
+        health = {}
+    if not isinstance(health, dict):
+        health = {}
+    engine = metrics.get('engine') or {}
+    live = metrics.get('live') or {}
+    hw = metrics.get('hardware') or {}
+    static = metrics.get('hardware_static') or {}
+    totals = metrics.get('totals') or {}
+    reqs = [r for r in (metrics.get('requests') or []) if isinstance(r, dict)]
+    stamp = float(metrics.get('time') or time.time())
+    window = max(30, int(t['window_seconds'] or 300))
+    recent = [r for r in reqs if stamp - float(r.get('time') or 0) <= window]
+    durs = [float(r.get('duration_s') or 0) * 1000 for r in recent if r.get('duration_s') is not None]
+    ttfts = [float(r.get('first_engine_token_s') or 0) * 1000 for r in recent if r.get('first_engine_token_s') is not None]
+    decode = [float(r.get('decode_tok_s') or 0) for r in recent if r.get('decode_tok_s') is not None]
+    bad = sum(1 for r in recent if str(r.get('finish') or '') not in ('stop', 'length'))
+    model = str(engine.get('model') or health.get('model') or '未标注模型')
+    loaded = bool(health.get('loaded', True)) or bool(live.get('state'))
+    used = float(hw.get('gpu_mem_used') or 0) / 1048576.0
+    total = float(hw.get('gpu_mem_total') or 0) / 1048576.0
+    sample = {
+        'service': t['name'], 'model': model,
+        'version': str(engine.get('version') or health.get('service') or ''),
+        'status': '已采集',
+        'instances': 1 if loaded else 0, 'ready': 1 if loaded else 0, 'cards': int(t['cards'] or 1),
+        'qps': round(len(recent) / float(window), 3),
+        'tokens_per_sec': round(float(hw.get('tok_s') or hw.get('tok_s_mean')
+                                     or (sum(decode) / len(decode) if decode else 0)), 1),
+        'ttft_ms': _pct(ttfts, 0.5), 'p99_ms': _pct(durs, 0.99),
+        'queue_depth': int(live.get('queued') or 0),
+        'kv_hit_pct': round(100.0 * float(totals.get('reused') or 0) / max(1.0, float(totals.get('prompt_tokens') or 1)), 1),
+        'hbm_pct': round(100.0 * used / max(1.0, total), 1),
+        'err_pct': round(100.0 * bad / max(1, len(recent)), 2),
+        'gpu_name': str(static.get('gpu_name') or ''), 'gpu_util': float(hw.get('gpu_util') or 0),
+        'gpu_temp_c': float(hw.get('gpu_temp') or 0), 'gpu_power_w': float(hw.get('gpu_power') or 0),
+        'gpu_mem_used_mib': round(used, 1), 'gpu_mem_total_mib': round(total, 1),
+        'req_window': len(recent),
+        'note': '只读拉取 %s（/metrics + /health）；窗口 %d 秒内 %d 条请求；KV 复用 %s 词元'
+                % (base, window, len(recent), totals.get('reused')),
+    }
+    card = {
+        'id': '%s-G1' % t['id'], 'target': t['id'],
+        'node': str(static.get('cpu_name') or base), 'model': str(static.get('gpu_name') or '未标注卡型'),
+        'util_pct': sample['gpu_util'], 'mem_used_mib': sample['gpu_mem_used_mib'],
+        'mem_total_mib': sample['gpu_mem_total_mib'], 'temp_c': sample['gpu_temp_c'],
+        'power_w': sample['gpu_power_w'],
+        'cpu_pct': float(hw.get('cpu') or 0),
+        'ram_used_mib': round(float(hw.get('ram_used') or 0) / 1048576.0, 1),
+        'ram_total_mib': round(float(hw.get('ram_total') or 0) / 1048576.0, 1),
+        'health': 'ok' if (sample['instances'] and sample['err_pct'] < 5.0) else 'warn',
+        'note': '实连探针（不是平台推导）；服务状态 %s / 队列 %d' % (live.get('state') or '?', sample['queue_depth']),
+    }
+    return sample, card
+
+
+def trim_samples(conn) -> None:
+    cutoff = (datetime.now(timezone.utc).astimezone()).timestamp() - SAMPLE_RETENTION_HOURS * 3600
+    cut = datetime.fromtimestamp(cutoff).isoformat(timespec='seconds')
+    conn.execute('DELETE FROM metric_samples WHERE at < ?', (cut,))
+    n = conn.execute('SELECT COUNT(*) c FROM metric_samples').fetchone()['c']
+    if n > SAMPLE_MAX_ROWS:
+        conn.execute('DELETE FROM metric_samples WHERE id IN '
+                     '(SELECT id FROM metric_samples ORDER BY id ASC LIMIT ?)', (n - SAMPLE_MAX_ROWS,))
+
+
+def record_probe(t: dict, actor: str = 'monitor') -> dict:
+    conn = db()
+    try:
+        sample, card = probe_model_target(t)
+    except Exception as exc:
+        msg = '取数失败：%s' % (str(exc)[:150])
+        conn.execute('INSERT INTO metric_samples(target, service, status, note, at) VALUES(?,?,?,?,?)',
+                     (t['id'], t['name'], '取数失败', msg, now_iso()))
+        conn.execute("UPDATE monitor_targets SET last_status='取数失败', last_error=?, updated_at=? WHERE id=?",
+                     (msg, now_iso(), t['id']))
+        audit(conn, actor, 'monitor_probe_failed', t['id'], msg)
+        conn.commit()
+        trim_samples(conn)
+        conn.commit()
+        MONITOR_STATE['failures'] += 1
+        return {'ok': False, 'error': msg}
+    conn.execute(
+        'INSERT INTO metric_samples(target, service, model, version, status, instances, ready, cards, qps,'
+        ' tokens_per_sec, ttft_ms, p99_ms, queue_depth, kv_hit_pct, hbm_pct, err_pct, gpu_name, gpu_util,'
+        ' gpu_temp_c, gpu_power_w, gpu_mem_used_mib, gpu_mem_total_mib, req_window, note, at)'
+        ' VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+        (t['id'], sample['service'], sample['model'], sample['version'], sample['status'],
+         sample['instances'], sample['ready'], sample['cards'], sample['qps'], sample['tokens_per_sec'],
+         sample['ttft_ms'], sample['p99_ms'], sample['queue_depth'], sample['kv_hit_pct'], sample['hbm_pct'],
+         sample['err_pct'], sample['gpu_name'], sample['gpu_util'], sample['gpu_temp_c'], sample['gpu_power_w'],
+         sample['gpu_mem_used_mib'], sample['gpu_mem_total_mib'], sample['req_window'], sample['note'], now_iso()))
+    conn.execute(
+        'INSERT INTO gpu_cards(id, target, node, model, util_pct, mem_used_mib, mem_total_mib, temp_c, power_w,'
+        ' cpu_pct, ram_used_mib, ram_total_mib, health, note, updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)'
+        ' ON CONFLICT(id) DO UPDATE SET node=excluded.node, model=excluded.model, util_pct=excluded.util_pct,'
+        ' mem_used_mib=excluded.mem_used_mib, mem_total_mib=excluded.mem_total_mib, temp_c=excluded.temp_c,'
+        ' power_w=excluded.power_w, cpu_pct=excluded.cpu_pct, ram_used_mib=excluded.ram_used_mib,'
+        ' ram_total_mib=excluded.ram_total_mib, health=excluded.health, note=excluded.note,'
+        ' updated_at=excluded.updated_at',
+        (card['id'], card['target'], card['node'], card['model'], card['util_pct'], card['mem_used_mib'],
+         card['mem_total_mib'], card['temp_c'], card['power_w'], card['cpu_pct'], card['ram_used_mib'],
+         card['ram_total_mib'], card['health'], card['note'], now_iso()))
+    conn.execute("UPDATE monitor_targets SET last_status='已采集', last_error='', updated_at=? WHERE id=?",
+                 (now_iso(), t['id']))
+    conn.commit()
+    trim_samples(conn)
+    conn.commit()
+    MONITOR_STATE['probes'] += 1
+    return {'ok': True, 'sample': sample, 'card': card}
+
+
+def monitor_loop(stop: threading.Event) -> None:
+    MONITOR_STATE['thread'] = True
+    while not stop.is_set():
+        try:
+            conn = db()
+            for t in conn.execute('SELECT * FROM monitor_targets WHERE enabled=1').fetchall():
+                last = conn.execute('SELECT at FROM metric_samples WHERE target=? ORDER BY id DESC LIMIT 1',
+                                    (t['id'],)).fetchone()
+                gap = int(t['interval_seconds'] or 30)
+                if last:
+                    try:
+                        prev = datetime.fromisoformat(last['at']).timestamp()
+                        if (datetime.now().timestamp() - prev) < gap:
+                            continue
+                    except Exception:
+                        pass
+                record_probe(dict(t))
+            MONITOR_STATE['last_run_at'] = now_iso()
+            MONITOR_STATE['last_error'] = ''
+        except Exception as exc:
+            MONITOR_STATE['last_error'] = str(exc)[:160]
+        stop.wait(MONITOR_TICK)
+    MONITOR_STATE['thread'] = False
+
+
 def public_config() -> dict:
     out = {k: cfg(k) for k in CONFIG_DEFAULTS}
     p = PROVIDERS.get(out['auth-provider'], {})
@@ -770,7 +954,8 @@ def counts() -> dict:
     conn = db()
     out = {}
     for t in ('kv_store', 'entities', 'orders', 'order_trace', 'events', 'notifications', 'role_permissions',
-              'audit_log', 'identity_links', 'approvals', 'commands', 'fallback_tasks'):
+              'audit_log', 'identity_links', 'approvals', 'commands', 'fallback_tasks',
+              'monitor_targets', 'metric_samples', 'gpu_cards'):
         out[t] = conn.execute('SELECT COUNT(*) c FROM %s' % t).fetchone()['c']
     return out
 
@@ -778,7 +963,8 @@ def counts() -> dict:
 TABLE_OF = {'orders': 'orders', 'events': 'events', 'audit': 'audit_log', 'notifications': 'notifications',
             'accounts': 'accounts', 'entities': 'entities', 'permissions': 'role_permissions', 'settings': 'settings',
             'approvals': 'approvals', 'commands': 'commands', 'fallback': 'fallback_tasks',
-            'links': 'identity_links', 'duty': 'duty_shifts', 'duty_routes': 'duty_routes'}
+            'links': 'identity_links', 'duty': 'duty_shifts', 'duty_routes': 'duty_routes',
+            'samples': 'metric_samples', 'gpu_cards': 'gpu_cards'}
 CSV_COLUMNS = {
     'orders': ['id', 'type', 'title', 'applicant', 'dept', 'level', 'status', 'target', 'amount', 'reason',
                'decided_by', 'reject_reason', 'created_at', 'updated_at'],
@@ -796,6 +982,12 @@ CSV_COLUMNS = {
     'identity_links': ['provider', 'external_id', 'user_id', 'name', 'role', 'matched', 'source', 'last_seen'],
     'duty_shifts': ['id', 'role', 'name', 'phone', 'lead', 'scope', 'enabled', 'updated_at'],
     'duty_routes': ['kind', 'duty_role', 'escalate_role', 'updated_at'],
+    'metric_samples': ['id', 'target', 'service', 'model', 'version', 'status', 'instances', 'ready', 'cards',
+                       'qps', 'tokens_per_sec', 'ttft_ms', 'p99_ms', 'queue_depth', 'kv_hit_pct', 'hbm_pct',
+                       'err_pct', 'gpu_name', 'gpu_util', 'gpu_temp_c', 'gpu_power_w', 'gpu_mem_used_mib',
+                       'gpu_mem_total_mib', 'req_window', 'note', 'at'],
+    'gpu_cards': ['id', 'target', 'node', 'model', 'util_pct', 'mem_used_mib', 'mem_total_mib', 'temp_c',
+                  'power_w', 'cpu_pct', 'ram_used_mib', 'ram_total_mib', 'health', 'note', 'updated_at'],
 }
 
 
@@ -877,6 +1069,14 @@ def _query_plan(key: str, qs):
         _flt(where, params, 'order_id', g('order', 40)); _flt(where, params, 'source', g('source', 20))
         _flt(where, params, 'state', g('state', 20)); _like(where, params, ['external_ref', 'note'], g('q'))
         order = 'ORDER BY at DESC'
+    elif table == 'metric_samples':
+        _flt(where, params, 'target', g('target', 20)); _flt(where, params, 'status', g('status', 20))
+        _like(where, params, ['service', 'model', 'gpu_name'], g('q'))
+        _since(where, params, 'at', g('since', 40))
+        order = 'ORDER BY id DESC'
+    elif table == 'gpu_cards':
+        _flt(where, params, 'target', g('target', 20)); _like(where, params, ['model', 'node', 'id'], g('q'))
+        order = 'ORDER BY id'
     elif table == 'commands':
         _flt(where, params, 'status', g('status', 30)); _flt(where, params, 'target_class', g('target_class', 40))
         _bit(where, params, 'dry_run', g('dry_run')); _like(where, params, ['target', 'action', 'id'], g('q'))
@@ -1113,6 +1313,23 @@ class Handler(BaseHTTPRequestHandler):
                              'expires_left_min': max(0, round((r['expires_at'] - time.time()) / 60))})
             return self._json(HTTPStatus.OK, {'ok': True, 'rows': rows, 'total': len(rows),
                                              'mine_only': mine_only, 'ttl_minutes': round(SESSION_TTL / 60)})
+        if key == 'monitor':
+            if not has_perm(self.user, 'compute', 'view'):
+                audit(conn, actor_of(self), 'denied_get', 'monitor', '没有「算力中心」查看权')
+                return self._json(HTTPStatus.FORBIDDEN, {'ok': False, 'error': '这个接口要「算力中心」查看权'})
+            targets = [dict(r) for r in conn.execute('SELECT * FROM monitor_targets ORDER BY id')]
+            latest = []
+            for t in targets:
+                r = conn.execute('SELECT * FROM metric_samples WHERE target=? ORDER BY id DESC LIMIT 1',
+                                 (t['id'],)).fetchone()
+                latest.append(dict(r) if r else None)
+            return self._json(HTTPStatus.OK, {
+                'ok': True, 'targets': targets, 'latest': latest,
+                'key_env_present': {t['id']: bool(os.environ.get(t['api_key_env'] or '')) for t in targets},
+                'state': MONITOR_STATE, 'tick_seconds': MONITOR_TICK,
+                'retention_hours': SAMPLE_RETENTION_HOURS,
+                'total_samples': conn.execute('SELECT COUNT(*) c FROM metric_samples').fetchone()['c'],
+                'note': '探针只读拉取外部服务的 /metrics 与 /health；库里只存环境变量名，不存密钥'})
         if key == 'commands':
             sweep_commands(conn)
         elif key == 'approvals':
@@ -1151,7 +1368,7 @@ class Handler(BaseHTTPRequestHandler):
             for t in ('kv_store', 'entities', 'orders', 'order_trace', 'events', 'notifications',
                       'accounts', 'role_permissions', 'settings', 'audit_log', 'users', 'sessions', 'login_log',
                       'identity_links', 'password_history', 'approvals', 'duty_shifts', 'duty_routes',
-                      'commands', 'fallback_tasks'):
+                      'commands', 'fallback_tasks', 'monitor_targets', 'metric_samples', 'gpu_cards'):
                 c = db().execute('SELECT COUNT(*) c FROM %s' % t).fetchone()['c']
                 col = 'updated_at' if db().execute("PRAGMA table_info(%s)" % t).fetchone() and any(
                     r['name'] == 'updated_at' for r in db().execute('PRAGMA table_info(%s)' % t)) else None
@@ -1619,6 +1836,66 @@ class Handler(BaseHTTPRequestHandler):
                   % (kind, role, p.get('escalate_role') or '值班长'))
             return self._json(HTTPStatus.OK, {'ok': True, 'kind': kind})
 
+        # ---- v3.7 监控探针：目标可配（密钥只存环境变量名），采样入 metric_samples
+        if key == 'monitor/target':
+            if not self._need('compute', 'manage', 'denied_monitor_target'):
+                return
+            payload, err = self._body()
+            if err:
+                return self._json(HTTPStatus.BAD_REQUEST, {'ok': False, 'error': err})
+            b = payload or {}
+            tid = str(b.get('id') or 'T-' + secrets.token_hex(2).upper())[:20]
+            name = str(b.get('name') or '')[:60]
+            base = str(b.get('base') or '').strip()[:200]
+            if not name or not base:
+                return self._json(HTTPStatus.BAD_REQUEST, {'ok': False, 'error': '监控目标要有显示名和地址'})
+            if not base.startswith('http://') and not base.startswith('https://'):
+                return self._json(HTTPStatus.BAD_REQUEST, {'ok': False,
+                                                           'error': '监控地址要写全 http:// 或 https:// 开头'})
+            try:
+                interval = max(5, min(3600, int(b.get('interval_seconds') or 30)))
+                window = max(30, min(3600, int(b.get('window_seconds') or 300)))
+                cards = max(0, min(64, int(b.get('cards') or 1)))
+            except (TypeError, ValueError):
+                return self._json(HTTPStatus.BAD_REQUEST, {'ok': False, 'error': '间隔 / 窗口 / 卡数要是整数'})
+            conn.execute('INSERT INTO monitor_targets(id, name, base, api_key_env, pool, cards, window_seconds,'
+                         ' interval_seconds, enabled, created_at, updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)'
+                         ' ON CONFLICT(id) DO UPDATE SET name=excluded.name, base=excluded.base,'
+                         ' api_key_env=excluded.api_key_env, pool=excluded.pool, cards=excluded.cards,'
+                         ' window_seconds=excluded.window_seconds, interval_seconds=excluded.interval_seconds,'
+                         ' enabled=excluded.enabled, updated_at=excluded.updated_at',
+                         (tid, name, base, str(b.get('api_key_env') or '')[:60], str(b.get('pool') or 'hp')[:20],
+                          cards, window, interval, 0 if b.get('enabled') is False else 1, now_iso(), now_iso()))
+            audit(conn, actor_of(self), 'monitor_target_put', tid,
+                  '%s → %s（间隔 %s 秒 / 窗口 %s 秒 / 密钥环境变量 %s / 启用=%s）'
+                  % (name, base, interval, window, b.get('api_key_env') or '无', b.get('enabled', True)))
+            out = {'ok': True, 'id': tid}
+            row = conn.execute('SELECT * FROM monitor_targets WHERE id=?', (tid,)).fetchone()
+            if row and b.get('probe') and row['enabled']:
+                out['probe'] = record_probe(dict(row), actor_of(self))
+            return self._json(HTTPStatus.OK, out)
+
+        if key == 'monitor/probe':
+            if not self._need('compute', 'manage', 'denied_monitor_probe'):
+                return
+            payload, err = self._body()
+            if err and '请求体为空' not in err:
+                return self._json(HTTPStatus.BAD_REQUEST, {'ok': False, 'error': err})
+            tid = str((payload or {}).get('id') or '')[:20]
+            sql = 'SELECT * FROM monitor_targets WHERE enabled=1'
+            params = []
+            if tid:
+                sql += ' AND id=?'
+                params.append(tid)
+            rows = conn.execute(sql + ' ORDER BY id', params).fetchall()
+            if not rows:
+                return self._json(HTTPStatus.NOT_FOUND, {'ok': False, 'error': '没有启用的监控目标可采'})
+            results = [record_probe(dict(r), actor_of(self)) for r in rows]
+            ok = all(r.get('ok') for r in results)
+            audit(conn, actor_of(self), 'monitor_probe', tid or '全部',
+                  '立即采一轮：%d 个目标，成功 %d' % (len(results), sum(1 for r in results if r.get('ok'))))
+            return self._json(HTTPStatus.OK, {'ok': ok, 'results': results, 'state': MONITOR_STATE})
+
         if key not in ('state/bulk', 'reset', 'seed'):
             return self._json(HTTPStatus.NOT_FOUND, {'ok': False, 'error': '未知接口', 'key': key})
         if not has_perm(self.user, 'workflow'):
@@ -1703,6 +1980,10 @@ def main() -> None:
         print('Database cleared:', DB_PATH, '(users/sessions/login_log kept)')
         return
 
+    monitor_stop = threading.Event()
+    if os.environ.get('AIOPS_MONITOR', '1') != '0':
+        threading.Thread(target=monitor_loop, args=(monitor_stop,), daemon=True, name='monitor').start()
+
     if not os.path.isfile(os.path.join(STATIC_DIR, 'index.html')):
         print('WARNING: %s/index.html not found - run npm run build first' % STATIC_DIR, file=sys.stderr)
 
@@ -1712,6 +1993,12 @@ def main() -> None:
     print('  UI        http://%s:%d/' % (args.host, args.port))
     print('  Data API  http://%s:%d%s/health' % (args.host, args.port, API_PREFIX))
     print('  Database  %s (SQLite; browser storage no longer used)' % DB_PATH)
+    if os.environ.get('AIOPS_MONITOR', '1') != '0':
+        n_t = db().execute('SELECT COUNT(*) c FROM monitor_targets WHERE enabled=1').fetchone()['c']
+        print('  Monitor   内置探针线程已起（只读拉 /metrics，轮询 %d 秒；启用目标 %d 个；采样保留 %d 小时）'
+              % (MONITOR_TICK, n_t, SAMPLE_RETENTION_HOURS))
+    else:
+        print('  Monitor   已用 AIOPS_MONITOR=0 关闭')
     print('  Login     %d accounts seeded: %s' % (users or len(DEMO_USERS),
           ' / '.join('%s=%s' % (u['username'], u['password']) for u in DEMO_USERS)))
     if users:

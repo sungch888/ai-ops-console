@@ -79,6 +79,10 @@ def main():
     for root, dirs, fs in os.walk(dist):
         if '.vite' in root:
             continue
+        # 采集层落盘目录是「本机实连的真实数据」，不随包外发（里面可能有内网地址与真实设备读数）
+        if 'data' in [os.path.basename(root)] or os.path.basename(root) == 'data':
+            dirs[:] = []
+            continue
         for f in fs:
             src = os.path.join(root, f)
             dst = os.path.join(STAGE, os.path.relpath(src, ROOT))

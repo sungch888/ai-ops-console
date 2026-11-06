@@ -1,4 +1,4 @@
-# 数据服务接口契约（v3.6）
+# 数据服务接口契约（v3.7）
 
 数据服务：`server/server.py`（Python 3 标准库 + SQLite）。前端不再使用浏览器本地存储，
 所有业务状态的权威副本在数据库；浏览器只保留一份内存副本。
@@ -229,3 +229,23 @@ python3 server/server.py --reset             # 清空数据库后退出
 `commands`（处置指令）、`fallback_tasks`（人工兜底工单）。
 旧库原地升级：启动时 `PRAGMA table_info` + `ALTER TABLE ADD COLUMN` 补 `users.enabled / provider / pw_changed_at`
 与 `sessions.ref / csrf`，权限矩阵只补新权限点、不覆盖已改过的勾选。
+
+### 监控探针（v3.7）
+
+平台内置一个只读探针线程（启动环境 `AIOPS_MONITOR=0` 可关），按每个目标自己设定的间隔拉取外部推理服务的
+`GET /metrics` 与 `GET /health`，把采样写进 `metric_samples`，卡指标写进 `gpu_cards`。**探针不向被监控的服务写任何东西。**
+
+| 接口 | 权限 | 说明 |
+|---|---|---|
+| `GET /api/monitor` | 算力中心·查看 | 目标清单、每个目标的最近一轮、探针线程状态、采样总数、密钥环境变量是否已给 |
+| `POST /api/monitor/target` | 算力中心·操作 | 新增或修改目标：`{"name","base","api_key_env","interval_seconds","window_seconds","cards","pool","enabled","probe"}`；`probe:true` 表示存完立刻采一轮 |
+| `POST /api/monitor/probe` | 算力中心·操作 | `{"id":"T-7096"}` 或空体 = 采全部启用的目标 |
+| `GET /api/samples` | 算力中心·查看 | 采样台账，可按 `target` / `status` / `q` / `since` 过滤与分页 |
+| `GET /api/gpu_cards` | 算力中心·查看 | 实连卡台账（探针写入），可按 `target` / `q` 过滤 |
+
+- 密钥只在启动环境的环境变量里，库里与前端只存**环境变量名**（`api_key_env`）。
+- 取数失败也写一条 `status='取数失败'` 的样本 + 审计 `monitor_probe_failed`：断连在台账里看得见，不会静默变空页。
+- 采样保留 `SAMPLE_RETENTION_HOURS`（默认 24 小时）与上限 20000 行，超出的按最旧的删。
+- `metric_samples` / `gpu_cards` / `monitor_targets` 不在「重置演示数据」的清理范围里（真实观测不被演示重置抹掉）。
+- 兼容性：探针按「JSON 指标」型服务解析（`engine` / `live` / `requests` / `hardware` / `hardware_static` / `totals`）；
+  Prometheus 文本型的卡指标仍走采集层 `collector/collect.py`（`services.format = "json"` 时采集脚本也支持同一型服务）。

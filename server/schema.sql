@@ -249,3 +249,47 @@ CREATE TABLE IF NOT EXISTS fallback_tasks(
   owner TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_fallback_status ON fallback_tasks(status, created_at);
+
+-- --------------------------------------------------------------------------- v3.7 监控探针与真实采样
+-- 探针只读拉取外部模型服务的 /metrics 与 /health，采样结果入 metric_samples（权威副本在库里）。
+-- 密钥不落库：monitor_targets.api_key_env 存的是「环境变量名」，值由启动环境提供。
+CREATE TABLE IF NOT EXISTS monitor_targets(
+  id TEXT PRIMARY KEY,             -- T-xxxx
+  name TEXT NOT NULL,              -- 目标显示名
+  base TEXT NOT NULL,              -- 例：http://10.20.14.21:8081
+  api_key_env TEXT,                -- 取密钥的环境变量名（不存密钥本身）
+  pool TEXT NOT NULL DEFAULT 'hp',
+  cards INTEGER NOT NULL DEFAULT 1,
+  window_seconds INTEGER NOT NULL DEFAULT 300,
+  interval_seconds INTEGER NOT NULL DEFAULT 30,
+  enabled INTEGER NOT NULL DEFAULT 1,
+  last_status TEXT,                -- 最近一轮：已采集 | 取数失败
+  last_error TEXT,
+  created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS metric_samples(
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  target TEXT NOT NULL,            -- monitor_targets.id
+  service TEXT, model TEXT, version TEXT,
+  status TEXT NOT NULL,            -- 已采集 | 取数失败
+  instances INTEGER, ready INTEGER, cards INTEGER,
+  qps REAL, tokens_per_sec REAL, ttft_ms REAL, p99_ms REAL,
+  queue_depth INTEGER, kv_hit_pct REAL, hbm_pct REAL, err_pct REAL,
+  gpu_name TEXT, gpu_util REAL, gpu_temp_c REAL, gpu_power_w REAL,
+  gpu_mem_used_mib REAL, gpu_mem_total_mib REAL,
+  req_window INTEGER,              -- 统计窗口内的请求条数
+  note TEXT,
+  at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_samples_target ON metric_samples(target, at);
+CREATE INDEX IF NOT EXISTS idx_samples_at ON metric_samples(at);
+
+CREATE TABLE IF NOT EXISTS gpu_cards(
+  id TEXT PRIMARY KEY,             -- 目标 + 卡序号
+  target TEXT NOT NULL, node TEXT, model TEXT,
+  util_pct REAL, mem_used_mib REAL, mem_total_mib REAL,
+  temp_c REAL, power_w REAL, cpu_pct REAL, ram_used_mib REAL, ram_total_mib REAL,
+  health TEXT, note TEXT, updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_gpu_cards_target ON gpu_cards(target);
