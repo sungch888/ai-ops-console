@@ -8,6 +8,7 @@
 import { useEffect, useState } from 'react'
 import { Badge, Callout, Kpi, Panel, PageHead, Table } from '../../components/ui'
 import { listLinks, loadConfig, saveConfig, syncLinks, useFlags, usePerm } from '../../engine/auth'
+import { COLLECT_KINDS, buildSourceConfig, collectStore, useCollect } from '../../engine/collect'
 import { consoleStore, useConsole } from '../../engine/console'
 
 const SOURCE_KEYS = ['auth-provider', 'approval-source', 'notify-channels', 'duty-source'] as const
@@ -36,6 +37,9 @@ const CHOICES: Record<string, { v: string; label: string }[]> = {
 export default function OpsSettings() {
   const flags = useFlags()
   const cons = useConsole()
+  const col = useCollect()
+  const [src, setSrc] = useState({ kind: 'services', name: '', base: '', api_key_env: '', format: '', interval_seconds: 60, extra: '' })
+  const [colMsg, setColMsg] = useState<{ ok: boolean; text: string } | null>(null)
   const matrixPerm = usePerm('matrix')
   const dutyPerm = usePerm('workflow')
   const [links, setLinks] = useState<any[]>([])
@@ -52,6 +56,7 @@ export default function OpsSettings() {
     void listLinks().then((r) => setLinks(r.rows))
   }, [])
   useEffect(() => { setDraft({ ...flags.config }) }, [flags.config])
+  useEffect(() => { void collectStore.refresh() }, [])
 
   const put = async (key: string, value: string) => {
     setErr('')
@@ -147,11 +152,11 @@ export default function OpsSettings() {
             const d = routeDraft[r.kind] || {}
             return [
               <span className="small strong">{r.kind}</span>,
-              <input className="btn sm" style={{ width: 170 }} value={d.duty_role ?? r.duty_role} disabled={!dutyPerm.manage}
+              <input className="btn sm" style={{ width: 170 }} value={d.duty_role ?? r.duty_role} disabled={!matrixPerm.manage}
                 onChange={(e) => setRouteDraft({ ...routeDraft, [r.kind]: { ...d, duty_role: e.target.value } })} />,
-              <input className="btn sm" style={{ width: 170 }} value={d.escalate_role ?? r.escalate_role} disabled={!dutyPerm.manage}
+              <input className="btn sm" style={{ width: 170 }} value={d.escalate_role ?? r.escalate_role} disabled={!matrixPerm.manage}
                 onChange={(e) => setRouteDraft({ ...routeDraft, [r.kind]: { ...d, escalate_role: e.target.value } })} />,
-              <button className="btn sm primary" disabled={!dutyPerm.manage}
+              <button className="btn sm primary" disabled={!matrixPerm.manage}
                 onClick={() => void consoleStore.saveRoute({ kind: r.kind, duty_role: d.duty_role ?? r.duty_role, escalate_role: d.escalate_role ?? r.escalate_role })}>保存</button>,
             ]
           })} />
@@ -159,21 +164,21 @@ export default function OpsSettings() {
             const d = shiftDraft[s.id] || {}
             return [
               <span className="tiny mono">{s.id}</span>,
-              <input className="btn sm" style={{ width: 150 }} value={d.role ?? s.role} disabled={!dutyPerm.manage}
+              <input className="btn sm" style={{ width: 150 }} value={d.role ?? s.role} disabled={!matrixPerm.manage}
                 onChange={(e) => setShiftDraft({ ...shiftDraft, [s.id]: { ...d, role: e.target.value } })} />,
-              <input className="btn sm" style={{ width: 190 }} value={d.name ?? s.name} disabled={!dutyPerm.manage}
+              <input className="btn sm" style={{ width: 190 }} value={d.name ?? s.name} disabled={!matrixPerm.manage}
                 onChange={(e) => setShiftDraft({ ...shiftDraft, [s.id]: { ...d, name: e.target.value } })} />,
-              <input className="btn sm" style={{ width: 120 }} value={d.phone ?? s.phone} disabled={!dutyPerm.manage}
+              <input className="btn sm" style={{ width: 120 }} value={d.phone ?? s.phone} disabled={!matrixPerm.manage}
                 onChange={(e) => setShiftDraft({ ...shiftDraft, [s.id]: { ...d, phone: e.target.value } })} />,
-              <input className="btn sm" style={{ width: 170 }} value={d.lead ?? s.lead} disabled={!dutyPerm.manage}
+              <input className="btn sm" style={{ width: 170 }} value={d.lead ?? s.lead} disabled={!matrixPerm.manage}
                 onChange={(e) => setShiftDraft({ ...shiftDraft, [s.id]: { ...d, lead: e.target.value } })} />,
-              <input className="btn sm" style={{ width: 200 }} value={d.scope ?? s.scope} disabled={!dutyPerm.manage}
+              <input className="btn sm" style={{ width: 200 }} value={d.scope ?? s.scope} disabled={!matrixPerm.manage}
                 onChange={(e) => setShiftDraft({ ...shiftDraft, [s.id]: { ...d, scope: e.target.value } })} />,
               <span>{s.enabled ? <Badge tone="good">启用</Badge> : <Badge tone="muted">停用</Badge>}</span>,
             ]
           })} />
           <div className="row gap6 mt14" style={{ marginTop: 12 }}>
-            <button className="btn sm primary" disabled={!dutyPerm.manage}
+            <button className="btn sm primary" disabled={!matrixPerm.manage}
               onClick={() => void consoleStore.saveShift({ id: 'D-90', role: '新增岗位', name: '当班 · 待排', phone: '内线 80xx', lead: '值班长', scope: '临时岗位' })}>加一个岗位</button>
             <span className="tiny faint">数据来源：{cons.fromServer ? '数据服务 duty_shifts / duty_routes 表' : '读不到服务，暂时沿用代码默认口径'}</span>
           </div>
@@ -188,6 +193,80 @@ export default function OpsSettings() {
         ])} />
         <div className="tiny faint" style={{ marginTop: 8 }}>
           未配置好的来源被选中时，登录与审批会明确报错、不会静默退回内建模式；这样试运行时出问题看得见。
+        </div>
+      </Panel>
+      <Panel title="资源接入与采集（加资源不用改代码）" className="mt14" noPad
+        extra={<span className="tiny faint">采集线程 {col.state?.thread ? '在跑' : '未起'} · 成功 {col.state?.runs ?? 0} 次 / 失败 {col.state?.failures ?? 0} 次 · 接入要先审批：{col.approvalMode === 'off' ? '关（登记即生效 + 审计）' : '开（先生成资源接入工单）'}</span>}>
+        <div className="panel-body">
+          {col.error ? <Callout warn text={'资源接入读不到：' + col.error} /> : null}
+          <Table minWidth={1120} head={['资源 / 类型', '关键配置（密钥只写环境变量名）', '间隔', '最近一轮', '接入状态', '操作']} rows={col.sources.map((d) => [
+            <span className="small strong">{d.name}<div className="tiny faint">{d.kind} · {d.id} · {d.enabled ? '启用' : '已停用'}</div></span>,
+            <span className="tiny mono" style={{ maxWidth: 340 }}>{(JSON.stringify(JSON.parse(d.config_json || '{}')) || '').slice(0, 190)}</span>,
+            <span className="tiny">{d.interval_seconds} 秒</span>,
+            <span className="tiny">{d.last_status === '已采集' ? <Badge tone="good">已采集</Badge> : d.last_status ? <Badge tone="bad">{d.last_status}</Badge> : <Badge tone="muted">还没采过</Badge>}
+              {d.last_error ? <div className="tiny" style={{ color: '#ff9a9a', maxWidth: 260 }}>{d.last_error}</div> : null}
+              <div className="tiny faint">{(d.last_run_at || '').replace('T', ' ').replace('Z', '')}</div></span>,
+            <span>{d.approval_state === '已生效' ? <Badge tone="good">已生效</Badge> : d.approval_state === '待审批' ? <Badge tone="warn">待审批 {d.order_id}</Badge> : <Badge tone="bad">已驳回</Badge>}</span>,
+            <div className="row gap6" style={{ flexWrap: 'wrap' }}>
+              <button className="btn sm ghost" disabled={!matrixPerm.manage} onClick={() => void collectStore.run(d.kind).then((r) => setColMsg({ ok: !!r.ok, text: r.ok ? d.name + ' 已采一轮' : d.name + ' 采集失败：' + JSON.stringify(r.result?.errors || r.error || '') }))}>立即采</button>
+              <button className="btn sm ghost" disabled={!matrixPerm.manage} onClick={() => void collectStore.saveSource({ id: d.id, kind: d.kind, name: d.name, config: JSON.parse(d.config_json || '{}'), interval_seconds: d.interval_seconds, enabled: !d.enabled }).then((r) => setColMsg({ ok: !!r.ok, text: r.ok ? (d.enabled ? d.name + ' 已停用' : d.name + ' 已启用') : '被拒：' + (r.error || '') }))}>{d.enabled ? '停用' : '启用'}</button>
+              <button className="btn sm ghost" disabled={!matrixPerm.manage} onClick={() => void collectStore.deleteSource(d.id).then((r) => setColMsg({ ok: !!r.ok, text: r.ok ? d.name + ' 已删除（配置留审计）' : '删除被拒：' + (r.error || '') }))}>删除</button>
+            </div>,
+          ])} />
+          {col.sources.length === 0 ? <div className="tiny faint" style={{ marginTop: 6 }}>还没有采集源：在下面填一个（也可以点「从采集脚本配置文件导入」把现有文件配置搬进来，之后就只在系统里改）。</div> : null}
+
+          <div className="divider" />
+          <div className="row gap6 wrap" style={{ marginTop: 10 }}>
+            <select className="btn sm" style={{ width: 210 }} value={src.kind} onChange={(e) => setSrc({ ...src, kind: e.target.value })}>
+              {COLLECT_KINDS.map((k) => <option key={k.v} value={k.v}>{k.label}</option>)}
+            </select>
+            <input className="btn sm" style={{ width: 200 }} value={src.name} placeholder="资源显示名" onChange={(e) => setSrc({ ...src, name: e.target.value })} />
+            <input className="btn sm" style={{ width: 290 }} value={src.base} placeholder="地址 http://内网地址:端口（或指标端点全 URL）" onChange={(e) => setSrc({ ...src, base: e.target.value })} />
+            <input className="btn sm" style={{ width: 210 }} value={src.api_key_env} placeholder="取密钥的环境变量名（可空）" onChange={(e) => setSrc({ ...src, api_key_env: e.target.value })} />
+            <select className="btn sm" style={{ width: 170 }} value={src.format} onChange={(e) => setSrc({ ...src, format: e.target.value })}>
+              <option value="">默认口径</option>
+              <option value="json">JSON 指标</option>
+              <option value="prometheus">Prometheus 文本</option>
+              <option value="openai">OpenAI 兼容</option>
+            </select>
+            <input className="btn sm" style={{ width: 110 }} value={src.interval_seconds} placeholder="间隔秒" onChange={(e) => setSrc({ ...src, interval_seconds: Number(e.target.value) || 60 })} />
+          </div>
+          <textarea className="btn sm" style={{ width: '100%', height: 54, marginTop: 8, resize: 'vertical' }} value={src.extra}
+            onChange={(e) => setSrc({ ...src, extra: e.target.value })}
+            placeholder='附加配置（JSON 对象，可选）：例如 {"query":"DCGM_FI_DEV_GPU_UTIL","cards":8,"pool":"hp"}' />
+          <div className="row gap6 wrap" style={{ marginTop: 8 }}>
+            <button className="btn sm primary" disabled={!matrixPerm.manage || !src.name || !src.base}
+              onClick={() => {
+                let cfg: Record<string, unknown>
+                try { cfg = buildSourceConfig(src) } catch (e) { setColMsg({ ok: false, text: '附加配置不是合法 JSON：' + (e instanceof Error ? e.message : '') }); return }
+                void collectStore.saveSource({ kind: src.kind, name: src.name, config: cfg, interval_seconds: src.interval_seconds, collect: true })
+                  .then((r) => setColMsg({ ok: !!r.ok, text: r.ok ? (r.approval_state === '待审批' ? src.name + ' 已登记，等工单 ' + r.order_id + ' 审批通过才生效' : src.name + ' 已接入并采了一轮') : '被拒：' + (r.error || '') }))
+              }}>接入这个资源并采一轮</button>
+            <button className="btn sm ghost" disabled={!matrixPerm.manage} onClick={() => void collectStore.run().then((r) => setColMsg({ ok: !!r.ok, text: r.ok ? '全部启用资源已采一轮' : '采集有失败：' + JSON.stringify(r.result?.errors || r.error || '') }))}>立即采全部</button>
+            <button className="btn sm ghost" disabled={!matrixPerm.manage} onClick={() => void collectStore.importFile().then((r) => setColMsg({ ok: !!r.ok, text: r.ok ? '已从采集脚本配置文件导入 ' + (r.imported || []).length + ' 类资源；之后只在系统里改，文件不再被读' : '导入失败：' + (r.error || '') }))}>从采集脚本配置文件导入</button>
+            <button className="btn sm ghost" disabled={!matrixPerm.manage} onClick={() => void saveConfig('data-source-approval', col.approvalMode === 'off' ? 'on' : 'off').then(() => collectStore.refresh())}>接入要先审批：{col.approvalMode === 'off' ? '开' : '关'}</button>
+            {!matrixPerm.manage ? <span className="tiny faint">要「权限矩阵」操作权才能接入 / 改 / 删采集源（与改配置同级）</span> : null}
+          </div>
+          {colMsg ? <div className="tiny" style={{ marginTop: 8, color: colMsg.ok ? '#7ee2b8' : '#ff9a9a' }}>{colMsg.text}</div> : null}
+
+          <div className="divider" />
+          <Table minWidth={900} head={['采集类型', '本轮条数', '最近采集时间', '状态 / 错误']} rows={COLLECT_KINDS.map((k) => {
+            const one = col.status[k.v] || col.status[k.v + '.json']
+            return [
+              <span className="tiny strong">{k.label}</span>,
+              <span className="num small">{one ? one.items : 0}</span>,
+              <span className="tiny faint">{one ? (one.at || '').replace('T', ' ').replace('Z', '') : '未采'}</span>,
+              <span className="tiny">{one ? (one.error ? <span style={{ color: '#ff9a9a' }}>{one.error}</span> : <Badge tone="good">正常</Badge>) : <Badge tone="muted">未配置</Badge>}{one && one.sources > 1 ? <span className="tiny faint"> 由 {one.sources} 个源合并</span> : null}</span>,
+            ]
+          })} />
+          <div className="tiny faint" style={{ marginTop: 8 }}>
+            口径：加一台资源 = 在这里配一条采集源（类型 + 地址 + 口径 + 间隔），不改代码、不改文件；数据服务自己按间隔只读拉取，
+            结果写进 <span className="mono">collect_payloads</span>，各页面主表格读它。密钥只写 <span className="mono">env:环境变量名</span> 引用，
+            值由启动数据服务的环境提供，库里不存密钥。卡指标走 Prometheus / NPU Exporter；
+            <span className="mono">npu-smi</span> 直采要在数据服务所在机器上执行命令，仍只保留在采集脚本里，不由界面触发。
+            打开「接入要先审批」后，新增或变更会先生成一张 <span className="mono">resource_onboard</span> 工单，
+            在审批台通过后才生效（驳回则不生效）；两种模式都会写审计（<span className="mono">data_source_put</span>）。
+          </div>
         </div>
       </Panel>
     </>

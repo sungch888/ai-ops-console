@@ -298,3 +298,31 @@ CREATE TABLE IF NOT EXISTS gpu_cards(
   health TEXT, note TEXT, updated_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_gpu_cards_target ON gpu_cards(target);
+
+-- --------------------------------------------------------------------------- v3.8 资源接入配置（不改代码加资源）
+-- 采集源全部在系统里配（配置中心 → 资源接入与采集）：collector/config.json 只作为一次性导入来源。
+-- 密钥不入库：config_json 里只允许 "api_key": "env:环境变量名" 这种引用形式，值由启动环境提供。
+CREATE TABLE IF NOT EXISTS data_sources(
+  id TEXT PRIMARY KEY,             -- DS-xxxx
+  kind TEXT NOT NULL,              -- cards | services | gateway | routes | apps | deploy
+  name TEXT NOT NULL,              -- 显示名
+  config_json TEXT NOT NULL,       -- 该源的采集配置（base / format / 查询指标名 / env:密钥引用 等）
+  interval_seconds INTEGER NOT NULL DEFAULT 60,
+  enabled INTEGER NOT NULL DEFAULT 1,
+  last_status TEXT,                -- 已采集 | 取数失败
+  last_error TEXT,
+  last_run_at TEXT,
+  approval_state TEXT NOT NULL DEFAULT '已生效',  -- 已生效 | 待审批 | 已驳回（配置项 data-source-approval 打开时先走工单）
+  order_id TEXT,                        -- 资源接入工单号（WO-xxxx）
+  created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_sources_kind ON data_sources(kind, enabled);
+
+CREATE TABLE IF NOT EXISTS collect_payloads(
+  kind TEXT PRIMARY KEY,           -- 与 data_sources.kind 对应
+  rows_json TEXT NOT NULL,         -- 采集到的行（各页面主表格的数据来源）
+  items INTEGER NOT NULL DEFAULT 0,
+  error TEXT,
+  sources INTEGER NOT NULL DEFAULT 0,   -- 这个类型由几个源合起来的
+  at TEXT NOT NULL
+);

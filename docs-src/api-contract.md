@@ -1,4 +1,4 @@
-# 数据服务接口契约（v3.7）
+# 数据服务接口契约（v3.8）
 
 数据服务：`server/server.py`（Python 3 标准库 + SQLite）。前端不再使用浏览器本地存储，
 所有业务状态的权威副本在数据库；浏览器只保留一份内存副本。
@@ -255,3 +255,23 @@ python3 server/server.py --reset             # 清空数据库后退出
   | `openai` | 只有 OpenAI 兼容接口（`/health` + `/v1/models`） | 可用性 + 往返时延 + 已注册模型与量化口径；`active_probe=1` 时再加一次 16 词元小请求的时延与吞吐 | QPS / 队列 / KV 命中 / 全部卡指标 → NULL，卡台账那一行标「对方未开放卡指标」 |
 - `active_probe`（默认 0）：开了才会主动发一个 16 词元的 `POST /v1/chat/completions`；关掉就完全只读。
 - 卡指标 NULL 不会被写成 0：`gpu_cards.health = 'unknown'`，界面显示「无卡指标」而不是「正常」。
+
+### 资源接入与采集（v3.8）
+
+加一台资源 = 在系统里配一条采集源，不改代码、不改文件。采集源登记在 `data_sources`，采集结果入 `collect_payloads`，
+各页面主表格读它（`telemetryStore` 优先读 `/api/collect`，接口不可用时才回退读静态 `data/*.json`）。
+
+| 接口 | 权限 | 说明 |
+|---|---|---|
+| `GET /api/collect` | 登录即可（查看） | 采集源清单、每个类型的采集条数与错误、采集线程状态、`approval_mode` |
+| `POST /api/collect/source` | 权限矩阵·操作 | 新增 / 修改源：`{"kind","name","config":{...},"interval_seconds","enabled","collect","reason"}`；`kind` ∈ `services / cards / gateway / routes / apps / deploy` |
+| `POST /api/collect/source/delete` | 权限矩阵·操作 | 删除源（审计 `data_source_delete`） |
+| `POST /api/collect/run` | 权限矩阵·操作 | `{"kind":"services"}` 或空体 = 立即采一轮 |
+| `POST /api/collect/import` | 权限矩阵·操作 | 一次性把 `collector/config.json` 导入成源；之后文件不再被读 |
+
+- 密钥红线：`config` 里出现 `api_key / token / password / secret / authorization` 且不是 `"env:变量名"` 形式 → 直接 400。
+- 取数口径与监控探针一致：`json` / `prometheus` / `openai`；卡指标走 Prometheus（NPU Exporter / NVML Exporter）。
+- 配置项 `data-source-approval`（默认 `off`）：打开后新增 / 变更先生成 `resource_onboard` 工单（状态 `pending`）与审批记录，
+  源置为「待审批」不采集；审批通过 → `已生效` 并自动采一轮；驳回 → `已驳回` 不生效。审计：`data_source_put` / `data_source_approval`。
+- 采集失败留痕：源上 `last_status='取数失败'` + `last_error`，类型状态里也写错误，不会静默变空页。
+- `data_sources` / `collect_payloads` 不在「重置演示数据」的清理范围里。

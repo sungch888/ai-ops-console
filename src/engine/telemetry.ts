@@ -10,6 +10,7 @@
 import { useSyncExternalStore } from 'react'
 import { engine, poolUtil, type PoolId } from './engine'
 import { metricsOf } from './inference'
+import { apiGet } from './db'
 import { computeNodes } from '../data/mock'
 
 export type SourceId = 'npu' | 'mindie' | 'litellm' | 'dify' | 'ragflow' | 'deploy'
@@ -154,10 +155,37 @@ export const telemetryStore = {
   lastPullAt: () => lastPullAt,
 
   /** 读一次采集层落盘数据；没有采集层就回落到平台内推导 */
+  /** v3.8：先读数据服务里的采集结果（配置在系统里，数据在库里）；接口不可用时才回退到静态文件 */
+  async pullFromApi() {
+    const res = await apiGet('/collect')
+    if (!res || !res.ok) return null
+    const status = (res.status || {}) as Record<string, { items: number; error?: string; at?: string }>
+    const rows = (res.rows || {}) as Record<string, unknown[]>
+    const keys = Object.keys(status)
+    if (!keys.length) return null
+    const at = Math.max(...keys.map((k) => (status[k]?.at ? new Date(status[k].at as string).getTime() : 0)))
+    if (at && Date.now() - at > FRESH_MS) return null
+    const out: Collected = { at: at || Date.now(), errors: {} }
+    const map: Record<string, keyof Collected> = {
+      cards: 'cards', services: 'services', gateway: 'gateway', routes: 'routes', apps: 'apps', deploy: 'deploy',
+    }
+    keys.forEach((file) => {
+      const key = map[file.replace('.json', '')]
+      if (!key) return
+      const err = status[file]?.error
+      if (err) out.errors[file] = String(err)
+      const data = rows[file] ?? rows[file.replace('.json', '')]
+      if (Array.isArray(data) && data.length) (out as unknown as Record<string, unknown>)[key] = data
+    })
+    return out
+  },
+
   async pull() {
     if (pulling) return collected
     pulling = true
     try {
+      const fromApi = await telemetryStore.pullFromApi().catch(() => null)
+      if (fromApi) { collected = fromApi; return collected }
       const manifest = await getJson('manifest.json') as { generatedAt?: string; files?: Record<string, { ok?: boolean; items?: number; error?: string }>; sources?: Record<string, { ok?: boolean; items?: number; error?: string }> }
       const at = manifest.generatedAt ? new Date(manifest.generatedAt).getTime() : Date.now()
       if (Date.now() - at > FRESH_MS) { collected = null; return collected }

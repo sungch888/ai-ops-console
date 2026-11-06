@@ -39,8 +39,8 @@ SCHEMA = os.path.join(HERE, 'schema.sql')
 STATIC_DIR = os.path.join(ROOT, 'dist')
 API_PREFIX = '/api'
 MAX_BODY = 8 * 1024 * 1024
-SCHEMA_VERSION = '4'
-SERVER_VERSION = '3.2.0'
+SCHEMA_VERSION = '5'
+SERVER_VERSION = '3.3.0'
 
 CONTENT_TYPES = {
     '.html': 'text/html; charset=utf-8',
@@ -160,7 +160,7 @@ KEY_PERM = {
 QUERY_PERM = {'audit': 'audit', 'export': 'export', 'accounts': 'matrix', 'permissions': 'matrix', 'users': 'matrix',
               'approvals': 'workflow', 'commands': 'security', 'fallback': 'security', 'links': 'matrix',
               'duty': 'workflow', 'duty_routes': 'workflow',
-              'samples': 'compute', 'gpu_cards': 'compute'}
+              'samples': 'compute', 'gpu_cards': 'compute', 'collect': 'overview'}
 MATRIX_KEYS = sorted([k for k, v in KEY_PERM.items() if v == 'matrix'])
 CSV_PERM = {'audit_log': 'audit', 'accounts': 'matrix', 'role_permissions': 'matrix',
             'approvals': 'workflow', 'commands': 'security', 'fallback_tasks': 'security',
@@ -299,14 +299,17 @@ CONFIG_DEFAULTS = {
     'notify-channels': 'site',
     'duty-source': 'local',
     'command-ack-timeout-min': '30',
+    'data-source-approval': 'off',
 }
 CONFIG_CHOICES = {
     'auth-provider': list(PROVIDERS.keys()),
     'approval-source': ['local', 'external'],
     'notify-channels': ['site', 'site,email', 'site,email,sms,im'],
     'duty-source': ['local', 'external'],
+    'data-source-approval': ['off', 'on'],
 }
-CONFIG_LABEL_CN = {'auth-provider': '身份来源', 'approval-source': '审批来源', 'notify-channels': '通知渠道',
+CONFIG_LABEL_CN = {'auth-provider': '身份来源', 'approval-source': '审批来源',
+                   'data-source-approval': '资源接入要先审批', 'notify-channels': '通知渠道',
                    'duty-source': '排班来源', 'command-ack-timeout-min': '指令确认超时（分钟）'}
 
 DUTY_DEFAULT = [
@@ -375,6 +378,8 @@ def upgrade_schema(conn) -> None:
                                             ('active_probe', 'INTEGER NOT NULL DEFAULT 0')])
     ensure_columns(conn, 'metric_samples', [('req_total', 'REAL'), ('req_failed', 'REAL'),
                                            ('req_seconds_sum', 'REAL')])
+    ensure_columns(conn, 'data_sources', [('approval_state', "TEXT NOT NULL DEFAULT '已生效'"),
+                                         ('order_id', 'TEXT')])
 
 
 def cfg(key: str, default: str = '') -> str:
@@ -897,6 +902,152 @@ def monitor_loop(stop: threading.Event) -> None:
     MONITOR_STATE['thread'] = False
 
 
+# --------------------------------------------------------------------------- v3.8 资源接入（配置化，不改代码）
+COLLECT_KINDS = ('services', 'cards', 'gateway', 'routes', 'apps', 'deploy')
+COLLECT_STATE = {'thread': False, 'last_run_at': '', 'last_error': '', 'runs': 0, 'failures': 0}
+SECRET_KEYS = ('api_key', 'token', 'password', 'secret', 'authorization')
+
+
+def collector_module():
+    """复用仓库里的采集脚本（解析口径只有一份）；配置来自数据库，不再读 config.json。"""
+    if 'collect' in globals().get('_COLLECT_MOD', {}):
+        return _COLLECT_MOD['collect']
+    d = os.path.join(HERE, '..', 'collector')
+    if not os.path.isfile(os.path.join(d, 'collect.py')):
+        raise RuntimeError('采集脚本 collect.py 不在 ' + d + '（资源采集不可用）')
+    if d not in sys.path:
+        sys.path.insert(0, d)
+    import collect  # noqa: E402
+    globals()['_COLLECT_MOD'] = {'collect': collect}
+    return collect
+
+
+def config_secret_safe(cfg: dict, path: str = '') -> str:
+    """密钥不入库：只允许 "env:环境变量名" 这种引用形式。"""
+    for k, v in (cfg or {}).items():
+        if isinstance(v, dict):
+            bad = config_secret_safe(v, path + k + '.')
+            if bad:
+                return bad
+        elif k.lower() in SECRET_KEYS:
+            if not (isinstance(v, str) and v.startswith('env:')):
+                return path + k
+    return ''
+
+
+def source_cfg(src: dict) -> dict:
+    cfg = json.loads(src.get('config_json') or '{}')
+    cfg['enabled'] = True
+    cfg.setdefault('timeout', 12)
+    return cfg
+
+
+def run_collect(kinds=None, actor: str = 'collector') -> dict:
+    """按数据库里的配置采集一轮：同一个类型可以由多个源合并。结果入 collect_payloads。"""
+    conn = db()
+    sql = 'SELECT * FROM data_sources WHERE enabled=1 AND approval_state=?'
+    params = ['已生效']
+    if kinds:
+        sql += ' AND kind IN (%s)' % ','.join('?' * len(kinds))
+        params += list(kinds)
+    out, errs = {}, {}
+    for r in conn.execute(sql + ' ORDER BY kind, id', params).fetchall():
+        src = dict(r)
+        try:
+            rows = collector_module().SOURCE_FN[src['kind'] + '.json'](source_cfg(src))
+            if not rows:
+                raise ValueError('接口已配置但本轮没取到数（可能是查询指标名不对）')
+            out.setdefault(src['kind'], []).extend(rows)
+            conn.execute("UPDATE data_sources SET last_status='已采集', last_error='', last_run_at=? WHERE id=?",
+                         (now_iso(), src['id']))
+            COLLECT_STATE['runs'] += 1
+        except Exception as exc:
+            msg = '取数失败：%s' % (str(exc)[:150])
+            errs[src['kind']] = (errs.get(src['kind']) or '') + msg + '（源 %s）' % src['id']
+            conn.execute("UPDATE data_sources SET last_status='取数失败', last_error=?, last_run_at=? WHERE id=?",
+                         (msg, now_iso(), src['id']))
+            audit(conn, actor, 'collect_failed', src['kind'], '%s：%s' % (src['name'], msg))
+            COLLECT_STATE['failures'] += 1
+    fn = collector_module()
+    for kind in COLLECT_KINDS:
+        rows = out.get(kind)
+        if rows:
+            conn.execute('INSERT INTO collect_payloads(kind, rows_json, items, error, sources, at) VALUES(?,?,?,?,?,?)'
+                         ' ON CONFLICT(kind) DO UPDATE SET rows_json=excluded.rows_json, items=excluded.items,'
+                         ' error=excluded.error, sources=excluded.sources, at=excluded.at',
+                         (kind, json.dumps(rows, ensure_ascii=False), len(rows), '', len(
+                             [r for r in conn.execute('SELECT id FROM data_sources WHERE kind=? AND enabled=1', (kind,))]),
+                          now_iso()))
+        elif kind in errs:
+            conn.execute('INSERT INTO collect_payloads(kind, rows_json, items, error, sources, at) VALUES(?,?,?,?,?,?)'
+                         ' ON CONFLICT(kind) DO UPDATE SET error=excluded.error, at=excluded.at',
+                         (kind, '[]', 0, errs[kind], 0, now_iso()))
+    conn.commit()
+    COLLECT_STATE['last_run_at'] = now_iso()
+    COLLECT_STATE['last_error'] = '  '.join(errs.values())[:200]
+    return {'ok': not errs, 'rows': {k: len(v) for k, v in out.items()}, 'errors': errs}
+
+
+def collect_loop(stop: threading.Event) -> None:
+    COLLECT_STATE['thread'] = True
+    while not stop.is_set():
+        try:
+            conn = db()
+            due = []
+            for r in conn.execute("SELECT * FROM data_sources WHERE enabled=1 AND approval_state='已生效'"
+                                  ' ORDER BY kind, id').fetchall():
+                last = r['last_run_at']
+                gap = max(15, int(r['interval_seconds'] or 60))
+                if not last:
+                    due.append(r['kind'])
+                    continue
+                try:
+                    if time.time() - datetime.fromisoformat(str(last).replace('Z', '+00:00')).timestamp() >= gap:
+                        due.append(r['kind'])
+                except Exception:
+                    due.append(r['kind'])
+            if due:
+                run_collect(sorted(set(due)))
+        except Exception as exc:
+            COLLECT_STATE['last_error'] = str(exc)[:160]
+        stop.wait(10)
+    COLLECT_STATE['thread'] = False
+
+
+def new_order(conn, actor: str, otype: str, title: str, reason: str) -> str:
+    """服务端直接开一张工单（资源接入这类变更用）：状态 pending，等审批决定。"""
+    row = conn.execute("SELECT id FROM orders WHERE id LIKE 'WO-%' ORDER BY id DESC LIMIT 1").fetchone()
+    n = 1
+    if row:
+        try:
+            n = int(str(row['id']).split('-')[-1]) + 1
+        except ValueError:
+            n = 1
+    oid = 'WO-%04d' % n
+    ts = int(time.time() * 1000)
+    conn.execute('INSERT INTO orders(id, type, title, applicant, dept, level, target, amount, reason, status,'
+                 ' auto, created_at, spec, updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,0,?,?,?)',
+                 (oid, otype, title[:200], actor[:120], '资源接入', '重要', otype, '1 个采集源', reason[:500],
+                  'pending', ts, json.dumps({'kind': 'data_source'}, ensure_ascii=False), now_iso()))
+    conn.execute('INSERT INTO order_trace(order_id, seq, time, actor, action, note) VALUES(?,?,?,?,?,?)',
+                 (oid, 1, now_iso()[11:16], actor[:120], '资源接入变更单生成', '等待审批（配置项 data-source-approval 已开）'))
+    return oid
+
+
+def apply_source_approval(conn, order_id: str, decision: str) -> int:
+    """资源接入工单审批结果联动采集源：通过才生效，驳回就不生效。"""
+    rows = conn.execute('SELECT id, kind, name FROM data_sources WHERE order_id=?', (order_id,)).fetchall()
+    state = '已生效' if decision == 'approve' else '已驳回'
+    for r in rows:
+        conn.execute("UPDATE data_sources SET approval_state=?, updated_at=? WHERE id=?", (state, now_iso(), r['id']))
+        audit(conn, 'system', 'data_source_approval', r['id'],
+              '工单 %s 判定 %s → 采集源 %s（%s / %s）%s' % (order_id, decision, r['id'], r['kind'], r['name'], state))
+    conn.commit()
+    if decision == 'approve' and rows:
+        run_collect(sorted({r['kind'] for r in rows}), 'system')
+    return len(rows)
+
+
 def public_config() -> dict:
     out = {k: cfg(k) for k in CONFIG_DEFAULTS}
     p = PROVIDERS.get(out['auth-provider'], {})
@@ -1172,7 +1323,7 @@ def counts() -> dict:
     out = {}
     for t in ('kv_store', 'entities', 'orders', 'order_trace', 'events', 'notifications', 'role_permissions',
               'audit_log', 'identity_links', 'approvals', 'commands', 'fallback_tasks',
-              'monitor_targets', 'metric_samples', 'gpu_cards'):
+              'monitor_targets', 'metric_samples', 'gpu_cards', 'data_sources', 'collect_payloads'):
         out[t] = conn.execute('SELECT COUNT(*) c FROM %s' % t).fetchone()['c']
     return out
 
@@ -1530,6 +1681,19 @@ class Handler(BaseHTTPRequestHandler):
                              'expires_left_min': max(0, round((r['expires_at'] - time.time()) / 60))})
             return self._json(HTTPStatus.OK, {'ok': True, 'rows': rows, 'total': len(rows),
                                              'mine_only': mine_only, 'ttl_minutes': round(SESSION_TTL / 60)})
+        if key == 'collect':
+            rows = [dict(r) for r in conn.execute('SELECT * FROM data_sources ORDER BY kind, id')]
+            payloads = {}
+            for r in conn.execute('SELECT kind, items, error, sources, at FROM collect_payloads'):
+                payloads[r['kind']] = {'items': r['items'], 'error': r['error'] or '', 'sources': r['sources'],
+                                       'at': r['at']}
+            return self._json(HTTPStatus.OK, {
+                'ok': True, 'sources': rows, 'status': payloads, 'state': COLLECT_STATE,
+                'kinds': list(COLLECT_KINDS), 'approval_mode': cfg('data-source-approval', 'off'),
+                'rows': {r['kind']: json.loads(r['rows_json']) for r in
+                         conn.execute('SELECT kind, rows_json FROM collect_payloads')},
+                'note': '资源接入全部在系统里配（配置中心 → 资源接入与采集）；采集只读拉取，平台不向外部系统写数据；'
+                        '密钥只存 env:环境变量名 引用，值由启动环境提供'})
         if key == 'monitor':
             if not has_perm(self.user, 'compute', 'view'):
                 audit(conn, actor_of(self), 'denied_get', 'monitor', '没有「算力中心」查看权')
@@ -1881,6 +2045,7 @@ class Handler(BaseHTTPRequestHandler):
                 aid = conn.execute('SELECT last_insert_rowid() id').fetchone()['id']
             audit(conn, actor_of(self), 'approval_' + key.split('/')[1], oid,
                   '工单 %s 由 %s 判定为 %s（外部单据号 %s）' % (oid, source, state, ext_ref or '-'))
+            linked = apply_source_approval(conn, oid, decision)
             conn.execute('INSERT INTO events(time, level, text, source, created_at) '
                          'SELECT ?, ?, ?, ?, ? WHERE NOT EXISTS (SELECT 1 FROM events WHERE time=? AND text=? AND source=?)',
                          (ts, '一般', '工单 %s 审批结果回写（来源 %s）：%s' % (oid, source, state), 'approval', ts,
@@ -2053,6 +2218,132 @@ class Handler(BaseHTTPRequestHandler):
                   % (kind, role, p.get('escalate_role') or '值班长'))
             return self._json(HTTPStatus.OK, {'ok': True, 'kind': kind})
 
+        # ---- v3.8 资源接入：采集源在界面上配（可选先走资源接入工单）
+        if key == 'collect/source':
+            if not self._need('matrix', 'manage', 'denied_data_source_put'):
+                return
+            payload, err = self._body()
+            if err:
+                return self._json(HTTPStatus.BAD_REQUEST, {'ok': False, 'error': err})
+            b = payload or {}
+            kind = str(b.get('kind') or '')
+            if kind not in COLLECT_KINDS:
+                return self._json(HTTPStatus.BAD_REQUEST, {'ok': False,
+                                                           'error': '资源类型只能是 %s' % ' / '.join(COLLECT_KINDS)})
+            name = str(b.get('name') or '')[:60]
+            if not name:
+                return self._json(HTTPStatus.BAD_REQUEST, {'ok': False, 'error': '资源要有显示名'})
+            cfg_obj = b.get('config')
+            if not isinstance(cfg_obj, dict) or not cfg_obj:
+                return self._json(HTTPStatus.BAD_REQUEST, {'ok': False,
+                                                           'error': '采集配置要是一个 JSON 对象（至少写 base 或 metrics_url）'})
+            bad = config_secret_safe(cfg_obj)
+            if bad:
+                return self._json(HTTPStatus.BAD_REQUEST, {'ok': False,
+                                                           'error': '密钥不能直接写进配置：%s 要写成 "env:环境变量名"' % bad})
+            try:
+                interval = max(15, min(86400, int(b.get('interval_seconds') or 60)))
+            except (TypeError, ValueError):
+                return self._json(HTTPStatus.BAD_REQUEST, {'ok': False, 'error': '采集间隔要是整数秒'})
+            sid = str(b.get('id') or 'DS-' + secrets.token_hex(2).upper())[:20]
+            mode = cfg('data-source-approval', 'off')
+            approval, order_id = '已生效', None
+            if mode in ('on', 'orders'):
+                order_id = new_order(conn, actor_of(self), 'resource_onboard',
+                                     '%s 接入：%s（%s）' % (kind, name,
+                                                          str(cfg_obj.get('base') or cfg_obj.get('metrics_url') or '本地命令')),
+                                     str(b.get('reason') or '新增 / 变更采集源'))
+                approval = '待审批'
+                conn.execute('INSERT INTO approvals(order_id, source, external_ref, state, note, actor, due_at, at)'
+                             ' VALUES(?,?,?,?,?,?,?,?)',
+                             (order_id, cfg('approval-source'), '', '待审',
+                              '资源接入变更：%s（间隔 %s 秒）' % (name, interval), actor_of(self),
+                              datetime.fromtimestamp(time.time() + 3600, timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
+                              now_iso()))
+            conn.execute('INSERT INTO data_sources(id, kind, name, config_json, interval_seconds, enabled,'
+                         ' approval_state, order_id, created_at, updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)'
+                         ' ON CONFLICT(id) DO UPDATE SET kind=excluded.kind, name=excluded.name,'
+                         ' config_json=excluded.config_json, interval_seconds=excluded.interval_seconds,'
+                         ' enabled=excluded.enabled, approval_state=excluded.approval_state,'
+                         ' order_id=excluded.order_id, updated_at=excluded.updated_at',
+                         (sid, kind, name, json.dumps(cfg_obj, ensure_ascii=False), interval,
+                          0 if b.get('enabled') is False else 1, approval, order_id, now_iso(), now_iso()))
+            audit(conn, actor_of(self), 'data_source_put', sid,
+                  '%s / %s（间隔 %s 秒，配置 %s）→ %s%s' % (kind, name, interval,
+                                                            json.dumps(cfg_obj, ensure_ascii=False)[:220], approval,
+                                                            '，工单 %s' % order_id if order_id else ''))
+            res = {'ok': True, 'id': sid, 'approval_state': approval, 'order_id': order_id,
+                   'note': ('要先审批才生效：工单 %s（配置项 data-source-approval 已开）' % order_id) if approval == '待审批'
+                   else '登记即生效（配置项 data-source-approval 关闭）；已写审计 data_source_put'}
+            if approval == '已生效' and b.get('collect') and b.get('enabled') is not False:
+                res['collect'] = run_collect([kind], actor_of(self))
+            return self._json(HTTPStatus.OK, res)
+
+        if key == 'collect/source/delete':
+            if not self._need('matrix', 'manage', 'denied_data_source_delete'):
+                return
+            payload, err = self._body()
+            if err:
+                return self._json(HTTPStatus.BAD_REQUEST, {'ok': False, 'error': err})
+            sid = str((payload or {}).get('id') or '')[:20]
+            row = conn.execute('SELECT * FROM data_sources WHERE id=?', (sid,)).fetchone()
+            if not row:
+                return self._json(HTTPStatus.NOT_FOUND, {'ok': False, 'error': '没有这个采集源'})
+            conn.execute('DELETE FROM data_sources WHERE id=?', (sid,))
+            if not conn.execute('SELECT id FROM data_sources WHERE kind=? AND enabled=1', (row['kind'],)).fetchone():
+                conn.execute('DELETE FROM collect_payloads WHERE kind=?', (row['kind'],))
+            audit(conn, actor_of(self), 'data_source_delete', sid,
+                  '删除采集源 %s（%s / %s）' % (sid, row['kind'], row['name']))
+            return self._json(HTTPStatus.OK, {'ok': True, 'id': sid})
+
+        if key == 'collect/run':
+            if not self._need('matrix', 'manage', 'denied_collect_run'):
+                return
+            payload, err = self._body()
+            if err and '请求体为空' not in err:
+                return self._json(HTTPStatus.BAD_REQUEST, {'ok': False, 'error': err})
+            kind = str((payload or {}).get('kind') or '')
+            kinds = [kind] if kind in COLLECT_KINDS else None
+            out = run_collect(kinds, actor_of(self))
+            audit(conn, actor_of(self), 'collect_run', kind or '全部',
+                  '立即采一轮：%s' % json.dumps({'rows': out['rows'], 'errors': out['errors']}, ensure_ascii=False)[:220])
+            return self._json(HTTPStatus.OK, {'ok': out['ok'], 'result': out, 'state': COLLECT_STATE})
+
+        if key == 'collect/import':
+            if not self._need('matrix', 'manage', 'denied_collect_import'):
+                return
+            path = os.path.join(HERE, '..', 'collector', 'config.json')
+            if not os.path.isfile(path):
+                return self._json(HTTPStatus.NOT_FOUND, {'ok': False, 'error': '没有 collector/config.json 可导入'})
+            try:
+                file_cfg = json.loads(open(path, encoding='utf-8').read())
+            except Exception as exc:
+                return self._json(HTTPStatus.BAD_REQUEST, {'ok': False, 'error': '配置文件读不了：%s' % exc})
+            imported = []
+            for kind in COLLECT_KINDS:
+                src = file_cfg.get(kind)
+                if not isinstance(src, dict):
+                    continue
+                bad = config_secret_safe(src)
+                if bad:
+                    imported.append({'kind': kind, 'ok': False, 'error': '配置里有明文密钥字段 %s' % bad})
+                    continue
+                cfg_obj = {k: v for k, v in src.items() if k not in ('enabled', 'interval_seconds')}
+                row = conn.execute('SELECT id FROM data_sources WHERE kind=? ORDER BY id LIMIT 1', (kind,)).fetchone()
+                sid = row['id'] if row else 'DS-' + secrets.token_hex(2).upper()
+                conn.execute('INSERT INTO data_sources(id, kind, name, config_json, interval_seconds, enabled,'
+                             ' approval_state, created_at, updated_at) VALUES(?,?,?,?,?,?,?,?,?)'
+                             ' ON CONFLICT(id) DO UPDATE SET config_json=excluded.config_json,'
+                             ' name=excluded.name, updated_at=excluded.updated_at',
+                             (sid, kind, str(cfg_obj.get('service') or cfg_obj.get('name') or kind + ' 采集源')[:60],
+                              json.dumps(cfg_obj, ensure_ascii=False), 60,
+                              1 if src.get('enabled') is not False else 0, '已生效', now_iso(), now_iso()))
+                imported.append({'kind': kind, 'ok': True, 'id': sid,
+                                 'enabled': src.get('enabled') is not False})
+            audit(conn, actor_of(self), 'collect_import', 'collector/config.json',
+                  '从采集脚本配置文件导入 %d 类资源（之后在系统里改，不再动文件）' % len(imported))
+            return self._json(HTTPStatus.OK, {'ok': True, 'imported': imported})
+
         # ---- v3.7 监控探针：目标可配（密钥只存环境变量名），采样入 metric_samples
         if key == 'monitor/target':
             if not self._need('compute', 'manage', 'denied_monitor_target'):
@@ -2208,6 +2499,9 @@ def main() -> None:
     monitor_stop = threading.Event()
     if os.environ.get('AIOPS_MONITOR', '1') != '0':
         threading.Thread(target=monitor_loop, args=(monitor_stop,), daemon=True, name='monitor').start()
+    collect_stop = threading.Event()
+    if os.environ.get('AIOPS_COLLECT', '1') != '0':
+        threading.Thread(target=collect_loop, args=(collect_stop,), daemon=True, name='collector').start()
 
     if not os.path.isfile(os.path.join(STATIC_DIR, 'index.html')):
         print('WARNING: %s/index.html not found - run npm run build first' % STATIC_DIR, file=sys.stderr)
