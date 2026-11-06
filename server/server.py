@@ -371,6 +371,10 @@ def upgrade_schema(conn) -> None:
                                    ('provider', "TEXT NOT NULL DEFAULT 'local'"),
                                    ('pw_changed_at', 'TEXT')])
     ensure_columns(conn, 'sessions', [('ref', 'TEXT'), ('csrf', 'TEXT')])
+    ensure_columns(conn, 'monitor_targets', [('metric_format', "TEXT NOT NULL DEFAULT 'json'"),
+                                            ('active_probe', 'INTEGER NOT NULL DEFAULT 0')])
+    ensure_columns(conn, 'metric_samples', [('req_total', 'REAL'), ('req_failed', 'REAL'),
+                                           ('req_seconds_sum', 'REAL')])
 
 
 def cfg(key: str, default: str = '') -> str:
@@ -525,7 +529,210 @@ def _pct(vals, p):
     return round(vals[min(len(vals) - 1, int(round(p * (len(vals) - 1))))], 1)
 
 
-def probe_model_target(t: dict):
+def _post_json(url: str, payload: dict, headers=None, timeout: int = 25):
+    req = urllib.request.Request(url, data=json.dumps(payload).encode(), method='POST')
+    req.add_header('Content-Type', 'application/json')
+    req.add_header('User-Agent', 'aiops-data-service/%s' % SERVER_VERSION)
+    for k, v in (headers or {}).items():
+        if v:
+            req.add_header(k, v)
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        raw = r.read().decode('utf-8', 'ignore')
+    return json.loads(raw) if raw.strip().startswith(('{', '[')) else raw
+
+
+def _prom_parse(text: str) -> dict:
+    """极简 Prometheus 文本解析：name{labels} value → {name: [(labels, value), ...]}"""
+    out = {}
+    for line in (text or '').split('\n'):
+        line = line.strip()
+        if not line or line.startswith('#'):
+            continue
+        i = line.rfind(' ')
+        if i < 0:
+            continue
+        key, val = line[:i], line[i + 1:]
+        try:
+            v = float(val.split(' ')[0])
+        except ValueError:
+            continue
+        name, _, labels = key.partition('{')
+        out.setdefault(name.strip(), []).append((labels.rstrip('}'), v))
+    return out
+
+
+def _prom_sum(m: dict, name: str):
+    if name not in m:
+        return None
+    return round(sum(v for _, v in m[name]), 6)
+
+
+def _prom_pick(m: dict, names) -> float:
+    for n in names:
+        v = _prom_sum(m, n)
+        if v is not None:
+            return v
+    return None
+
+
+def probe_openai_target(t: dict, base: str, headers: dict):
+    """只暴露 OpenAI 兼容接口的服务（llama-server / 兼容网关 / Ollama 前端）。
+
+    采得到的：可用性 + 往返时延 + 已注册模型（含量化口径）；开了主动探测还有
+    一次极小请求的时延与吞吐。采不到的（对方不开放）一律存 NULL，界面显示「对方未开放」，
+    不拿 0 冒充数据。
+    """
+    t0 = time.time()
+    health = _get_json(base + '/health', None, timeout=10)
+    health_ms = round((time.time() - t0) * 1000.0, 1)
+    models = _get_json(base + '/v1/models', headers, timeout=12)
+    lst = []
+    if isinstance(models, dict):
+        # 不同网关的 /v1/models 形状不一样：OpenAI 用 data，Ollama 型用 models（后者带量化口径）
+        lst = list(models.get('data') or []) + list(models.get('models') or [])
+    elif isinstance(models, list):
+        lst = models
+    names, specs = [], []
+    for mm in lst:
+        if not isinstance(mm, dict):
+            continue
+        nm = mm.get('id') or mm.get('name') or ''
+        if nm:
+            names.append(str(nm))
+        d = mm.get('details') or {}
+        spec = ' / '.join(x for x in [str(d.get('format') or ''), str(d.get('parameter_size') or ''),
+                                      str(d.get('quantization_level') or '')] if x)
+        if spec and spec not in specs:
+            specs.append(spec)
+    if not names:
+        raise ValueError('模型清单是空的（/v1/models 没返回模型）')
+    model = names[0]
+    toks, err, probe_note = None, 0.0, '没开主动探测（默认只读探活 + 模型清单）'
+    if t.get('active_probe'):
+        p0 = time.time()
+        r = _post_json(base + '/v1/chat/completions',
+                       {'model': model, 'messages': [{'role': 'user', 'content': 'ping'}],
+                        'max_tokens': 16, 'temperature': 0, 'stream': False}, headers, timeout=30)
+        dur = (time.time() - p0) * 1000.0
+        usage = (r.get('usage') or {}) if isinstance(r, dict) else {}
+        out = float(usage.get('completion_tokens') or 0)
+        fin = ''
+        if isinstance(r, dict):
+            ch = r.get('choices') or [{}]
+            fin = str(ch[0].get('finish_reason') or '')
+        if out > 0 and dur > 0:
+            toks = round(out / (dur / 1000.0), 1)
+        if fin and fin not in ('stop', 'length'):
+            err = 100.0
+        probe_note = '主动探测一次（上限 16 词元）：%s 毫秒 / 产出 %s 词元 / 结束原因 %s' % (round(dur), out, fin or '未回报')
+    sample = {
+        'service': t['name'], 'model': model, 'version': ' ; '.join(specs[:2]), 'status': '已采集',
+        'instances': 1, 'ready': 1, 'cards': int(t['cards'] or 1),
+        'qps': None, 'tokens_per_sec': toks, 'ttft_ms': None, 'p99_ms': None, 'queue_depth': None,
+        'kv_hit_pct': None, 'hbm_pct': None, 'err_pct': err,
+        'gpu_name': None, 'gpu_util': None, 'gpu_temp_c': None, 'gpu_power_w': None,
+        'gpu_mem_used_mib': None, 'gpu_mem_total_mib': None, 'req_window': None,
+        'req_total': None, 'req_failed': None, 'req_seconds_sum': None,
+        'note': 'OpenAI 兼容口径：/health %s 毫秒可用；/v1/models 注册 %d 个模型（%s）；%s。'
+                'QPS / 队列 / KV 命中 / 卡指标对方未开放（要服务端开 --metrics 或暴露 Prometheus 端点）'
+                % (health_ms, len(names), '、'.join(names[:3]), probe_note),
+    }
+    card = {'id': '%s-G1' % t['id'], 'target': t['id'], 'node': base, 'model': '对方未开放卡指标',
+            'util_pct': None, 'mem_used_mib': None, 'mem_total_mib': None, 'temp_c': None, 'power_w': None,
+            'cpu_pct': None, 'ram_used_mib': None, 'ram_total_mib': None, 'health': 'unknown',
+            'note': '这台只暴露 OpenAI 兼容接口；要卡指标：llama-server 加 --metrics，或另接 NVML / NPU Exporter'}
+    return sample, card
+
+
+def probe_prom_target(t: dict, base: str, headers: dict, prev=None):
+    """Prometheus 文本型 /metrics（llama-server --metrics、vLLM、 exporter）。
+
+    请求计数是累计值，所以 QPS / 错误率 / 平均时延用「本轮 − 上一轮」的增量算，
+    上一轮的累计值存在样本里（req_total / req_failed / req_seconds_sum）。
+    """
+    raw = _get_json(base + '/metrics', headers, timeout=12)
+    if isinstance(raw, dict):
+        return probe_json_target(t, base, headers)
+    m = _prom_parse(raw)
+    if not m:
+        raise ValueError('/metrics 没解析出指标（不是 Prometheus 文本？）')
+    total = _prom_pick(m, ('llama_promptions_processing_seconds_count', 'llama_promptions_total',
+                           'vllm:num_requests_total', 'http_requests_total', 'requests_total'))
+    failed = _prom_pick(m, ('llama_promptions_failed_total', 'llama_promptions_errored_total',
+                            'vllm:num_requests_failed_total', 'http_requests_failed_total'))
+    secs = _prom_pick(m, ('llama_promptions_processing_seconds_sum', 'vllm:request_success_total',
+                          'http_request_duration_seconds_sum'))
+    cache = _prom_pick(m, ('llama_kv_cache_usage_perc', 'vllm:gpu_cache_usage_perc',
+                           'vllm:gpu_cache_usage_bytes'))
+    queue = _prom_pick(m, ('llama_requests_waiting', 'llama_requests_queued', 'vllm:num_requests_waiting'))
+    active = _prom_pick(m, ('llama_requests_active', 'vllm:num_requests_running'))
+    gpu_util = _prom_pick(m, ('gpu_utilization', 'nvmt_gpu_utilization', 'DCGM_FI_DEV_GPU_UTIL'))
+    gpu_name = ''
+    for name in ('gpu_info', 'gpu_name', 'DCGM_FI_DEV_GPU_NAME'):
+        if name in m and m[name]:
+            pairs = re.findall(r'(\w+)="([^"]*)"', m[name][0][0])
+            for k, v in reversed(pairs):
+                if k in ('model', 'name', 'gpu_model', 'device') and v:
+                    gpu_name = v
+                    break
+            if not gpu_name and pairs:
+                gpu_name = pairs[-1][1]
+            break
+    qps = err = avg = None
+    delta = 0.0
+    if total is not None and prev and prev['req_total'] is not None:
+        d_req = total - float(prev['req_total'])
+        try:
+            dt = time.time() - datetime.fromisoformat(str(prev['at']).replace('Z', '+00:00')).timestamp()
+        except Exception:
+            dt = float(max(1, int(t['interval_seconds'] or 30)))
+        if dt > 0 and d_req >= 0:
+            delta = d_req
+            qps = round(d_req / dt, 3)
+            if failed is not None and prev['req_failed'] is not None and d_req > 0:
+                err = round(100.0 * max(0.0, failed - float(prev['req_failed'])) / d_req, 2)
+            if secs is not None and prev['req_seconds_sum'] is not None and d_req > 0:
+                avg = round((secs - float(prev['req_seconds_sum'])) / d_req * 1000.0, 1)
+    hbm = None
+    if cache is not None:
+        hbm = round(cache * 100.0, 1) if cache <= 1.0 else round(cache, 1)
+    used = _prom_pick(m, ('gpu_memory_used_bytes', 'nvmt_fb_used_bytes', 'DCGM_FI_DEV_FB_USED'))
+    total_mem = _prom_pick(m, ('gpu_memory_total_bytes', 'nvmt_fb_total_bytes', 'DCGM_FI_DEV_FB_TOTAL'))
+    temp = _prom_pick(m, ('gpu_temperature_celsius', 'nvmt_temp_celsius', 'DCGM_FI_DEV_GPU_TEMP'))
+    power = _prom_pick(m, ('gpu_power_watts', 'nvmt_power_draw_watts', 'DCGM_FI_DEV_POWER_USAGE'))
+    sample = {
+        'service': t['name'], 'model': str(t['name']), 'version': 'Prometheus 口径', 'status': '已采集',
+        'instances': 1, 'ready': 1, 'cards': int(t['cards'] or 1),
+        'qps': qps, 'tokens_per_sec': _prom_pick(m, ('llama_generate_tokens_per_second', 'tokens_per_second')),
+        'ttft_ms': _prom_pick(m, ('llama_decode_seconds_count', 'ttft_seconds_sum')), 'p99_ms': avg,
+        'queue_depth': int(queue) if queue is not None else None,
+        'kv_hit_pct': _prom_pick(m, ('llama_prompt_cache_usage_perc', 'llama_cache_hit_rate')),
+        'hbm_pct': hbm, 'err_pct': err,
+        'gpu_name': gpu_name or None, 'gpu_util': gpu_util,
+        'gpu_temp_c': temp, 'gpu_power_w': power,
+        'gpu_mem_used_mib': round(used / 1048576.0, 1) if used is not None else None,
+        'gpu_mem_total_mib': round(total_mem / 1048576.0, 1) if total_mem is not None else None,
+        'req_window': int(delta) if delta else (int(total) if total is not None else None),
+        'req_total': total, 'req_failed': failed, 'req_seconds_sum': secs,
+        'note': 'Prometheus 文本口径：解析到 %d 类指标；本轮相对上一轮新增 %s 个请求；'
+                '活跃 %s / 排队 %s；缓存占用 %s%%；卡指标 %s'
+                % (len(m), delta if delta else '—', active if active is not None else '对方未开放',
+                   queue if queue is not None else '对方未开放',
+                   hbm if hbm is not None else '对方未开放',
+                   '有' if gpu_util is not None else '对方未开放（要 --metrics 或 GPU Exporter）'),
+    }
+    has_card = any(v is not None for v in (gpu_util, temp, power, used))
+    card = {'id': '%s-G1' % t['id'], 'target': t['id'], 'node': base,
+            'model': gpu_name or ('对方未开放卡指标' if not has_card else '未标注卡型'),
+            'util_pct': gpu_util, 'mem_used_mib': sample['gpu_mem_used_mib'],
+            'mem_total_mib': sample['gpu_mem_total_mib'], 'temp_c': temp, 'power_w': power,
+            'cpu_pct': None, 'ram_used_mib': None, 'ram_total_mib': None,
+            'health': 'unknown' if not has_card else 'ok',
+            'note': '来自对方 Prometheus 端点' if has_card else '这台没暴露卡指标（要 --metrics 或 GPU/NPU Exporter）'}
+    return sample, card
+
+
+def probe_model_target(t: dict, prev=None):
     """拉一台推理服务的 /metrics 与 /health，算出监控样本与卡指标。
 
     兼容「JSON 指标」型服务（engine / live / requests / hardware / totals 这种结构）。
@@ -538,6 +745,11 @@ def probe_model_target(t: dict):
     key = os.environ.get(t['api_key_env'] or '', '')
     if key:
         headers['Authorization'] = 'Bearer %s' % key
+    fmt = str(t.get('metric_format') or 'json').lower()
+    if fmt == 'openai':
+        return probe_openai_target(t, base, headers)
+    if fmt == 'prometheus':
+        return probe_prom_target(t, base, headers, prev)
     metrics = _get_json(base + '/metrics', headers, timeout=12)
     if not isinstance(metrics, dict):
         raise ValueError('指标接口返回的不是 JSON 对象（这类服务要按 Prometheus 文本解析）')
@@ -611,8 +823,10 @@ def trim_samples(conn) -> None:
 
 def record_probe(t: dict, actor: str = 'monitor') -> dict:
     conn = db()
+    prev = conn.execute('SELECT req_total, req_failed, req_seconds_sum, at FROM metric_samples'
+                        ' WHERE target=? ORDER BY id DESC LIMIT 1', (t['id'],)).fetchone()
     try:
-        sample, card = probe_model_target(t)
+        sample, card = probe_model_target(dict(t), prev)
     except Exception as exc:
         msg = '取数失败：%s' % (str(exc)[:150])
         conn.execute('INSERT INTO metric_samples(target, service, status, note, at) VALUES(?,?,?,?,?)',
@@ -628,13 +842,16 @@ def record_probe(t: dict, actor: str = 'monitor') -> dict:
     conn.execute(
         'INSERT INTO metric_samples(target, service, model, version, status, instances, ready, cards, qps,'
         ' tokens_per_sec, ttft_ms, p99_ms, queue_depth, kv_hit_pct, hbm_pct, err_pct, gpu_name, gpu_util,'
-        ' gpu_temp_c, gpu_power_w, gpu_mem_used_mib, gpu_mem_total_mib, req_window, note, at)'
-        ' VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+        ' gpu_temp_c, gpu_power_w, gpu_mem_used_mib, gpu_mem_total_mib, req_window,'
+        ' req_total, req_failed, req_seconds_sum, note, at)'
+        ' VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
         (t['id'], sample['service'], sample['model'], sample['version'], sample['status'],
          sample['instances'], sample['ready'], sample['cards'], sample['qps'], sample['tokens_per_sec'],
          sample['ttft_ms'], sample['p99_ms'], sample['queue_depth'], sample['kv_hit_pct'], sample['hbm_pct'],
          sample['err_pct'], sample['gpu_name'], sample['gpu_util'], sample['gpu_temp_c'], sample['gpu_power_w'],
-         sample['gpu_mem_used_mib'], sample['gpu_mem_total_mib'], sample['req_window'], sample['note'], now_iso()))
+         sample['gpu_mem_used_mib'], sample['gpu_mem_total_mib'], sample['req_window'],
+         sample.get('req_total'), sample.get('req_failed'), sample.get('req_seconds_sum'),
+         sample['note'], now_iso()))
     conn.execute(
         'INSERT INTO gpu_cards(id, target, node, model, util_pct, mem_used_mib, mem_total_mib, temp_c, power_w,'
         ' cpu_pct, ram_used_mib, ram_total_mib, health, note, updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)'
@@ -985,7 +1202,7 @@ CSV_COLUMNS = {
     'metric_samples': ['id', 'target', 'service', 'model', 'version', 'status', 'instances', 'ready', 'cards',
                        'qps', 'tokens_per_sec', 'ttft_ms', 'p99_ms', 'queue_depth', 'kv_hit_pct', 'hbm_pct',
                        'err_pct', 'gpu_name', 'gpu_util', 'gpu_temp_c', 'gpu_power_w', 'gpu_mem_used_mib',
-                       'gpu_mem_total_mib', 'req_window', 'note', 'at'],
+                       'gpu_mem_total_mib', 'req_window', 'req_total', 'req_failed', 'req_seconds_sum', 'note', 'at'],
     'gpu_cards': ['id', 'target', 'node', 'model', 'util_pct', 'mem_used_mib', 'mem_total_mib', 'temp_c',
                   'power_w', 'cpu_pct', 'ram_used_mib', 'ram_total_mib', 'health', 'note', 'updated_at'],
 }
@@ -1852,6 +2069,10 @@ class Handler(BaseHTTPRequestHandler):
             if not base.startswith('http://') and not base.startswith('https://'):
                 return self._json(HTTPStatus.BAD_REQUEST, {'ok': False,
                                                            'error': '监控地址要写全 http:// 或 https:// 开头'})
+            fmt = str(b.get('metric_format') or 'json').lower()
+            if fmt not in ('json', 'openai', 'prometheus'):
+                return self._json(HTTPStatus.BAD_REQUEST, {'ok': False,
+                                                           'error': '取数口径只能是 json / openai / prometheus'})
             try:
                 interval = max(5, min(3600, int(b.get('interval_seconds') or 30)))
                 window = max(30, min(3600, int(b.get('window_seconds') or 300)))
@@ -1859,16 +2080,20 @@ class Handler(BaseHTTPRequestHandler):
             except (TypeError, ValueError):
                 return self._json(HTTPStatus.BAD_REQUEST, {'ok': False, 'error': '间隔 / 窗口 / 卡数要是整数'})
             conn.execute('INSERT INTO monitor_targets(id, name, base, api_key_env, pool, cards, window_seconds,'
-                         ' interval_seconds, enabled, created_at, updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)'
+                         ' interval_seconds, metric_format, active_probe, enabled, created_at, updated_at)'
+                         ' VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)'
                          ' ON CONFLICT(id) DO UPDATE SET name=excluded.name, base=excluded.base,'
                          ' api_key_env=excluded.api_key_env, pool=excluded.pool, cards=excluded.cards,'
                          ' window_seconds=excluded.window_seconds, interval_seconds=excluded.interval_seconds,'
+                         ' metric_format=excluded.metric_format, active_probe=excluded.active_probe,'
                          ' enabled=excluded.enabled, updated_at=excluded.updated_at',
                          (tid, name, base, str(b.get('api_key_env') or '')[:60], str(b.get('pool') or 'hp')[:20],
-                          cards, window, interval, 0 if b.get('enabled') is False else 1, now_iso(), now_iso()))
+                          cards, window, interval, fmt, 1 if b.get('active_probe') else 0,
+                          0 if b.get('enabled') is False else 1, now_iso(), now_iso()))
             audit(conn, actor_of(self), 'monitor_target_put', tid,
                   '%s → %s（间隔 %s 秒 / 窗口 %s 秒 / 密钥环境变量 %s / 启用=%s）'
-                  % (name, base, interval, window, b.get('api_key_env') or '无', b.get('enabled', True)))
+                  % (name, base, interval, window, b.get('api_key_env') or '无', b.get('enabled', True))
+                  + ' / 取数口径 %s / 主动探测 %s' % (fmt, '开' if b.get('active_probe') else '关'))
             out = {'ok': True, 'id': tid}
             row = conn.execute('SELECT * FROM monitor_targets WHERE id=?', (tid,)).fetchone()
             if row and b.get('probe') and row['enabled']:

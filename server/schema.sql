@@ -258,6 +258,8 @@ CREATE TABLE IF NOT EXISTS monitor_targets(
   name TEXT NOT NULL,              -- 目标显示名
   base TEXT NOT NULL,              -- 例：http://10.20.14.21:8081
   api_key_env TEXT,                -- 取密钥的环境变量名（不存密钥本身）
+  metric_format TEXT NOT NULL DEFAULT 'json',  -- json（自带 /metrics JSON）| prometheus（文本 /metrics）| openai（只有 OpenAI 兼容接口）
+  active_probe INTEGER NOT NULL DEFAULT 0,     -- 1 = 每轮主动发一个极小 chat 请求测时延（默认 0，只读）
   pool TEXT NOT NULL DEFAULT 'hp',
   cards INTEGER NOT NULL DEFAULT 1,
   window_seconds INTEGER NOT NULL DEFAULT 300,
@@ -279,6 +281,9 @@ CREATE TABLE IF NOT EXISTS metric_samples(
   gpu_name TEXT, gpu_util REAL, gpu_temp_c REAL, gpu_power_w REAL,
   gpu_mem_used_mib REAL, gpu_mem_total_mib REAL,
   req_window INTEGER,              -- 统计窗口内的请求条数
+  req_total REAL,                  -- 对方累计请求计数（prometheus 型用来算增量）
+  req_failed REAL,                 -- 对方累计失败计数
+  req_seconds_sum REAL,            -- 对方累计处理时长（用来算平均时延）
   note TEXT,
   at TEXT NOT NULL
 );

@@ -283,16 +283,17 @@ export default function ComputeCards() {
             <Table minWidth={1100} head={['卡（实连）', '所在节点', '利用率', '显存占用', '温度', '功耗', '主机侧 CPU / 内存', '健康 / 说明']} rows={mon.cards.map((c) => [
               <span className="small strong">{c.model || '未标注卡型'}<div className="tiny mono faint">{c.id}</div></span>,
               <span className="tiny">{c.node}</span>,
-              <span><span className="num small">{c.util_pct}%</span><Progress value={Number(c.util_pct || 0)} tone={c.util_pct > UTIL_MAX ? 'warn' : ''} /></span>,
-              <span><span className="num small">{Math.round(c.mem_used_mib)} / {Math.round(c.mem_total_mib)} MiB</span><Progress value={c.mem_total_mib ? (c.mem_used_mib / c.mem_total_mib) * 100 : 0} tone="green" /></span>,
-              <span className="num small">{c.temp_c} ℃{c.temp_c > TEMP_MAX ? <Badge tone="warn">超阈值</Badge> : null}</span>,
-              <span className="num small">{c.power_w} W</span>,
-              <span className="tiny">{c.cpu_pct}% / {Math.round(c.ram_used_mib)} / {Math.round(c.ram_total_mib)} MiB</span>,
-              <span>{c.health === 'ok' ? <Badge tone="good">正常</Badge> : <Badge tone="warn">要注意</Badge>}<div className="tiny faint" style={{ maxWidth: 280 }}>{c.note}</div></span>,
+              <span>{c.util_pct === null ? <span className="tiny faint">对方未开放</span> : (<><span className="num small">{c.util_pct}%</span><Progress value={Number(c.util_pct)} tone={c.util_pct > UTIL_MAX ? 'warn' : ''} /></>)}</span>,
+              <span>{c.mem_used_mib === null || c.mem_total_mib === null ? <span className="tiny faint">对方未开放</span> : (<><span className="num small">{Math.round(c.mem_used_mib)} / {Math.round(c.mem_total_mib)} MiB</span><Progress value={(c.mem_used_mib / c.mem_total_mib) * 100} tone="green" /></>)}</span>,
+              <span className="num small">{c.temp_c === null ? <span className="tiny faint">对方未开放</span> : (<>{c.temp_c} ℃{c.temp_c > TEMP_MAX ? <Badge tone="warn">超阈值</Badge> : null}</>)}</span>,
+              <span className="num small">{c.power_w === null ? <span className="tiny faint">对方未开放</span> : `${c.power_w} W`}</span>,
+              <span className="tiny">{c.cpu_pct === null || c.ram_used_mib === null || c.ram_total_mib === null ? <span className="tiny faint">对方未开放</span> : `${c.cpu_pct}% / ${Math.round(c.ram_used_mib)} / ${Math.round(c.ram_total_mib)} MiB`}</span>,
+              <span>{c.health === 'ok' ? <Badge tone="good">正常</Badge> : c.health === 'unknown' ? <Badge tone="muted">无卡指标</Badge> : <Badge tone="warn">要注意</Badge>}<div className="tiny faint" style={{ maxWidth: 280 }}>{c.note}</div></span>,
             ])} />
           )}
           <div className="tiny faint" style={{ marginTop: 8 }}>
-            口径要说清：上面这张表是<b>真实拉到的</b>卡指标（探针只读 GET 对方服务的 /metrics）；
+            口径要说清：上面这张表是<b>真实从对方拉到的</b>卡指标（探针只读 GET）；对方只给 OpenAI 兼容接口（没开 <span className="mono">--metrics</span> / 没有 GPU Exporter）时，
+            这一行会写「对方未开放」而不是填 0 —— 要让这台也出卡指标，就在它上面开 llama-server <span className="mono">--metrics</span> 或接 NVML / NPU Exporter，然后把目标的取数口径改成 Prometheus 文本。
             本页上面的 64 张卡网格与下面触阈值统计仍是<b>平台推导的演示口径</b>（昇腾 910B 那套），两者不要混着看。
             接昇腾真实卡时走同一张 <span className="mono">gpu_cards</span> 表，把 NPU Exporter 或 npu-smi 的读数写进来即可，页面不用改。
           </div>

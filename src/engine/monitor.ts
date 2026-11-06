@@ -8,19 +8,21 @@ import { apiGet, apiSend } from './db'
 
 export interface MonitorTarget {
   id: string; name: string; base: string; api_key_env: string; pool: string; cards: number
-  window_seconds: number; interval_seconds: number; enabled: number; last_status: string; last_error: string
+  window_seconds: number; interval_seconds: number; metric_format: string; active_probe: number
+  enabled: number; last_status: string; last_error: string
 }
 export interface MetricSample {
   id: number; target: string; service: string; model: string; version: string; status: string
-  instances: number; ready: number; cards: number; qps: number; tokens_per_sec: number
-  ttft_ms: number; p99_ms: number; queue_depth: number; kv_hit_pct: number; hbm_pct: number
-  err_pct: number; gpu_name: string; gpu_util: number; gpu_temp_c: number; gpu_power_w: number
+  instances: number; ready: number; cards: number; qps: number | null; tokens_per_sec: number | null
+  ttft_ms: number | null; p99_ms: number | null; queue_depth: number | null; kv_hit_pct: number | null; hbm_pct: number | null
+  err_pct: number | null; gpu_name: string | null; gpu_util: number | null; gpu_temp_c: number | null; gpu_power_w: number | null
   gpu_mem_used_mib: number; gpu_mem_total_mib: number; req_window: number; note: string; at: string
 }
 export interface GpuCardRow {
-  id: string; target: string; node: string; model: string; util_pct: number
-  mem_used_mib: number; mem_total_mib: number; temp_c: number; power_w: number
-  cpu_pct: number; ram_used_mib: number; ram_total_mib: number; health: string; note: string; updated_at: string
+  id: string; target: string; node: string; model: string; util_pct: number | null
+  mem_used_mib: number | null; mem_total_mib: number | null; temp_c: number | null; power_w: number | null
+  cpu_pct: number | null; ram_used_mib: number | null; ram_total_mib: number | null
+  health: string; note: string; updated_at: string
 }
 export interface MonitorState { thread: boolean; last_run_at: string; last_error: string; probes: number; failures: number }
 
@@ -72,7 +74,8 @@ export const monitorStore = {
       const r = await apiSend('POST', '/monitor/target', {
         id: t.id, name: t.name, base: t.base, api_key_env: t.api_key_env || '',
         pool: t.pool || 'hp', cards: t.cards ?? 1, window_seconds: t.window_seconds ?? 300,
-        interval_seconds: t.interval_seconds ?? 30, enabled: t.enabled !== 0, probe: !!t.probe,
+        interval_seconds: t.interval_seconds ?? 30, metric_format: t.metric_format || 'json',
+        active_probe: !!t.active_probe, enabled: t.enabled !== 0, probe: !!t.probe,
       })
       await monitorStore.refresh()
       return r
@@ -99,6 +102,12 @@ export function sampleTime(iso: string): string {
 export function sampleClock(iso: string): string {
   const t = sampleTime(iso)
   return t.length >= 8 ? t.slice(-8) : t
+}
+
+/** 对方不开放的指标存 NULL，界面不能拿 0 冒充数据 */
+export function metricNum(v: number | null | undefined, unit = ''): string {
+  if (v === null || v === undefined) return '对方未开放'
+  return `${v}${unit}`
 }
 
 export function useMonitor(): MonitorStore {

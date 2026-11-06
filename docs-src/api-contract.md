@@ -247,5 +247,11 @@ python3 server/server.py --reset             # 清空数据库后退出
 - 取数失败也写一条 `status='取数失败'` 的样本 + 审计 `monitor_probe_failed`：断连在台账里看得见，不会静默变空页。
 - 采样保留 `SAMPLE_RETENTION_HOURS`（默认 24 小时）与上限 20000 行，超出的按最旧的删。
 - `metric_samples` / `gpu_cards` / `monitor_targets` 不在「重置演示数据」的清理范围里（真实观测不被演示重置抹掉）。
-- 兼容性：探针按「JSON 指标」型服务解析（`engine` / `live` / `requests` / `hardware` / `hardware_static` / `totals`）；
-  Prometheus 文本型的卡指标仍走采集层 `collector/collect.py`（`services.format = "json"` 时采集脚本也支持同一型服务）。
+- 取数口径三种，按目标选（字段 `metric_format`）：
+  | 口径 | 对方要有什么 | 采得到 | 采不到时怎么写 |
+  |---|---|---|---|
+  | `json` | 自己的 `/metrics` 返回 JSON（engine / live / requests / hardware / totals 这种结构） | QPS、吞吐、TTFT、P99、队列、KV 命中、显存、卡利用率 / 温度 / 功耗、主机 CPU 与内存 | — |
+  | `prometheus` | `/metrics` 是 Prometheus 文本（llama-server 加 `--metrics`、vLLM、NVML / NPU Exporter） | 用「本轮 − 上一轮」的累计计数增量算 QPS / 错误率 / 平均时延；解析 KV 占用、排队、卡利用率 / 温度 / 功耗 / 显存 | 对方没写的字段存 NULL，界面显示「对方未开放」 |
+  | `openai` | 只有 OpenAI 兼容接口（`/health` + `/v1/models`） | 可用性 + 往返时延 + 已注册模型与量化口径；`active_probe=1` 时再加一次 16 词元小请求的时延与吞吐 | QPS / 队列 / KV 命中 / 全部卡指标 → NULL，卡台账那一行标「对方未开放卡指标」 |
+- `active_probe`（默认 0）：开了才会主动发一个 16 词元的 `POST /v1/chat/completions`；关掉就完全只读。
+- 卡指标 NULL 不会被写成 0：`gpu_cards.health = 'unknown'`，界面显示「无卡指标」而不是「正常」。
