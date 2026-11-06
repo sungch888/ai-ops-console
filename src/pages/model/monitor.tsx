@@ -10,13 +10,66 @@ import {Badge, Callout, Kpi, PageHead, Panel, Progress, State, Table, Tip} from 
 import { AXIS_COLOR, CHART_COLORS, Chart, GRID, SPLIT_COLOR, TOOLTIP_STYLE } from '../../components/Chart'
 import { inferenceServices, sourceHint, telemetryStatus, telemetryStore, type InferenceService } from '../../engine/telemetry'
 import { engine, useEngine } from '../../engine/engine'
-import { metricNum, monitorStore, sampleClock, sampleTime, useMonitor } from '../../engine/monitor'
+import { metricNum, monitorStore, sampleClock, sampleTime, useMonitor, type MetricSample } from '../../engine/monitor'
 import { usePerm } from '../../engine/auth'
 
 /* 需要动作的判定口径（与例外监控「资源异常」规则同源） */
 const ERR_MAX = 2.4
 const QUEUE_MAX = 40
 const TTFT_MAX = 900
+
+const BUCKET_CHOICES = [10, 15, 30, 60]
+
+/** 分段宽度按采样时间跨度自动挑：图上最多 48 段，太少就换成更粗的段 */
+function pickBucketMinutes(samples: MetricSample[]): number {
+  if (samples.length < 2) return BUCKET_CHOICES[0]
+  const ts = samples.map((x) => new Date(x.at).getTime()).filter((t) => !Number.isNaN(t))
+  const span = (Math.max(...ts) - Math.min(...ts)) / 60000
+  for (const c of BUCKET_CHOICES) if (span / c <= 48) return c
+  return 120
+}
+const TEMP_MAX = 85
+const HBM_MAX = 95
+
+/** 采样按 N 分钟聚合成一段：平均画面积、最差值画虚线。原始点全画就是几百条乱线。 */
+function bucketize(samples: MetricSample[], minutes: number) {
+  const step = minutes * 60 * 1000
+  const groups = new Map<number, MetricSample[]>()
+  for (const x of samples) {
+    const slot = Math.floor(new Date(x.at).getTime() / step)
+    const arr = groups.get(slot)
+    if (arr) arr.push(x); else groups.set(slot, [x])
+  }
+  const stat = (vals: (number | null)[], worst: boolean): number | null => {
+    const got = vals.filter((v): v is number => typeof v === 'number' && !Number.isNaN(v))
+    if (!got.length) return null
+    return worst ? Math.max(...got) : Math.round(got.reduce((a, b) => a + b, 0) / got.length)
+  }
+  const out: {
+    t: string; avgTtft: number | null; maxTtft: number | null; avgP99: number | null; maxP99: number | null;
+    avgHbm: number | null; maxHbm: number | null; avgTemp: number | null; maxTemp: number | null;
+    avgUtil: number | null; maxUtil: number | null;
+  }[] = []
+  for (const slot of Array.from(groups.keys()).sort((a, b) => a - b)) {
+    const g = groups.get(slot) || []
+    const d = new Date(slot * step)
+    out.push({
+      t: `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`,
+      avgTtft: stat(g.map((x) => x.ttft_ms), false), maxTtft: stat(g.map((x) => x.ttft_ms), true),
+      avgP99: stat(g.map((x) => x.p99_ms), false), maxP99: stat(g.map((x) => x.p99_ms), true),
+      avgHbm: stat(g.map((x) => x.hbm_pct), false), maxHbm: stat(g.map((x) => x.hbm_pct), true),
+      avgTemp: stat(g.map((x) => x.gpu_temp_c), false), maxTemp: stat(g.map((x) => x.gpu_temp_c), true),
+      avgUtil: stat(g.map((x) => x.gpu_util), false), maxUtil: stat(g.map((x) => x.gpu_util), true),
+    })
+  }
+  return out
+}
+
+const SIDE: Record<'util' | 'hbm' | 'temp', { label: string; short: string; unit: string; warn: number | null; max: number | null }> = {
+  util: { label: '卡利用率', short: '利用率 %', unit: '%', warn: null, max: 100 },
+  hbm: { label: '显存 / KV 占用', short: '显存 %', unit: '%', warn: HBM_MAX, max: 100 },
+  temp: { label: '卡温', short: '卡温 ℃', unit: '℃', warn: TEMP_MAX, max: null },
+}
 
 const SVC_TONE: Record<InferenceService['health'], 'good' | 'warn' | 'bad'> = { ok: 'good', warn: 'warn', bad: 'bad' }
 const SVC_TEXT: Record<InferenceService['health'], string> = { ok: '正常', warn: '阈值附近', bad: '异常' }
@@ -27,6 +80,9 @@ export default function ModelMonitor() {
   const perm = usePerm('gateway')
   const [nonce, setNonce] = useState(0)
   const mon = useMonitor()
+  const [sideMetric, setSideMetric] = useState<'util' | 'hbm' | 'temp'>('util')
+  const bucketMin = pickBucketMinutes(mon.samples)
+  const buckets = bucketize(mon.samples, bucketMin)
   const canProbe = usePerm('compute').manage
   const [tgt, setTgt] = useState({ name: '', base: '', api_key_env: '', interval_seconds: 30, window_seconds: 300, metric_format: 'openai', active_probe: 1 })
   const [monMsg, setMonMsg] = useState<{ ok: boolean; text: string } | null>(null)
@@ -353,30 +409,36 @@ export default function ModelMonitor() {
           </div>
           {monMsg ? <div className="tiny" style={{ marginTop: 8, color: monMsg.ok ? 'var(--ok-text)' : 'var(--bad-text)' }}>{monMsg.text}</div> : null}
 
-          {mon.samples.length > 1 ? (
+          {buckets.length > 1 ? (
             <div className="grid g-21" style={{ marginTop: 12 }}>
-              <Panel title="时延趋势（最近采样）" bodyClass="tight">
-                <Chart height={190} option={{
-                  color: CHART_COLORS, tooltip: { ...TOOLTIP_STYLE, trigger: 'axis' }, grid: GRID,
-                  legend: { data: ['首包 TTFT', 'P99 时延'], top: 0, textStyle: { color: AXIS_COLOR, fontSize: 11.5 } },
-                  xAxis: { type: 'category', boundaryGap: false, data: mon.samples.slice().reverse().map((x) => sampleClock(x.at)), axisLine: { lineStyle: { color: SPLIT_COLOR } }, axisLabel: { color: AXIS_COLOR, fontSize: 10.5 } },
-                  yAxis: { type: 'value', name: '毫秒', axisLabel: { color: AXIS_COLOR }, splitLine: { lineStyle: { color: SPLIT_COLOR } } },
+              <Panel title={'时延趋势（' + bucketMin + ' 分钟平均 · 阈值 ' + TTFT_MAX + ' 毫秒）'} bodyClass="tight"
+                extra={<Tip label="图上为什么不是每一个点" text={'原始采样 ' + mon.tick + ' 秒一轮，库里最多留 ' + mon.retention + ' 小时，共 ' + mon.total + ' 条。全画在一张图上就是几百条乱线，这里按 ' + bucketMin + ' 分钟聚合成一段：实心面积是平均，虚线是该段最差值。P99 默认不画，点图例可以打开。'} />}>
+                <Chart height={196} option={{
+                  color: CHART_COLORS, tooltip: { ...TOOLTIP_STYLE, trigger: 'axis' }, grid: { ...GRID, top: 34 },
+                  legend: { data: ['首包 TTFT（平均）', 'TTFT 最差值', 'P99 时延'], top: 0, textStyle: { color: AXIS_COLOR, fontSize: 12 }, selected: { 'P99 时延': false } },
+                  xAxis: { type: 'category', boundaryGap: false, data: buckets.map((b) => b.t), axisLine: { lineStyle: { color: SPLIT_COLOR } }, axisLabel: { color: AXIS_COLOR, fontSize: 10.5, interval: 'auto', hideOverlap: true } },
+                  yAxis: { type: 'value', name: '毫秒', nameTextStyle: { color: AXIS_COLOR }, axisLabel: { color: AXIS_COLOR }, splitLine: { lineStyle: { color: SPLIT_COLOR } }, splitNumber: 3 },
                   series: [
-                    { name: '首包 TTFT', type: 'line', smooth: true, symbol: 'none', connectNulls: false, data: mon.samples.slice().reverse().map((x) => x.ttft_ms) },
-                    { name: 'P99 / 平均时延', type: 'line', smooth: true, symbol: 'none', connectNulls: false, data: mon.samples.slice().reverse().map((x) => x.p99_ms) },
+                    { name: '首包 TTFT（平均）', type: 'line', smooth: false, symbol: 'none', connectNulls: false, lineStyle: { width: 2 }, areaStyle: { opacity: 0.16 }, data: buckets.map((b) => b.avgTtft),
+                      markLine: { silent: true, symbol: 'none', data: [{ yAxis: TTFT_MAX }], lineStyle: { type: 'dashed', color: '#ff6b6b', width: 1.4 }, label: { formatter: '阈值 ' + TTFT_MAX + ' 毫秒', position: 'insideEndTop', fontSize: 11 } } },
+                    { name: 'TTFT 最差值', type: 'line', smooth: false, symbol: 'none', connectNulls: false, lineStyle: { width: 1.2, type: 'dashed' }, data: buckets.map((b) => b.maxTtft) },
+                    { name: 'P99 时延', type: 'line', smooth: false, symbol: 'none', connectNulls: false, lineStyle: { width: 1.4 }, data: buckets.map((b) => b.avgP99) },
                   ],
                 }} />
               </Panel>
-              <Panel title="算力侧趋势（同一轮采样）" bodyClass="tight">
-                <Chart height={190} option={{
-                  color: CHART_COLORS, tooltip: { ...TOOLTIP_STYLE, trigger: 'axis' }, grid: GRID,
-                  legend: { data: ['显存占用 %', '卡温 ℃', '卡利用率 %'], top: 0, textStyle: { color: AXIS_COLOR, fontSize: 11.5 } },
-                  xAxis: { type: 'category', boundaryGap: false, data: mon.samples.slice().reverse().map((x) => sampleClock(x.at)), axisLine: { lineStyle: { color: SPLIT_COLOR } }, axisLabel: { color: AXIS_COLOR, fontSize: 10.5 } },
-                  yAxis: { type: 'value', axisLabel: { color: AXIS_COLOR }, splitLine: { lineStyle: { color: SPLIT_COLOR } } },
+              <Panel title={'算力侧趋势（' + SIDE[sideMetric].label + ' · ' + bucketMin + ' 分钟平均）'} bodyClass="tight"
+                extra={<div className="row gap6"><div className="tabs">{(['util', 'hbm', 'temp'] as const).map((k) => (
+                  <span key={k} className={'tab' + (sideMetric === k ? ' active' : '')} onClick={() => setSideMetric(k)}>{SIDE[k].short}</span>
+                ))}</div><Tip label="三个指标为什么分开画" text="显存 % 与卡温 ℃ 不是一个量纲，挤在同一个纵轴上必然互相压成乱线；这里一次只画一个指标：面积是平均，虚线是该段最差值，虚线红标是告警阈值。要看另一个指标点上面的切换。" /></div>}>
+                <Chart height={196} option={{
+                  color: CHART_COLORS, tooltip: { ...TOOLTIP_STYLE, trigger: 'axis' }, grid: { ...GRID, top: 30 },
+                  legend: { data: [SIDE[sideMetric].label + '（平均）', SIDE[sideMetric].label + ' 最差值'], top: 0, textStyle: { color: AXIS_COLOR, fontSize: 12 } },
+                  xAxis: { type: 'category', boundaryGap: false, data: buckets.map((b) => b.t), axisLine: { lineStyle: { color: SPLIT_COLOR } }, axisLabel: { color: AXIS_COLOR, fontSize: 10.5, interval: 'auto', hideOverlap: true } },
+                  yAxis: { type: 'value', name: SIDE[sideMetric].unit, max: SIDE[sideMetric].max, nameTextStyle: { color: AXIS_COLOR }, axisLabel: { color: AXIS_COLOR }, splitLine: { lineStyle: { color: SPLIT_COLOR } }, splitNumber: 3 },
                   series: [
-                    { name: '显存 / KV 占用 %', type: 'line', smooth: true, symbol: 'none', connectNulls: false, data: mon.samples.slice().reverse().map((x) => x.hbm_pct) },
-                    { name: '卡温 ℃', type: 'line', smooth: true, symbol: 'none', connectNulls: false, data: mon.samples.slice().reverse().map((x) => x.gpu_temp_c) },
-                    { name: '卡利用率 %', type: 'line', smooth: true, symbol: 'none', connectNulls: false, data: mon.samples.slice().reverse().map((x) => x.gpu_util) },
+                    { name: SIDE[sideMetric].label + '（平均）', type: 'line', smooth: false, symbol: 'none', connectNulls: false, lineStyle: { width: 2 }, areaStyle: { opacity: 0.16 }, data: buckets.map((b) => (sideMetric === 'util' ? b.avgUtil : sideMetric === 'hbm' ? b.avgHbm : b.avgTemp)),
+                      ...(SIDE[sideMetric].warn ? { markLine: { silent: true, symbol: 'none', data: [{ yAxis: SIDE[sideMetric].warn }], lineStyle: { type: 'dashed', color: '#ff6b6b', width: 1.4 }, label: { formatter: '阈值 ' + SIDE[sideMetric].warn + SIDE[sideMetric].unit, position: 'insideEndTop', fontSize: 11 } } } : {}) },
+                    { name: SIDE[sideMetric].label + ' 最差值', type: 'line', smooth: false, symbol: 'none', connectNulls: false, lineStyle: { width: 1.2, type: 'dashed' }, data: buckets.map((b) => (sideMetric === 'util' ? b.maxUtil : sideMetric === 'hbm' ? b.maxHbm : b.maxTemp)) },
                   ],
                 }} />
               </Panel>
