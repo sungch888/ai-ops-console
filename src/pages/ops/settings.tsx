@@ -256,7 +256,7 @@ export default function OpsSettings() {
               {['0', '10', '15', '30', '60'].map((v) => <option key={v} value={v}>{v === '0' ? '兜底工单不自动升级' : '兜底挂 ' + v + ' 分钟没人接管就升级'}</option>)}
             </select>
             <button className="btn sm ghost" disabled={!matrixPerm.manage}
-              onClick={() => void apiSend('POST', '/api/monitor/sweep', {}).then((r) => setColMsg({
+              onClick={() => void apiSend('POST', '/monitor/sweep', {}).then((r) => setColMsg({
                 ok: !!r.ok,
                 text: r.ok ? '巡检兜底工单：升级 ' + (r.escalated ?? 0) + ' 张（挂太久没人接管的派给带班角色）；待接管清单 '
                   + ((r.pending || []).filter((x: any) => x.status === '待接管').length) + ' 张'

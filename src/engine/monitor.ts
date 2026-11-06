@@ -89,7 +89,7 @@ export const monitorStore = {
 
   async decideFallback(id: string, action: 'take' | 'close', note = '') {
     try {
-      const r = await apiSend('POST', '/api/monitor/fallback/decide', { id, action, note })
+      const r = await apiSend('POST', '/monitor/fallback/decide', { id, action, note })
       await monitorStore.refresh()
       return r
     } catch (e) { return { ok: false, error: e instanceof Error ? e.message : '操作失败' } }

@@ -1932,7 +1932,9 @@ class Handler(BaseHTTPRequestHandler):
                 last = db().execute('SELECT MAX(%s) m FROM %s' % (col, t)).fetchone()['m'] if col else ''
                 out.append({'table': t, 'rows': c, 'last_change': last or ''})
             return self._json(HTTPStatus.OK, {'ok': True, 'tables': out})
-        return self._json(HTTPStatus.NOT_FOUND, {'ok': False, 'error': '未知接口', 'key': key})
+        audit(db(), actor_of(self), 'unknown_api', key, '接口不存在：前端路径可能多写了一层 /api')
+        hint = ('（路径多写了一层 /api，应该是 /api/' + key[4:] + '）') if key.startswith('api/') else ''
+        return self._json(HTTPStatus.NOT_FOUND, {'ok': False, 'error': '未知接口 ' + key + hint, 'key': key})
 
     def _api_put(self, path: str) -> None:
         name = path[len(API_PREFIX):].strip('/')
@@ -2671,7 +2673,9 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(HTTPStatus.OK, {'ok': ok, 'results': results, 'state': MONITOR_STATE})
 
         if key not in ('state/bulk', 'reset', 'seed'):
-            return self._json(HTTPStatus.NOT_FOUND, {'ok': False, 'error': '未知接口', 'key': key})
+            audit(conn, actor_of(self), 'unknown_api', key, '接口不存在：前端路径可能多写了一层 /api')
+            hint = ('（路径多写了一层 /api，应该是 /api/' + key[4:] + '）') if key.startswith('api/') else ''
+            return self._json(HTTPStatus.NOT_FOUND, {'ok': False, 'error': '未知接口 ' + key + hint, 'key': key})
         if not has_perm(self.user, 'workflow'):
             return self._json(HTTPStatus.FORBIDDEN, {'ok': False,
                 'error': '角色「%s」没有批量写入 / 重置演示数据的权限（需要权限点 资源调配）' % self.user['role']})
@@ -2721,7 +2725,9 @@ class Handler(BaseHTTPRequestHandler):
                     total += project_state(conn, str(k), v, ts)
             audit(conn, actor_of(self), 'seed', ','.join(list(items)[:12]), '首次写入 %d 行' % total)
             return self._json(HTTPStatus.OK, {'ok': True, 'seeded_rows': total})
-        return self._json(HTTPStatus.NOT_FOUND, {'ok': False, 'error': '未知接口', 'key': key})
+        audit(conn, actor_of(self), 'unknown_api', key, '接口不存在：前端路径可能多写了一层 /api')
+        hint = ('（路径多写了一层 /api，应该是 /api/' + key[4:] + '）') if key.startswith('api/') else ''
+        return self._json(HTTPStatus.NOT_FOUND, {'ok': False, 'error': '未知接口 ' + key + hint, 'key': key})
 
 
 def main() -> None:

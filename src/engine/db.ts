@@ -55,7 +55,7 @@ const enc = encodeURIComponent
 async function refreshCsrf(): Promise<boolean> {
   // 令牌过期时（例如数据服务重启后）重新探一次会话，拿新令牌
   try {
-    const res = await fetch(BASE + '/api/session', { cache: 'no-store' })
+    const res = await fetch(BASE + '/session', { cache: 'no-store' })
     const j = await res.json().catch(() => null)
     if (j && j.csrf) { csrfToken = String(j.csrf); return true }
   } catch { /* 网络不通就不重试 */ }

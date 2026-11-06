@@ -42,7 +42,7 @@ export const liveAlertStore = {
   },
   async ack(id: string, note = '') {
     try {
-      const r = await apiSend('POST', '/api/monitor/notification/ack', { id, note })
+      const r = await apiSend('POST', '/monitor/notification/ack', { id, note })
       await liveAlertStore.refresh()
       return r
     } catch (e) { return { ok: false, error: e instanceof Error ? e.message : '处置失败' } }
