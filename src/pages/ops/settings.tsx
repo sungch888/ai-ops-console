@@ -268,7 +268,7 @@ export default function OpsSettings() {
                   : '巡检失败：' + (r.error || '') })).catch((e) => setColMsg({ ok: false, text: '巡检没成：' + String((e && e.message) || e) }))}>巡检兜底工单</button>
             {!matrixPerm.manage ? <span className="tiny faint">要「权限矩阵」操作权才能接入 / 改 / 删采集源（与改配置同级）</span> : null}
           </div>
-          {colMsg ? <div className="tiny" style={{ marginTop: 8, color: colMsg.ok ? '#7ee2b8' : '#ff9a9a' }}>{colMsg.text}</div> : null}
+          {colMsg ? <div className="tiny" style={{ marginTop: 8, color: colMsg.ok ? 'var(--ok-text)' : 'var(--bad-text)' }}>{colMsg.text}</div> : null}
 
           <div className="divider" />
           <Table minWidth={900} head={['采集类型', '本轮条数', '最近采集时间', '状态 / 错误']} rows={COLLECT_KINDS.map((k) => {

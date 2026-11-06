@@ -104,10 +104,10 @@ export default function ComputeStorage() {
         <Panel title="数据迁移支持（服务期满）" noPad>
           <div className="panel-body">
             <ul className="tl">
-              <li><div className="tl-time">步骤 1</div><div className="small" style={{ color: '#b9cbe6' }}>准备迁移数据：清点数据集、模型权重、日志归档范围</div></li>
-              <li><div className="tl-time">步骤 2</div><div className="small" style={{ color: '#b9cbe6' }}>迁移方式选择：在线同步 / 离线介质 / 快照切换</div></li>
-              <li><div className="tl-time">步骤 3</div><div className="small" style={{ color: '#b9cbe6' }}>挂载存储至新算力实例并校验连通性</div></li>
-              <li><div className="tl-time">步骤 4</div><div className="small" style={{ color: '#b9cbe6' }}>完整性校验：哈希比对 + 抽样回读，输出校验报告</div></li>
+              <li><div className="tl-time">步骤 1</div><div className="small" style={{ color: 'var(--table-text)' }}>准备迁移数据：清点数据集、模型权重、日志归档范围</div></li>
+              <li><div className="tl-time">步骤 2</div><div className="small" style={{ color: 'var(--table-text)' }}>迁移方式选择：在线同步 / 离线介质 / 快照切换</div></li>
+              <li><div className="tl-time">步骤 3</div><div className="small" style={{ color: 'var(--table-text)' }}>挂载存储至新算力实例并校验连通性</div></li>
+              <li><div className="tl-time">步骤 4</div><div className="small" style={{ color: 'var(--table-text)' }}>完整性校验：哈希比对 + 抽样回读，输出校验报告</div></li>
             </ul>
           </div>
         </Panel>

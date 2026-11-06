@@ -170,7 +170,7 @@ export default function ModelMonitor() {
         ) : (
           <div className="col gap6">
             {needAction.map(({ s, reasons }) => (
-              <div key={s.service} style={{ border: '1px solid rgba(64,130,220,.16)', borderRadius: 10, padding: '9px 11px' }}>
+              <div key={s.service} style={{ border: '1px solid rgba(var(--line-rgb), .16)', borderRadius: 10, padding: '9px 11px' }}>
                 <div className="row gap6" style={{ flexWrap: 'wrap' }}>
                   <span className="mono small strong">{s.service}</span>
                   <span className="tag gray">{s.model}</span>
@@ -179,7 +179,7 @@ export default function ModelMonitor() {
                   <Badge tone={SVC_TONE[s.health]}>{SVC_TEXT[s.health]}</Badge>
                   <span className="tiny faint">{s.instances} 副本 / {s.cards} 卡位</span>
                 </div>
-                <div className="small" style={{ marginTop: 5, color: '#b9cbe6' }}>原因：{reasons.join(' · ')}</div>
+                <div className="small" style={{ marginTop: 5, color: 'var(--table-text)' }}>原因：{reasons.join(' · ')}</div>
                 <div className="row gap6" style={{ marginTop: 8, flexWrap: 'wrap' }}>
                   <button
                     className="btn sm"
@@ -310,7 +310,7 @@ export default function ModelMonitor() {
                   ) : null}
                 </div>,
               ])} />
-              {fbMsg ? <div className="tiny" style={{ marginTop: 6, color: fbMsg.ok ? '#7ee2b8' : '#ff9a9a' }}>{fbMsg.text}</div> : null}
+              {fbMsg ? <div className="tiny" style={{ marginTop: 6, color: fbMsg.ok ? 'var(--ok-text)' : 'var(--bad-text)' }}>{fbMsg.text}</div> : null}
               <div className="tiny faint" style={{ marginTop: 6 }}>
                 「我接管」把这张工单认领到人头上（记录谁、几点）；「处置完毕 · 关闭」必须写原因，而且当目标仍然采不到时会提醒你
                 「关闭只是处置登记，不代表它已经通」。目标重新采到时工单会自动关闭，不需要人管。
@@ -351,7 +351,7 @@ export default function ModelMonitor() {
               onClick={() => void monitorStore.saveTarget({ ...tgt, probe: true }).then((r) => setMonMsg({ ok: !!r.ok, text: r.ok ? ((r.probe && r.probe.ok) ? tgt.name + ' 已挂上并采到第一轮' : tgt.name + ' 已挂上，但第一轮：' + ((r.probe && r.probe.error) || '未采')) : '被拒：' + (r.error || '') }))}>挂上目标并采一轮</button>
             {!canProbe ? <span className="tiny faint">要「算力中心」操作权才能加目标或手动采</span> : null}
           </div>
-          {monMsg ? <div className="tiny" style={{ marginTop: 8, color: monMsg.ok ? '#7ee2b8' : '#ff9a9a' }}>{monMsg.text}</div> : null}
+          {monMsg ? <div className="tiny" style={{ marginTop: 8, color: monMsg.ok ? 'var(--ok-text)' : 'var(--bad-text)' }}>{monMsg.text}</div> : null}
 
           {mon.samples.length > 1 ? (
             <div className="grid g-21" style={{ marginTop: 12 }}>

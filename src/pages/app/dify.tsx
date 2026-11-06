@@ -36,7 +36,7 @@ function connBlock(c: Connector | undefined) {
       <div className="small">地址：<span className="mono">{c.endpoint}</span> · 传输：{c.transport} · 鉴权：{c.auth}</div>
       <div className="small">频率：{c.intervalSec === 0 ? '事件触发' : `每 ${c.intervalSec} 秒`} · 超时 {c.timeoutMs} ms · 重试 {c.retries} 次 · 降级：{c.fallback}</div>
       <div className="small">采集项（第一期只读）：{c.dataItems}</div>
-      <div className="small" style={{ color: '#ffd98a' }}>未开放范围 / 卡点：{c.blocking}</div>
+      <div className="small" style={{ color: 'var(--warn-text)' }}>未开放范围 / 卡点：{c.blocking}</div>
       <div className="divider" />
       <div className="tiny faint">前置条件对照（全部完成才具备切真实接口的条件）</div>
       <div className="col gap6">
@@ -217,7 +217,7 @@ export default function DifyRagflow() {
                   <Badge tone={a.platform === 'Dify' ? 'purple' : 'info'}>{a.platform}</Badge>
                   <span className="small">{a.name}</span>
                   <span className="tag gray">归口 {a.owner}</span>
-                  <span className="tiny" style={{ color: '#ffd98a' }}>建议动作：登记 —— 在统一接管登记册登记并绑定 {a.platform === 'Dify' ? 'a-dify' : 'a-ragflow'}，指定归口；确认它是平台外自建应用的，记「平台外运行，不纳管」并留依据</span>
+                  <span className="tiny" style={{ color: 'var(--warn-text)' }}>建议动作：登记 —— 在统一接管登记册登记并绑定 {a.platform === 'Dify' ? 'a-dify' : 'a-ragflow'}，指定归口；确认它是平台外自建应用的，记「平台外运行，不纳管」并留依据</span>
                 </div>
               ))}
             </div>
@@ -236,7 +236,7 @@ export default function DifyRagflow() {
                   <Badge tone={a.platform === 'Dify' ? 'purple' : 'info'}>{a.platform}</Badge>
                   <span className="small">{a.name}</span>
                   <Badge tone={STATUS_TONE[a.status] ?? 'muted'}>{a.status}</Badge>
-                  <span className="tiny" style={{ color: '#ffd98a' }}>建议动作：摘除或复核归口 —— 确认是「还在开发、先从业务目录摘除」还是「已下线但目录没摘」：前者挂为草稿跟踪，后者双侧同步摘除并留处置记录</span>
+                  <span className="tiny" style={{ color: 'var(--warn-text)' }}>建议动作：摘除或复核归口 —— 确认是「还在开发、先从业务目录摘除」还是「已下线但目录没摘」：前者挂为草稿跟踪，后者双侧同步摘除并留处置记录</span>
                 </div>
               ))}
             </div>

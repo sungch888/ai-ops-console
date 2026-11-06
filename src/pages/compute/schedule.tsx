@@ -105,7 +105,7 @@ export default function ComputeSchedule() {
           <Table
             head={['功能', '等级']}
             rows={AUTO_LEVELS.map((r) => [
-              <span className="small" style={{ color: '#b9cbe6' }}>{r[0]}<div className="tiny faint">{r[1]}</div></span>,
+              <span className="small" style={{ color: 'var(--table-text)' }}>{r[0]}<div className="tiny faint">{r[1]}</div></span>,
               <Badge tone={r[2] === '自动化' ? 'good' : r[2] === '半自动化' ? 'info' : 'muted'}>{r[2]}</Badge>,
             ])}
           />

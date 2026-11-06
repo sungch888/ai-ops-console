@@ -91,15 +91,15 @@ export default function Login() {
                 onClick={() => pick(a.id)}
                 style={{
                   cursor: 'pointer', padding: '12px 14px', borderRadius: 11,
-                  border: picked === a.id ? '1px solid rgba(34,211,238,.45)' : '1px solid var(--line)',
-                  background: picked === a.id ? 'rgba(34,211,238,.08)' : 'rgba(23,48,90,.3)',
+                  border: picked === a.id ? '1px solid rgba(var(--cyan-rgb), .45)' : '1px solid var(--line)',
+                  background: picked === a.id ? 'rgba(var(--cyan-rgb), .08)' : 'rgba(23,48,90,.3)',
                 }}
               >
                 <div className="row between">
                   <span className="strong">{a.name} <span className="faint small mono">{a.id}</span> <span className="faint small mono">{DEMO_LOGIN[a.id]?.username}</span></span>
                   <Badge tone={a.role === 'admin' ? 'bad' : a.role === 'ops' ? 'warn' : a.role === 'dev' ? 'info' : 'muted'}>{ROLE_LABEL[a.role]}</Badge>
                 </div>
-                <div className="small" style={{ color: '#8fb0d6', marginTop: 5 }}>{a.dept} · {a.org} · {a.note}</div>
+                <div className="small" style={{ color: 'var(--text-dim)', marginTop: 5 }}>{a.dept} · {a.org} · {a.note}</div>
               </div>
             ))}
           </div>
@@ -168,7 +168,7 @@ export default function Login() {
           </div>
 
           <div className="divider" />
-          <div className="small" style={{ color: '#7f9cc7', lineHeight: 1.9 }}>
+          <div className="small" style={{ color: 'var(--text-dim)', lineHeight: 1.9 }}>
             演示口令（仅演示用，正式版必须改强口令）：<span className="mono">admin/admin123 · ops/ops123 · dev/dev123 · user/user123</span>。
             口令在库里是 PBKDF2-HMAC-SHA256 + 每账号随机盐，接口不返回口令字段；<b>演示口令属弱口令，首次登录会被要求强制更换</b>（至少 {policy.min_len} 位、字母 + 数字、有效期 {policy.max_age_days} 天、不复用最近 {policy.reuse_check} 次）；
             会话 8 小时、每次访问滑动续期，可在「账号与安全」里看当前会话并撤销；同一账号 5 分钟内连错 5 次暂时拒绝登录，登录成功与失败都进 <span className="mono">login_log</span>；写操作要带 <span className="mono">X-CSRF-Token</span>（服务端下发、只存内存）。

@@ -61,7 +61,7 @@ export default function Assets() {
             {lifecycleStages.map((s, i) => (
               <div key={s.stage} style={card}>
                 <div className="row between">
-                  <span className="mono" style={{ color: '#22d3ee' }}>{String(i + 1).padStart(2, '0')}</span>
+                  <span className="mono" style={{ color: 'var(--cyan)' }}>{String(i + 1).padStart(2, '0')}</span>
                   <span className="muted small">{s.cur}</span>
                 </div>
                 <div className="strong" style={{ marginTop: 6 }}>{s.stage}</div>

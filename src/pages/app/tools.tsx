@@ -44,7 +44,7 @@ export default function AppTools() {
               <span className={`tag ${t.type === 'MCP' ? 'green' : t.type === 'Skill' ? 'gray' : 'gray'}`}>{t.type}</span>,
               <span className="mono small">{t.version}</span>,
               <span className="num">{t.calls}</span>,
-              <span className="num" style={{ color: t.success < 96 ? '#ffb3b3' : undefined }}>{t.success}%</span>,
+              <span className="num" style={{ color: t.success < 96 ? 'var(--bad-text)' : undefined }}>{t.success}%</span>,
               <span className="muted small">{t.owner}</span>,
               <State s={t.status} />,
               m ? <Badge tone={m.tech ? 'good' : 'bad'}>{m.tech ? '已注册' : '已摘除'}</Badge> : <span className="tiny faint">未纳管</span>,
@@ -66,11 +66,11 @@ export default function AppTools() {
         <Panel title="上架审核流程" noPad>
           <div className="panel-body">
             <ul className="tl">
-              <li><div className="tl-time">01 功能审核</div><div className="small" style={{ color: '#b9cbe6' }}>验证工具能力与说明一致，接口规范与文档模板齐备</div></li>
-              <li><div className="tl-time">02 安全审查</div><div className="small" style={{ color: '#b9cbe6' }}>MCP：注入 / 泄露 / 越权风险；Skill：提示词越狱与敏感内容生成风险</div></li>
-              <li><div className="tl-time">03 目录纳管</div><div className="small" style={{ color: '#b9cbe6' }}>纳入业务使用目录，展示场景说明与开放范围</div></li>
-              <li><div className="tl-time">04 权限配置</div><div className="small" style={{ color: '#b9cbe6' }}>按 RBAC / 租户配置可见性与调用权限，变更须审批留痕</div></li>
-              <li><div className="tl-time">05 再审机制</div><div className="small" style={{ color: '#b9cbe6' }}>版本升级、权限调整、依赖变更按首次上架标准重新审核</div></li>
+              <li><div className="tl-time">01 功能审核</div><div className="small" style={{ color: 'var(--table-text)' }}>验证工具能力与说明一致，接口规范与文档模板齐备</div></li>
+              <li><div className="tl-time">02 安全审查</div><div className="small" style={{ color: 'var(--table-text)' }}>MCP：注入 / 泄露 / 越权风险；Skill：提示词越狱与敏感内容生成风险</div></li>
+              <li><div className="tl-time">03 目录纳管</div><div className="small" style={{ color: 'var(--table-text)' }}>纳入业务使用目录，展示场景说明与开放范围</div></li>
+              <li><div className="tl-time">04 权限配置</div><div className="small" style={{ color: 'var(--table-text)' }}>按 RBAC / 租户配置可见性与调用权限，变更须审批留痕</div></li>
+              <li><div className="tl-time">05 再审机制</div><div className="small" style={{ color: 'var(--table-text)' }}>版本升级、权限调整、依赖变更按首次上架标准重新审核</div></li>
             </ul>
           </div>
         </Panel>

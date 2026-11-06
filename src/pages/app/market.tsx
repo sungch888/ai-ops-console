@@ -137,7 +137,7 @@ export default function Market() {
           </div>
         </Panel>
         <Panel title="访问与入口说明">
-          <div className="row between" style={{ padding: '10px 0', borderBottom: '1px solid rgba(64,130,220,.12)' }}>
+          <div className="row between" style={{ padding: '10px 0', borderBottom: '1px solid rgba(var(--line-rgb), .12)' }}>
             <div>
               <div className="strong" style={{ fontSize: 13 }}>Web 页面 / 嵌入页面 / API</div>
               <div className="muted small" style={{ marginTop: 4 }}>三种访问方式均须经鉴权，不提供匿名访问</div>

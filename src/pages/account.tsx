@@ -85,7 +85,7 @@ export default function AccountSecurity() {
           服务端校验顺序：长度 → 字母与数字 → 常见弱口令表 → 是否等于账号 → 是否等于当前口令或最近 {pol.reuse_check} 次用过的口令。
           口令在库里是 PBKDF2-HMAC-SHA256（12 万次迭代）+ 每账号随机盐，接口永不返回口令字段；改口令成功后当前会话被撤销，需要重新登录。
         </div>
-        {pwMsg ? <div className="tiny" style={{ marginTop: 8, color: pwMsg.ok ? '#7ee2b8' : '#ff9a9a' }}>{pwMsg.text}</div> : null}
+        {pwMsg ? <div className="tiny" style={{ marginTop: 8, color: pwMsg.ok ? 'var(--ok-text)' : 'var(--bad-text)' }}>{pwMsg.text}</div> : null}
       </Panel>
 
       <Panel title={'当前会话（' + (mineOnly ? '本人可见' : '管理员可见全部') + '）'} className="mt14" noPad>

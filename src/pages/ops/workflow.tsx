@@ -108,9 +108,9 @@ export default function OpsWorkflow() {
       <td><span className={`tag ${o.level === '高保' ? 'green' : 'gray'}`}>{o.level}</span></td>
       <td>
         <State s={o.status === 'submitted' ? 'pending' : o.status === 'approved' ? 'pass' : o.status === 'queued' ? 'queued' : o.status === 'rejected' ? 'block' : o.status === 'running' ? 'run' : o.status === 'rolled_back' ? 'rollback' : o.status === 'closed' ? 'closed' : 'done'} />
-        {o.status === 'queued' ? <div className="tiny" style={{ color: '#f5b83d' }}>变更队列位次 {queued.findIndex((q) => q.id === o.id) + 1}</div> : null}
-        {o.rejectReason ? <div className="tiny" style={{ color: '#ffb3b3', maxWidth: 200 }}>{o.rejectReason}</div> : null}
-        {o.type === 'preempt' && o.spec.affected ? <div className="tiny" style={{ color: '#8fb0d6', maxWidth: 220 }}>被抢占：{String(o.spec.affected)}</div> : null}
+        {o.status === 'queued' ? <div className="tiny" style={{ color: 'var(--amber)' }}>变更队列位次 {queued.findIndex((q) => q.id === o.id) + 1}</div> : null}
+        {o.rejectReason ? <div className="tiny" style={{ color: 'var(--bad-text)', maxWidth: 200 }}>{o.rejectReason}</div> : null}
+        {o.type === 'preempt' && o.spec.affected ? <div className="tiny" style={{ color: 'var(--text-dim)', maxWidth: 220 }}>被抢占：{String(o.spec.affected)}</div> : null}
       </td>
       <td>
         <div className="row gap6" style={{ flexWrap: 'wrap' }}>
@@ -238,7 +238,7 @@ export default function OpsWorkflow() {
             <button className="btn sm ghost" onClick={() => { engine.reset(); setScenario(null) }}>恢复初始演示数据</button>
           </div>
           {scenario ? (
-            <div style={{ marginTop: 12, border: '1px dashed rgba(64,130,220,.35)', borderRadius: 10, padding: 12 }}>
+            <div style={{ marginTop: 12, border: '1px dashed rgba(var(--line-rgb), .35)', borderRadius: 10, padding: 12 }}>
               <div className="small strong">已执行：{scenario.title}</div>
               <ul className="small" style={{ margin: '8px 0 0 16px', lineHeight: 1.9, color: 'var(--text-dim)' }}>
                 {scenario.steps.map((x, i) => <li key={i}>{x}</li>)}
@@ -366,7 +366,7 @@ export default function OpsWorkflow() {
                   <div className="tiny faint">抢占卡位（目标：高保集群）</div>
                   <input className="btn sm" style={{ marginTop: 4, width: 90 }} type="number" min={1} value={cards} onChange={(e) => setCards(Number(e.target.value))} />
                 </div>
-                <div className="small" style={{ maxWidth: 240, color: '#8fb0d6' }}>
+                <div className="small" style={{ maxWidth: 240, color: 'var(--text-dim)' }}>
                   触发条件：高保集群利用率 &gt; 90% 且全局空闲不足；来源池在用卡位不可侵占。
                 </div>
               </>
@@ -455,7 +455,7 @@ export default function OpsWorkflow() {
                 <div key={p.id} style={{ marginBottom: 12 }}>
                   <div className="row between small">
                     <span>{p.name} <span className="faint">({p.cards} 卡)</span></span>
-                    <span className={u > 90 ? 'strong' : 'muted'} style={{ color: u > 90 ? '#ffb3b3' : undefined }}>{u}%</span>
+                    <span className={u > 90 ? 'strong' : 'muted'} style={{ color: u > 90 ? 'var(--bad-text)' : undefined }}>{u}%</span>
                   </div>
                   <div style={{ marginTop: 5 }}><Progress value={u} tone={u > 90 ? 'bad' : u > 80 ? 'warn' : 'green'} /></div>
                 </div>
@@ -515,7 +515,7 @@ export default function OpsWorkflow() {
                       <Badge tone={t.tone}>{t.action}</Badge>
                       <span className="tiny faint">{TYPE_LABEL[selectedOrder.type]}</span>
                     </div>
-                    <div className="small" style={{ color: '#b9cbe6', lineHeight: 1.6 }}>{t.detail}</div>
+                    <div className="small" style={{ color: 'var(--table-text)', lineHeight: 1.6 }}>{t.detail}</div>
                   </li>
                 ))}
               </ul>

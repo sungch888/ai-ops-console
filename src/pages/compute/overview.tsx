@@ -107,7 +107,7 @@ export default function ComputeOverview() {
                   {e.level === '紧急' ? <Badge tone="bad">紧急</Badge> : e.level === '重要' ? <Badge tone="warn">重要</Badge> : <Badge tone="muted">一般</Badge>}
                   <Badge tone="good">{e.status}</Badge>
                 </div>
-                <div className="small" style={{ color: '#b9cbe6', lineHeight: 1.6 }}>{e.text}</div>
+                <div className="small" style={{ color: 'var(--table-text)', lineHeight: 1.6 }}>{e.text}</div>
               </li>
             ))}
           </ul>

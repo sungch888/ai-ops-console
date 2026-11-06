@@ -69,7 +69,7 @@ export default function Credentials() {
                 <span className="small">{TYPE_LABEL[o.type]}</span>,
                 <span className="small">{o.applicant}<div className="tiny faint">{o.target}</div></span>,
                 <span className="small">{o.amount}</span>,
-                <span className="small" style={{ color: o.rejectReason ? '#ffb3b3' : '#8fb0d6', maxWidth: 240 }}>{o.rejectReason ?? o.reason}</span>,
+                <span className="small" style={{ color: o.rejectReason ? 'var(--bad-text)' : 'var(--text-dim)', maxWidth: 240 }}>{o.rejectReason ?? o.reason}</span>,
                 <State s={o.status === 'submitted' ? 'pending' : o.status === 'rejected' ? 'block' : o.status === 'running' ? 'run' : o.status === 'rolled_back' ? 'warn' : 'done'} />,
                 o.status === 'submitted' ? (
                   canApprove ? (
@@ -86,7 +86,7 @@ export default function Credentials() {
         </Panel>
         <Panel title="双 Key 差异化管控" extra="网关强制校验 · 越权即拒绝">
           <div style={{ display: 'grid', gap: 10 }}>
-            <div style={{ border: '1px solid rgba(64,130,220,.18)', background: 'rgba(23,48,90,.28)', borderRadius: 10, padding: '10px 12px' }}>
+            <div style={{ border: '1px solid rgba(var(--line-rgb), .18)', background: 'rgba(23,48,90,.28)', borderRadius: 10, padding: '10px 12px' }}>
               <div className="row between">
                 <span className="strong">Personal Key 个人密钥</span>
                 <Badge tone="info">低配额</Badge>
@@ -95,7 +95,7 @@ export default function Credentials() {
                 一人一钥 · RPM 60 / TPM 12万 · IP 白名单 · 不校验 user / x-app-id · 调用者即密钥持有人，可溯源至申请人
               </div>
             </div>
-            <div style={{ border: '1px solid rgba(64,130,220,.18)', background: 'rgba(23,48,90,.28)', borderRadius: 10, padding: '10px 12px' }}>
+            <div style={{ border: '1px solid rgba(var(--line-rgb), .18)', background: 'rgba(23,48,90,.28)', borderRadius: 10, padding: '10px 12px' }}>
               <div className="row between">
                 <span className="strong">Service Account Key 平台代理</span>
                 <Badge tone="purple">高配额</Badge>
@@ -104,7 +104,7 @@ export default function Credentials() {
                 绑定授权应用（x-app-id）· 网关强制校验应用标识、人员标识（user）与授权范围一致，缺失即拒绝 · 不得挪作个人用途
               </div>
             </div>
-            <div style={{ border: '1px solid rgba(64,130,220,.18)', background: 'rgba(23,48,90,.28)', borderRadius: 10, padding: '10px 12px' }}>
+            <div style={{ border: '1px solid rgba(var(--line-rgb), .18)', background: 'rgba(23,48,90,.28)', borderRadius: 10, padding: '10px 12px' }}>
               <div className="row between">
                 <span className="strong">生命周期</span>
                 <Badge tone="good">全程留痕</Badge>

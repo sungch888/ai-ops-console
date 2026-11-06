@@ -65,7 +65,7 @@ function DispatchCell({ id, manage }: { id: string; manage: boolean }) {
       >
         下发容器平台
       </button>
-      {note ? <span className="tiny" style={{ color: '#8fb0d6', maxWidth: 220 }}>{note}</span> : null}
+      {note ? <span className="tiny" style={{ color: 'var(--text-dim)', maxWidth: 220 }}>{note}</span> : null}
     </div>
   )
 }
@@ -94,7 +94,7 @@ function ReceiptCell({ o, manage }: { o: Order; manage: boolean }) {
       >
         回填回执
       </button>
-      {err ? <span className="tiny" style={{ color: '#ffb3b3', maxWidth: 220 }}>{err}</span> : null}
+      {err ? <span className="tiny" style={{ color: 'var(--bad-text)', maxWidth: 220 }}>{err}</span> : null}
     </div>
   )
 }
@@ -289,7 +289,7 @@ export default function ModelDeploy() {
             <div className="small">
               当前填写：{model}{version ? ` ${version}` : '（版本留空）'} → {st.pools.find((p) => p.id === pool)?.name ?? pool}<br />
               {replicas} 副本 × {perReplica || 1} 卡 = {replicas * (perReplica || 1)} 卡 · 灰度 {gray}%<br />
-              节点 <span style={{ color: nodes.trim() ? undefined : '#ffb3b3' }}>{nodes.trim() ? nodes : '（未填）'}</span> · 镜像 <span style={{ color: image.trim() ? undefined : '#ffb3b3' }}>{image.trim() ? image : '（未填）'}</span>
+              节点 <span style={{ color: nodes.trim() ? undefined : 'var(--bad-text)' }}>{nodes.trim() ? nodes : '（未填）'}</span> · 镜像 <span style={{ color: image.trim() ? undefined : 'var(--bad-text)' }}>{image.trim() ? image : '（未填）'}</span>
             </div>
             <Callout warn={replicas * (perReplica || 1) > poolFree(st, pool)} text={`目标池空闲 ${poolFree(st, pool)} 卡；不足时准入直接拒绝，先做池扩容或换池。`} />
           </div>
@@ -324,9 +324,9 @@ export default function ModelDeploy() {
                 </div>,
                 <div className="col gap6">
                   {inst ? <span className="small mono">{inst}</span> : <span className="tag gray">未回执</span>}
-                  {note ? <span className="tiny" style={{ color: '#8fe6c8', maxWidth: 220 }}>{note}</span> : null}
+                  {note ? <span className="tiny" style={{ color: 'var(--ok-text)', maxWidth: 220 }}>{note}</span> : null}
                   {stale ? <Badge tone="bad">回执超时</Badge> : null}
-                  {stale ? <span className="tiny" style={{ color: '#ffb3b3' }}>下发已超 {Math.round((Date.now() - (o.decidedAt ?? o.createdAt)) / 60000)} 分钟无回执，按告警口径通知容器平台归口</span> : null}
+                  {stale ? <span className="tiny" style={{ color: 'var(--bad-text)' }}>下发已超 {Math.round((Date.now() - (o.decidedAt ?? o.createdAt)) / 60000)} 分钟无回执，按告警口径通知容器平台归口</span> : null}
                 </div>,
                 <div className="row gap6" style={{ flexWrap: 'wrap' }}>
                   {o.status === 'submitted' ? (
@@ -378,7 +378,7 @@ export default function ModelDeploy() {
                   ) : null}
                   {o.status === 'closed' ? <span className="tiny faint">已闭环 · 台账保留</span> : null}
                   {o.status === 'rolled_back' ? <span className="tiny faint">已回滚 · 卡位已归还</span> : null}
-                  {o.status === 'rejected' ? <span className="tiny" style={{ color: '#ffb3b3', maxWidth: 240 }}>{o.rejectReason ?? '已驳回'}</span> : null}
+                  {o.status === 'rejected' ? <span className="tiny" style={{ color: 'var(--bad-text)', maxWidth: 240 }}>{o.rejectReason ?? '已驳回'}</span> : null}
                 </div>,
               ]
             })}
@@ -505,7 +505,7 @@ export default function ModelDeploy() {
               地址：<span className="mono">{conn.endpoint}</span> · 鉴权：{conn.auth} · 频率：{conn.intervalSec === 0 ? '工单触发' : `${conn.intervalSec} 秒`} · 超时 {conn.timeoutMs} ms · 重试 {conn.retries} · 降级：{conn.fallback}
             </div>
             <div className="small">采集项（回执要带回的内容）：{conn.dataItems}</div>
-            <div className="small" style={{ color: '#ffd98a' }}>卡点 / 归口口径：{conn.blocking}</div>
+            <div className="small" style={{ color: 'var(--warn-text)' }}>卡点 / 归口口径：{conn.blocking}</div>
             <div className="divider" />
             <div className="tiny faint">前置条件对照（全部完成才具备真实接入条件）</div>
             <div className="col gap6">

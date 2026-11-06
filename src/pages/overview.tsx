@@ -60,7 +60,7 @@ export default function Overview() {
         barWidth: 9,
         data: L.perCity.map((c) => Math.round(c.calls / 1000) / 10),
         itemStyle: { borderRadius: 5, color: { type: 'linear', x: 0, y: 0, x2: 1, y2: 0, colorStops: [{ offset: 0, color: '#1899e0' }, { offset: 1, color: '#22d3ee' }] } },
-        label: { show: true, position: 'right', color: '#9ec5ff', fontSize: 11 },
+        label: { show: true, position: 'right', color: 'var(--info-text)', fontSize: 11 },
       },
     ],
   }

@@ -100,11 +100,11 @@ export default function AppKb() {
             })}
           />
           {hidden > 0 ? (
-            <div className="small" style={{ marginTop: 10, color: '#ffb3b3' }}>
+            <div className="small" style={{ marginTop: 10, color: 'var(--bad-text)' }}>
               按当前角色可访问密级已过滤 <b>{hidden}</b> 个知识库：{kbs.filter((k) => !allowedCls.includes(k.cls)).map((k) => `${k.name}（${k.cls}）`).join('，')}。授权范围在「跨平台运营 · 权限矩阵」调整后立即生效。
             </div>
           ) : (
-            <div className="small" style={{ marginTop: 10, color: '#8fb0d6' }}>当前角色可访问全部 {kbs.length} 个知识库（密级范围：{allowedCls.join('、')}）。</div>
+            <div className="small" style={{ marginTop: 10, color: 'var(--text-dim)' }}>当前角色可访问全部 {kbs.length} 个知识库（密级范围：{allowedCls.join('、')}）。</div>
           )}
         </div>
       </Panel>
@@ -122,7 +122,7 @@ export default function AppKb() {
         </Panel>
         <Panel title="知识资产治理">
           <div className="row between small"><span>培训教材 2023（停更）</span><Badge tone="muted">僵尸库</Badge></div>
-          <div className="small" style={{ color: '#8fb0d6', marginTop: 6, lineHeight: 1.8 }}>月检索 200 次 · 12 个月未更新 · 建议归档或销毁</div>
+          <div className="small" style={{ color: 'var(--text-dim)', marginTop: 6, lineHeight: 1.8 }}>月检索 200 次 · 12 个月未更新 · 建议归档或销毁</div>
           <div className="divider" />
           <div className="small" style={{ color: 'var(--text-dim)', lineHeight: 1.9 }}>月盘点数据量 / 使用频率 / 更新状态，维护知识资产台账；含敏感或超权限开放风险的知识库提请权限复核。</div>
         </Panel>

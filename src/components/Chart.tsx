@@ -1,6 +1,6 @@
 import React, { useEffect, useRef } from 'react'
 import * as echarts from 'echarts'
-import { themeInk, useTheme } from '../engine/ui'
+import { chartColor, themeInk, useTheme } from '../engine/ui'
 
 export const CHART_COLORS = ['#22d3ee', '#3d8bfd', '#2fd6a3', '#f5b83d', '#a78bfa', '#ff6b6b', '#5eead4', '#818cf8']
 export const AXIS_COLOR = '#7f9cc7'
@@ -45,6 +45,8 @@ export function Chart({ option, height = 260 }: { option: any; height?: number }
         axisLabel: { ...(a.axisLabel || {}), color: ink.axis },
         axisLine: { ...(a.axisLine || {}), lineStyle: { ...((a.axisLine || {}).lineStyle || {}), color: ink.axis } },
         splitLine: { ...(a.splitLine || {}), lineStyle: { ...(((a.splitLine || {}).lineStyle) || {}), color: ink.split } },
+        itemStyle: { ...(a.itemStyle || {}), borderColor: ink.tipBorder },
+        label: { ...((a as any).label || {}), color: ink.label },
       }))
       if (!arr(opt[key]).length) delete opt[key]
     }
@@ -55,8 +57,28 @@ export function Chart({ option, height = 260 }: { option: any; height?: number }
       if (tips.length === 1) opt.tooltip = (opt.tooltip as any[])[0]
     }
     opt.textStyle = { ...((opt.textStyle as object) || {}), color: ink.label }
+    const COLOR_KEYS = new Set(['color', 'borderColor', 'fill', 'to', 'from'])
+    // 递归换色：页面里写死的老配色（含渐变 colorStops）按色相槽位换成当前配色，认不出的保留
+    const remap = (v: any): any => {
+      if (Array.isArray(v)) return v.map(remap)
+      if (v && typeof v === 'object') {
+        const out: Record<string, unknown> = {}
+        for (const [k, val] of Object.entries(v)) {
+          if (COLOR_KEYS.has(k) && typeof val === 'string' && val.startsWith('#')) out[k] = chartColor(val, ink)
+          else if (COLOR_KEYS.has(k) && val && typeof val === 'object') out[k] = remap(val)
+          else out[k] = remap(val)
+        }
+        return out
+      }
+      return v
+    }
+    opt.series = arr(opt.series).map((se: any) => ({
+      ...remap(se),
+      itemStyle: { ...((remap(se) as any).itemStyle || {}), borderColor: ink.tipBorder },
+      label: { ...((se as any).label || {}), color: ink.label },
+    }))
     const palette = arr(opt.color)
-    opt.color = palette.length ? palette : ink.series
+    opt.color = palette.length ? palette.map((c) => (typeof c === 'string' ? chartColor(c, ink) : c)) : ink.series
     inst.current?.setOption(opt, true)
   }, [option, theme])
 

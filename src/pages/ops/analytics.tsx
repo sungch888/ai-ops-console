@@ -33,7 +33,7 @@ export default function OpsAnalytics() {
         radius: ['46%', '70%'],
         center: ['50%', '44%'],
         itemStyle: { borderColor: '#0a1424', borderWidth: 2 },
-        label: { color: '#9ec5ff', fontSize: 11.5, formatter: '{b}\n{c}%' },
+        label: { color: 'var(--info-text)', fontSize: 11.5, formatter: '{b}\n{c}%' },
         data: L.perLine.map((c) => ({ name: c.name, value: Math.round((c.cost / Math.max(1, L.costToday)) * 100) })),
       },
     ],

@@ -47,7 +47,7 @@ export default function Security() {
         barWidth: 9,
         data: secDetection.byType.map((t) => t.v),
         itemStyle: { borderRadius: 5, color: { type: 'linear', x: 0, y: 0, x2: 1, y2: 0, colorStops: [{ offset: 0, color: '#1899e0' }, { offset: 1, color: '#22d3ee' }] } },
-        label: { show: true, position: 'right', color: '#9ec5ff', fontSize: 11 },
+        label: { show: true, position: 'right', color: 'var(--info-text)', fontSize: 11 },
       },
     ],
   }
@@ -102,7 +102,7 @@ export default function Security() {
         <Panel title="双向检测链路" extra="调用前检测 + 调用后过滤 · 处置全程留痕">
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', gap: 10 }}>
             {PIPELINE.map((p) => (
-              <div key={p.name} style={{ border: '1px solid rgba(64,130,220,.18)', background: 'rgba(23,48,90,.28)', borderRadius: 10, padding: '10px 12px' }}>
+              <div key={p.name} style={{ border: '1px solid rgba(var(--line-rgb), .18)', background: 'rgba(23,48,90,.28)', borderRadius: 10, padding: '10px 12px' }}>
                 <div className="strong">{p.name}</div>
                 <div className="muted small" style={{ marginTop: 4 }}>{p.desc}</div>
               </div>

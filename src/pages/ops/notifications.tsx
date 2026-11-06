@@ -84,7 +84,7 @@ export default function OpsNotifications() {
                     }}>我处置了</button> : <span className="tiny faint" style={{ marginLeft: 6 }}>要「运营分析」操作权才能处置</span>}</>}</span>,
               ])} />
             )}
-            {srvMsg ? <div className="tiny" style={{ marginTop: 6, color: srvMsg.ok ? '#7ee2b8' : '#ff9a9a' }}>{srvMsg.text}</div> : null}
+            {srvMsg ? <div className="tiny" style={{ marginTop: 6, color: srvMsg.ok ? 'var(--ok-text)' : 'var(--bad-text)' }}>{srvMsg.text}</div> : null}
             <div className="tiny faint" style={{ marginTop: 6 }}>
               平台自己发现、自己写进库的告警，<span className="strong">没人处置就一直挂着</span>
               <Tip label="怎么追办、留什么痕" text="兜底工单挂满配置的分钟数（默认 15 分钟）没人接管，会自动升级给带班角色并再发一条紧急通知；处置会记录是谁、几点、说明，写审计 monitor_notify_ack。" />

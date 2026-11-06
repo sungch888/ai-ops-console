@@ -112,10 +112,10 @@ export default function Personal() {
             const c = mine.find((x) => x.id === openHelp)!
             const ep = gatewayEndpoints[0]
             return (
-              <div style={{ marginTop: 12, border: '1px dashed rgba(64,130,220,.35)', borderRadius: 10, padding: 12 }}>
+              <div style={{ marginTop: 12, border: '1px dashed rgba(var(--line-rgb), .35)', borderRadius: 10, padding: 12 }}>
                 <div className="small strong">接入示例 · {c.id}（{c.kind}）</div>
                 <div className="tiny faint" style={{ marginTop: 4 }}>端点 {ep.api} · 模型 {c.model} · 渠道 {st.channels.find((ch) => ch.id === c.channel)?.name ?? c.channel} · 限额 {c.rpm} RPM / {c.tpm} TPM · 仅允许 {c.ip}</div>
-                <pre className="mono small" style={{ marginTop: 8, background: 'rgba(8,18,34,.6)', border: '1px solid rgba(64,130,220,.18)', borderRadius: 8, padding: 10, overflowX: 'auto' }}>{`curl -X POST https://ai-ops.gaj.local/api/v1/chat/completions \\\n  -H "Authorization: Bearer ${maskKey(c.id)}" \\\n  -H "Content-Type: application/json" \\\n  -d '{"model":"${c.model}","messages":[{"role":"user","content":"生成 11-04 咨询记录摘要"}]}'`}</pre>
+                <pre className="mono small" style={{ marginTop: 8, background: 'rgba(8,18,34,.6)', border: '1px solid rgba(var(--line-rgb), .18)', borderRadius: 8, padding: 10, overflowX: 'auto' }}>{`curl -X POST https://ai-ops.gaj.local/api/v1/chat/completions \\\n  -H "Authorization: Bearer ${maskKey(c.id)}" \\\n  -H "Content-Type: application/json" \\\n  -d '{"model":"${c.model}","messages":[{"role":"user","content":"生成 11-04 咨询记录摘要"}]}'`}</pre>
                 <div className="small" style={{ color: 'var(--text-dim)', marginTop: 8, lineHeight: 1.9 }}>
                   常见返回：<b>429</b> 触发配额限流 → 在下方用积分兑换配额包或提交提额工单；<b>403</b> 来源 IP 不在白名单 → 提交终端 IP 变更工单；<b>401</b> 凭证已吊销 → 重新申请并说明原因。密钥不得写入代码仓库、脚本或外发文档，发现外发迹象应立即申请吊销。
                 </div>

@@ -322,7 +322,7 @@ export default function OpsApply() {
               <span className="num small">{o.amount}</span>,
               <OrderBadge status={o.status} />,
               <span className="mono tiny faint">{fmtTime(o.createdAt)}</span>,
-              <span className="tiny" style={{ color: o.rejectReason ? '#ffb3b3' : '#8fb0d6', maxWidth: 240 }}>{o.rejectReason ?? '—'}</span>,
+              <span className="tiny" style={{ color: o.rejectReason ? 'var(--bad-text)' : 'var(--text-dim)', maxWidth: 240 }}>{o.rejectReason ?? '—'}</span>,
             ])}
           />
           {mine.length === 0 ? <Callout text={`当前身份「${applicant}」还没有提交过申请。`} /> : null}

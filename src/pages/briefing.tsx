@@ -17,13 +17,13 @@ type Palette = { bg: string; panel: string; border: string; text: string; sub: s
 
 const DARK: Palette = {
   bg: '#060f1e', panel: 'rgba(23,48,90,.42)', border: 'rgba(64,130,220,.22)', text: '#eaf3ff',
-  sub: '#a9c4e8', accent: '#22d3ee', good: '#2fd6a3', warn: '#f5b83d', bad: '#ff6b6b', bar: 'rgba(64,130,220,.16)',
+  sub: 'var(--text-dim)', accent: '#22d3ee', good: '#2fd6a3', warn: '#f5b83d', bad: '#ff6b6b', bar: 'rgba(64,130,220,.16)',
 }
 const LIGHT: Palette = {
   bg: '#eef3f9', panel: '#ffffff', border: '#d5e2f1', text: '#12233a',
   sub: '#4d6party', accent: '#0f7ac0', good: '#0f8a63', warn: '#a4650a', bad: '#b3261e', bar: '#e3ecf7',
 }
-LIGHT.sub = '#55708f'
+LIGHT.sub = 'var(--text-faint)'
 
 const CAP: Record<string, string> = { hp: '高保业务集群', shared: '共享推理集群', train: '训练微调集群' }
 

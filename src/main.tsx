@@ -13,7 +13,7 @@ import { hydrate } from './engine/db'
 async function boot() {
   const box = document.getElementById('root')
   if (!box) return
-  box.innerHTML = '<div style="padding:40px;color:#9fc2ea;font:14px/1.7 system-ui">正在从数据服务读取业务状态并恢复会话…</div>'
+  box.innerHTML = '<div style="padding:40px;color:var(--text-dim);font:14px/1.7 system-ui">正在从数据服务读取业务状态并恢复会话…</div>'
   const res = await hydrate()
   const ui = await import('./engine/ui')
   ui.initTheme()               // 配色按库里的选择上色（没有就用默认深空蓝）

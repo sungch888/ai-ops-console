@@ -168,15 +168,15 @@ export default function LiteLlmGateway() {
                 <span className="small">{k.app}</span>,
                 <span className="small">{k.model}</span>,
                 <span className="small">{k.channel}<div className="tiny faint">{k.kind}</div></span>,
-                <span className="num">{k.rpmLimit}{k.rpmLimit > cap ? <span className="tiny" style={{ color: '#ffb3b3' }}> 超上限 {cap}</span> : null}</span>,
+                <span className="num">{k.rpmLimit}{k.rpmLimit > cap ? <span className="tiny" style={{ color: 'var(--bad-text)' }}> 超上限 {cap}</span> : null}</span>,
                 <span className="num">{k.usedRpm}</span>,
                 <div style={{ minWidth: 110 }}>
                   <Progress value={pct} tone={pct >= 100 ? 'bad' : pct > 85 ? 'warn' : ''} />
                   <span className="tiny faint">{pct}%{pct > 85 ? ' 触限' : ''}</span>
                 </div>,
                 <span className="num">{fmt(k.requests)}</span>,
-                <span className="num" style={{ color: k.errors ? '#ffb3b3' : undefined }}>{k.errors}</span>,
-                <span className="num" style={{ color: k.fallbacks ? '#ffd98a' : undefined }}>{k.fallbacks}</span>,
+                <span className="num" style={{ color: k.errors ? 'var(--bad-text)' : undefined }}>{k.errors}</span>,
+                <span className="num" style={{ color: k.fallbacks ? 'var(--warn-text)' : undefined }}>{k.fallbacks}</span>,
                 <span className="num">¥{k.spendDay.toLocaleString('zh-CN')}</span>,
                 <Badge tone={STATUS_TONE[k.status] ?? 'muted'}>{STATUS_LABEL[k.status] ?? k.status}</Badge>,
                 onPlatform ? (
@@ -213,7 +213,7 @@ export default function LiteLlmGateway() {
               <span className="num">{r.weight}</span>,
               <span className="num">{r.rpm.toLocaleString('zh-CN')}</span>,
               <span className="num">{r.tokensWan}</span>,
-              <span className="num" style={{ color: r.errPct >= 4 ? '#ffb3b3' : undefined }}>{r.errPct}%</span>,
+              <span className="num" style={{ color: r.errPct >= 4 ? 'var(--bad-text)' : undefined }}>{r.errPct}%</span>,
               <Badge tone={r.health === 'ok' ? 'good' : r.health === 'warn' ? 'warn' : 'bad'}>{r.health === 'ok' ? '健康' : r.health === 'warn' ? '异常' : '故障'}</Badge>,
             ])}
           />

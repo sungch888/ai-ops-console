@@ -207,7 +207,7 @@ export default function AppSecurity() {
             ].map((r) => [
               <span className="small">{r[0]}</span>,
               <span className="small num">{r[1]}</span>,
-              <span className="tiny" style={{ color: '#8fb0d6' }}>{r[2]}</span>,
+              <span className="tiny" style={{ color: 'var(--text-dim)' }}>{r[2]}</span>,
             ])}
             minWidth={420}
           />

@@ -276,7 +276,7 @@ export default function OpsIntegrations() {
                     {p}
                   </label>
                 ))}
-                {missing.length ? <div className="tiny" style={{ color: '#ffb3b3', marginTop: 8 }}>未就绪：{missing.join(' / ')}</div> : <div className="tiny up" style={{ marginTop: 8 }}>就绪校验通过，可切换到真实接口</div>}
+                {missing.length ? <div className="tiny" style={{ color: 'var(--bad-text)', marginTop: 8 }}>未就绪：{missing.join(' / ')}</div> : <div className="tiny up" style={{ marginTop: 8 }}>就绪校验通过，可切换到真实接口</div>}
 
                 <div className="row gap6" style={{ marginTop: 10 }}>
                   <button className="btn primary" disabled={!perm.manage} onClick={save}>保存配置（版本 +1）</button>
@@ -423,7 +423,7 @@ export default function OpsIntegrations() {
                 {ints.filter((c) => c.health !== 'ok').map((c) => (
                   <div key={c.id} style={{ marginBottom: 10 }}>
                     <div className="row gap6"><span className="small strong">{c.name}</span><State s={c.health === 'warn' ? 'warn' : 'fault'} /></div>
-                    <div className="tiny" style={{ color: '#ffb3b3', marginTop: 3 }}>缺口：{c.dataItems} · 降级策略：{c.fallback}</div>
+                    <div className="tiny" style={{ color: 'var(--bad-text)', marginTop: 3 }}>缺口：{c.dataItems} · 降级策略：{c.fallback}</div>
                   </div>
                 ))}
               </div>

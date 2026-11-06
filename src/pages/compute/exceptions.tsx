@@ -412,7 +412,7 @@ export default function ComputeExceptions() {
               <span className="small strong">{r.name}</span>,
               <span className="tiny" style={{ maxWidth: 300 }}>{r.detect}</span>,
               <span className="tiny mono">{r.threshold}</span>,
-              <span className="tiny" style={{ maxWidth: 260, color: '#ffd7d7' }}>{r.block}</span>,
+              <span className="tiny" style={{ maxWidth: 260, color: 'var(--bad-text)' }}>{r.block}</span>,
               <span className="tiny faint" style={{ maxWidth: 220 }}>{r.notBlock}</span>,
             ])}
           />

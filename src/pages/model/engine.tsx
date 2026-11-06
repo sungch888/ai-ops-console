@@ -99,7 +99,7 @@ export default function EngineMetrics() {
               <span className="num small">{m.instances} 实例 · {m.cards} 卡<div className="tiny faint">{m.rpm} RPM</div></span>,
               <div style={{ minWidth: 90 }}><span className="num small">{m.gpuUtil}%</span><Progress value={m.gpuUtil} tone={m.gpuUtil > 90 ? 'bad' : m.gpuUtil > 78 ? 'warn' : ''} /></div>,
               <span className="num small">{m.kvUsedGB} / {m.kvTotalGB} GB<div className="tiny faint">{Math.round((m.kvUsedGB / m.kvTotalGB) * 100)}% 显存</div></span>,
-              <span className="num" style={{ color: m.cacheHit < 35 ? '#ffb3b3' : undefined }}>{m.cacheHit}%</span>,
+              <span className="num" style={{ color: m.cacheHit < 35 ? 'var(--bad-text)' : undefined }}>{m.cacheHit}%</span>,
               <span className="num">{m.ttftMs} ms</span>,
               <span className="num small">{m.tokensPerSec.toLocaleString('zh-CN')}</span>,
               <span className="num small">{m.avgBatch}</span>,

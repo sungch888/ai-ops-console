@@ -22,11 +22,22 @@ const LS = 'aiops.theme'
 /** 图表（canvas）读不到 CSS 变量，这里给每套配色一份对应的图表用色 */
 interface Ink { axis: string; label: string; split: string; tipBg: string; tipBorder: string; series: string[] }
 const INK: Record<ThemeId, Ink> = {
-  deep: { axis: '#55708f', label: '#7f9cc7', split: 'rgba(64, 130, 220, 0.18)',tipBg: 'rgba(8, 18, 36, 0.96)', tipBorder: 'rgba(90, 160, 255, 0.4)',  series: ['#22d3ee', '#3d8bfd', '#2fd6a3', '#f5b83d', '#ff6b6b', '#a78bfa'] },
-  ink: { axis: '#64797a', label: '#8ea6a6', split: 'rgba(70, 110, 118, 0.22)',tipBg: 'rgba(12, 20, 22, 0.96)', tipBorder: 'rgba(100, 150, 160, 0.4)',  series: ['#56c7c7', '#6096be', '#2fd6a3', '#f5b83d', '#ff6b6b', '#9f8fd0'] },
-  paper: { axis: '#77869a', label: '#4d5b6c', split: 'rgba(150, 165, 190, 0.35)',tipBg: '#ffffff', tipBorder: 'rgba(150, 165, 190, 0.7)',  series: ['#0e748c', '#1e5ebe', '#148464', '#b2740a', '#be2d2d', '#6d4bb0'] },
-  govty: { axis: '#7b8593', label: '#525c69', split: 'rgba(168, 176, 188, 0.4)',tipBg: '#ffffff', tipBorder: 'rgba(168, 176, 188, 0.8)',  series: ['#2f6f7a', '#33597f', '#2f7355', '#9a6c14', '#a43b3b', '#5c5480'] },
-  contrast: { axis: '#8fa8c8', label: '#b8cdea', split: 'rgba(110, 160, 230, 0.35)',tipBg: 'rgba(4, 8, 14, 0.97)', tipBorder: 'rgba(140, 190, 255, 0.55)',  series: ['#4ee2ff', '#66a8ff', '#45e8b4', '#ffc851', '#ff8080', '#c4a8ff'] },
+  deep: { axis: '#8fa9cf', label: '#d9e8ff', split: 'rgba(64, 130, 220, 0.18)',tipBg: 'rgba(8, 18, 36, 0.96)', tipBorder: 'rgba(90, 160, 255, 0.4)',  series: ['#22d3ee', '#3d8bfd', '#2fd6a3', '#f5b83d', '#ff6b6b', '#a78bfa'] },
+  ink: { axis: '#a4bab9', label: '#e6efee', split: 'rgba(70, 110, 118, 0.22)',tipBg: 'rgba(12, 20, 22, 0.96)', tipBorder: 'rgba(100, 150, 160, 0.4)',  series: ['#56c7c7', '#6096be', '#2fd6a3', '#f5b83d', '#ff6b6b', '#9f8fd0'] },
+  paper: { axis: '#42505f', label: '#17212c', split: 'rgba(150, 165, 190, 0.35)',tipBg: '#ffffff', tipBorder: 'rgba(150, 165, 190, 0.7)',  series: ['#0e748c', '#1e5ebe', '#148464', '#b2740a', '#be2d2d', '#6d4bb0'] },
+  govty: { axis: '#3d4854', label: '#151b22', split: 'rgba(168, 176, 188, 0.4)',tipBg: '#ffffff', tipBorder: 'rgba(168, 176, 188, 0.8)',  series: ['#2f6f7a', '#33597f', '#2f7355', '#9a6c14', '#a43b3b', '#5c5480'] },
+  contrast: { axis: '#c6d9f2', label: '#f6faff', split: 'rgba(110, 160, 230, 0.35)',tipBg: 'rgba(4, 8, 14, 0.97)', tipBorder: 'rgba(140, 190, 255, 0.55)',  series: ['#4ee2ff', '#66a8ff', '#45e8b4', '#ffc851', '#ff8080', '#c4a8ff'] },
+}
+
+/** 页面自带的老配色（深空蓝那一套）按色相槽位换成当前配色的系列色：青色仍是第一系列，红色仍是告警色 */
+const SLOT: Record<string, number> = {
+  '#22d3ee': 0, '#5eead4': 0, '#46d6ff': 0, '#3d8bfd': 1, '#818cf8': 1, '#2fd6a3': 2, '#7ee2b8': 2,
+  '#8fe6c8': 2, '#f5b83d': 3, '#ffd98a': 3, '#ffc36b': 3, '#ff6b6b': 4, '#ff9a9a': 4, '#ffb3b3': 4,
+  '#a78bfa': 5, '#cdbcff': 5,
+}
+export function chartColor(c: string, ink: Ink): string {
+  const slot = SLOT[String(c).toLowerCase()]
+  return slot === undefined ? String(c) : ink.series[slot]
 }
 
 function valid(v: unknown): ThemeId {

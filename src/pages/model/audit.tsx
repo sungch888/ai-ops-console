@@ -138,7 +138,7 @@ export default function ModelAudit() {
                 <span>
                   <Badge tone={tone(r.result)}>{r.result}</Badge>
                   <div className="tiny faint" style={{ maxWidth: 220 }}>{r.risk}</div>
-                  <div className="tiny" style={{ color: r.identityGrade === '低信任 · 自建工具' || r.identityGrade === '标识缺失' ? '#ffb3b3' : '#7f9dc4' }}>{r.identityGrade}</div>
+                  <div className="tiny" style={{ color: r.identityGrade === '低信任 · 自建工具' || r.identityGrade === '标识缺失' ? 'var(--bad-text)' : '#7f9dc4' }}>{r.identityGrade}</div>
                 </span>,
               ])}
             />
@@ -153,10 +153,10 @@ export default function ModelAudit() {
           <Panel title={`链路还原 · ${r.traceId}`} extra={`${r.time} · 处置结果 ${r.result}`} className="mt14">
             <div className="grid g-3">
               {r.chain.map((n, i) => (
-                <div key={n.label} style={{ border: '1px solid rgba(64,130,220,.18)', borderRadius: 10, padding: '10px 12px', background: 'rgba(23,48,90,.28)' }}>
+                <div key={n.label} style={{ border: '1px solid rgba(var(--line-rgb), .18)', borderRadius: 10, padding: '10px 12px', background: 'rgba(23,48,90,.28)' }}>
                   <div className="tiny faint">节点 {i + 1} · {n.label}</div>
                   <div className="small strong" style={{ marginTop: 4 }}>{n.name}</div>
-                  <div className="tiny" style={{ color: '#8fb0d6', marginTop: 4 }}>{n.note}</div>
+                  <div className="tiny" style={{ color: 'var(--text-dim)', marginTop: 4 }}>{n.note}</div>
                 </div>
               ))}
             </div>

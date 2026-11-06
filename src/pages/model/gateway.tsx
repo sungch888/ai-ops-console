@@ -211,7 +211,7 @@ export default function Gateway() {
                   <span className="mono small">{o.id}</span>,
                   <span className="mono small">{String(o.spec.weights).replace(/,/g, ' / ')}</span>,
                   <State s={o.status === 'submitted' ? 'pending' : o.status === 'rejected' ? 'block' : o.status === 'running' ? 'run' : 'done'} />,
-                  <span className="small" style={{ color: o.rejectReason ? '#ffb3b3' : '#a9c4e8' }}>{o.rejectReason ?? (o.trace[o.trace.length - 1]?.detail ?? '')}</span>,
+                  <span className="small" style={{ color: o.rejectReason ? 'var(--bad-text)' : 'var(--text-dim)' }}>{o.rejectReason ?? (o.trace[o.trace.length - 1]?.detail ?? '')}</span>,
                 ])}
               />
             </div>

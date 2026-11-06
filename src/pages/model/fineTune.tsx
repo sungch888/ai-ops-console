@@ -88,7 +88,7 @@ export default function FineTune() {
                 </div>
                 <div style={{ marginTop: 8, display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 6 }}>
                   {r.items.map((it) => (
-                    <span key={it} className="small" style={{ color: '#9ec5ff' }}>{it}</span>
+                    <span key={it} className="small" style={{ color: 'var(--info-text)' }}>{it}</span>
                   ))}
                 </div>
                 <div className="muted small" style={{ marginTop: 8 }}>{r.approver}</div>

@@ -156,7 +156,7 @@ export default function ModelSafetyFlow() {
               <span className="tag gray">{c.method}</span>,
               <span className="tiny">{c.req}</span>,
               <span className="tiny">{c.resp}</span>,
-              <span className="tiny" style={{ maxWidth: 300, color: '#ffd7d7' }}>{c.must}</span>,
+              <span className="tiny" style={{ maxWidth: 300, color: 'var(--bad-text)' }}>{c.must}</span>,
             ])}
           />
           <div className="tiny faint" style={{ marginTop: 8 }}>三件事最容易在选型时漏掉：① 检测超时到底放行还是拦截（口径要在选型纪要里定）；② 输出侧检测要能指出原文位置，否则复核做不了；③ 策略清单只能有一份权威来源，否则平台与检测引擎各判各的。</div>

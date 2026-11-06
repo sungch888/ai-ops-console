@@ -75,7 +75,7 @@ export default function Trace() {
           <div className="tl">
             {STEPS.map((s, i) => (
               <div key={s.title} className="tl-item">
-                <span className="mono" style={{ color: '#22d3ee' }}>{String(i + 1).padStart(2, '0')}</span>
+                <span className="mono" style={{ color: 'var(--cyan)' }}>{String(i + 1).padStart(2, '0')}</span>
                 <div style={{ flex: 1, minWidth: 220 }}>
                   <div className="row between">
                     <span className="strong">{s.title}</span>

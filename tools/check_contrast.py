@@ -69,7 +69,17 @@ for name in ('ink', 'paper', 'govty', 'contrast'):
 CHECKS = [('--text', '正文', 7.0), ('--text-dim', '次要文字', 5.0), ('--text-faint', '微弱说明', 5.0),
           ('--panel-title', '面板标题', 7.0), ('--kpi-text', '大数字', 7.0),
           ('--nav-text', '侧栏项', 5.0), ('--ok-text', '绿色徽章', 4.5), ('--warn-text', '琥珀徽章', 4.5),
-          ('--bad-text', '红色徽章', 4.5)]
+          ('--bad-text', '红色徽章', 4.5), ('--table-text', '表格正文', 7.0), ('--table-strong', '表格强调', 7.0),
+          ('--info-text', '蓝色徽章', 4.5), ('--purple-text', '紫色徽章', 4.5), ('--warn-strong', '警示框文字', 4.5),
+          ('--link-text', '标签文字', 4.5)]
+
+
+# 图表（canvas）用的颜色在 src/engine/ui.ts 里单列一份，这里一并量
+import json as _json
+ui = pathlib.Path('src/engine/ui.ts').read_text(encoding='utf-8')
+INKS = {}
+for m in re.finditer(r"\n  (deep|ink|paper|govty|contrast): \{ axis: '([^']+)', label: '([^']+)'", ui):
+    INKS[m.group(1)] = (m.group(2), m.group(3))
 
 fails = 0
 for label, toks in THEMES:
@@ -91,6 +101,15 @@ for label, toks in THEMES:
         if r < need:
             fails += 1
         print('   %-10s %5.2f:1  (需 ≥ %.1f)  %s' % (cn, r, need, flag))
+    key = label.split(' ')[0]
+    if key in INKS:
+        ax, lb = INKS[key]
+        for nm, col, need in (('图表数据标签', lb, 7.0), ('图表坐标轴文字', ax, 4.5)):
+            c = first_color(col)
+            r = ratio(over(c, panel), panel) if c else 0
+            if r < need:
+                fails += 1
+            print('   %-10s %5.2f:1  (需 ≥ %.1f)  %s' % (nm, r, need, 'ok' if r >= need else '不足'))
     b1 = first_color(resolve('--line', toks)) or (128, 128, 128, 1)
     pr = ratio(panel, page)
     br = ratio(over(b1, page), page)

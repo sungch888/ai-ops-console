@@ -52,9 +52,9 @@ export default function AppAccounts() {
       <div className="grid g-2 mt14">
         <Panel title="统一认证与双域账号">
           <ul className="tl">
-            <li><div className="tl-time">用户域</div><div className="small" style={{ color: '#b9cbe6' }}>平台账号直接登录，支持与各子系统 SSO 单点登录对接；处置登录异常与身份同步失败工单</div></li>
-            <li><div className="tl-time">数据域</div><div className="small" style={{ color: '#b9cbe6' }}>须通过申请注册或统一身份认证（零信任）账号登录，与用户域隔离部署</div></li>
-            <li><div className="tl-time">权限模型</div><div className="small" style={{ color: '#b9cbe6' }}>RBAC 加载功能权限 + 租户 / 组织 / 业务线 / 条线 / 密级 / 项目组标签控制资源访问边界</div></li>
+            <li><div className="tl-time">用户域</div><div className="small" style={{ color: 'var(--table-text)' }}>平台账号直接登录，支持与各子系统 SSO 单点登录对接；处置登录异常与身份同步失败工单</div></li>
+            <li><div className="tl-time">数据域</div><div className="small" style={{ color: 'var(--table-text)' }}>须通过申请注册或统一身份认证（零信任）账号登录，与用户域隔离部署</div></li>
+            <li><div className="tl-time">权限模型</div><div className="small" style={{ color: 'var(--table-text)' }}>RBAC 加载功能权限 + 租户 / 组织 / 业务线 / 条线 / 密级 / 项目组标签控制资源访问边界</div></li>
           </ul>
           <Callout text="不得孤立维护与组织体系割裂的账号；账号开通、权限变更、注销均须记录台账并按分级审批办理。" />
         </Panel>

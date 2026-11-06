@@ -106,7 +106,7 @@ export default function ComputeCards() {
       <Panel className="mt14" title="卡位热力网格（按节点 × 卡位）" extra={`利用率分段：<60% 蓝 · 60–85% 深蓝 · >85% 橙 · 隔离 红 · 悬停看全量指标`}>
         <div className="col gap6">
           {nodes.map((n) => (
-            <div key={n.name} style={{ border: '1px solid rgba(64,130,220,.16)', borderRadius: 10, padding: '10px 12px' }}>
+            <div key={n.name} style={{ border: '1px solid rgba(var(--line-rgb), .16)', borderRadius: 10, padding: '10px 12px' }}>
               <div className="row gap6" style={{ flexWrap: 'wrap', marginBottom: 8 }}>
                 <span className="strong small">{n.name}</span>
                 <span className="tag gray">{n.model}</span>
@@ -124,7 +124,7 @@ export default function ComputeCards() {
                       style={{
                         minWidth: 40, background: cellBg(c), borderRadius: 7, padding: '6px 4px',
                         textAlign: 'center', fontSize: 11, lineHeight: 1.4, color: '#e8f2ff',
-                        border: c.health === 'fault' ? '1px solid rgba(255,107,107,.55)' : '1px solid rgba(160,205,255,.14)',
+                        border: c.health === 'fault' ? '1px solid rgba(var(--red-rgb), .55)' : '1px solid rgba(160,205,255,.14)',
                       }}
                     >
                       <div style={{ opacity: 0.8 }}>卡{i + 1}</div>
@@ -192,7 +192,7 @@ export default function ComputeCards() {
         ) : (
           <div className="col gap6">
             {alerts.map(({ c, reasons }) => (
-              <div key={c.id} style={{ border: '1px solid rgba(64,130,220,.16)', borderRadius: 10, padding: '8px 10px' }}>
+              <div key={c.id} style={{ border: '1px solid rgba(var(--line-rgb), .16)', borderRadius: 10, padding: '8px 10px' }}>
                 <div className="row gap6" style={{ flexWrap: 'wrap' }}>
                   <span className="mono small strong">{c.id}</span>
                   <span className="tag gray">{c.node}</span>
