@@ -25,16 +25,19 @@ export interface GpuCardRow {
   health: string; note: string; updated_at: string
 }
 export interface MonitorState { thread: boolean; last_run_at: string; last_error: string; probes: number; failures: number; alerts?: Record<string, MonitorAlert>; last_recovery?: { notification_id: string; closed: number } }
+export interface MonitorFallback { id: string; ref: string; title: string; status: string; owner: string;
+  created_at: string; updated_at: string }
+
 export interface MonitorAlert { notification_id: string; fallback_id: string; owner: string; level: string; streak: number }
 
 interface MonitorStore {
   targets: MonitorTarget[]; latest: (MetricSample | null)[]; samples: MetricSample[]; cards: GpuCardRow[]
-  state: MonitorState | null; keyEnvPresent: Record<string, boolean>; tick: number; retention: number
+  state: MonitorState | null; keyEnvPresent: Record<string, boolean>; fallback: MonitorFallback[]; tick: number; retention: number
   total: number; fromServer: boolean; error: string; loading: boolean
 }
 
 const init: MonitorStore = {
-  targets: [], latest: [], samples: [], cards: [], state: null, keyEnvPresent: {}, tick: 5, retention: 24,
+  targets: [], latest: [], samples: [], cards: [], state: null, keyEnvPresent: {}, fallback: [], tick: 5, retention: 24,
   total: 0, fromServer: false, error: '', loading: false,
 }
 let st: MonitorStore = { ...init }
@@ -54,6 +57,7 @@ export const monitorStore = {
         st.latest = (m.latest || []) as (MetricSample | null)[]
         st.state = (m.state || null) as MonitorState | null
         st.keyEnvPresent = (m.key_env_present || {}) as Record<string, boolean>
+        st.fallback = (m.fallback || []) as MonitorFallback[]
         st.tick = Number(m.tick_seconds || 5)
         st.retention = Number(m.retention_hours || 24)
         st.total = Number(m.total_samples || 0)
@@ -81,6 +85,14 @@ export const monitorStore = {
       await monitorStore.refresh()
       return r
     } catch (e) { return { ok: false, error: e instanceof Error ? e.message : '保存失败' } }
+  },
+
+  async decideFallback(id: string, action: 'take' | 'close', note = '') {
+    try {
+      const r = await apiSend('POST', '/api/monitor/fallback/decide', { id, action, note })
+      await monitorStore.refresh()
+      return r
+    } catch (e) { return { ok: false, error: e instanceof Error ? e.message : '操作失败' } }
   },
 
   async probe(id = '') {

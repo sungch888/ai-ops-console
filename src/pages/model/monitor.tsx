@@ -31,6 +31,7 @@ export default function ModelMonitor() {
   const [tgt, setTgt] = useState({ name: '', base: '', api_key_env: '', interval_seconds: 30, window_seconds: 300, metric_format: 'openai', active_probe: 1 })
   const [monMsg, setMonMsg] = useState<{ ok: boolean; text: string } | null>(null)
   const [msg, setMsg] = useState<{ tone: 'good' | 'bad'; text: string } | null>(null)
+  const [fbMsg, setFbMsg] = useState<{ ok: boolean; text: string } | null>(null)
 
   /* 采集层落 services.json 后自动切「采集层」：订阅刷新，不改采集层代码 */
   useEffect(() => telemetryStore.subscribe(() => setNonce((n) => n + 1)), [])
@@ -278,6 +279,41 @@ export default function ModelMonitor() {
             <Callout warn text={'已经告出来的断连：' + mon.targets.filter((x) => x.alert_state === '已告警')
               .map((x) => x.name + '（连续 ' + x.fail_streak + ' 轮采不到 · 通知已发 · 兜底工单派给 '
                 + ((mon.state?.alerts || {})[x.id]?.owner || '值班岗位') + '）').join('；')} />
+          ) : null}
+                    {mon.fallback.length ? (
+            <>
+              <div className="divider" />
+              <div className="tiny strong" style={{ marginTop: 10 }}>断连兜底工单（谁在处理、有没有闭环）</div>
+              <Table minWidth={1000} head={['工单 / 来源', '状态', '现在归谁', '开单时间', '闭环操作']} rows={mon.fallback.map((f) => [
+                <span className="tiny strong">{f.title.slice(0, 46)}<div className="tiny mono faint">{f.id} · {f.ref}</div></span>,
+                <span>{f.status === '待接管' ? <Badge tone="warn">待接管</Badge>
+                  : f.status === '已升级' ? <Badge tone="bad">已升级（没人接管）</Badge>
+                  : f.status === '已接管' ? <Badge tone="info">已接管</Badge> : <Badge tone="good">已关闭</Badge>}</span>,
+                <span className="tiny">{f.owner}</span>,
+                <span className="tiny faint">{(f.created_at || '').replace('T', ' ').replace('Z', '')}</span>,
+                <div className="row gap6" style={{ flexWrap: 'wrap' }}>
+                  {(f.status === '待接管' || f.status === '已升级') ? (
+                    <button className="btn sm ghost" disabled={!canProbe}
+                      onClick={() => void monitorStore.decideFallback(f.id, 'take').then((r) => setFbMsg({
+                        ok: !!r.ok, text: r.ok ? f.id + ' 已认领：' + (r.owner || '') : '被拒：' + (r.error || '') }))}>我接管</button>
+                  ) : null}
+                  {f.status !== '已关闭' ? (
+                    <button className="btn sm ghost" disabled={!canProbe}
+                      onClick={() => {
+                        const note = window.prompt('关闭原因（必填）：已联系对方重启 / 已切流量 / 换成备用地址 / 误报')
+                        if (!note) { setFbMsg({ ok: false, text: '没写原因，工单不关闭' }); return }
+                        void monitorStore.decideFallback(f.id, 'close', note).then((r) => setFbMsg({
+                          ok: !!r.ok, text: r.ok ? f.id + ' 已关闭：' + (r.note || '') : '被拒：' + (r.error || '') }))
+                      }}>处置完毕 · 关闭</button>
+                  ) : null}
+                </div>,
+              ])} />
+              {fbMsg ? <div className="tiny" style={{ marginTop: 6, color: fbMsg.ok ? '#7ee2b8' : '#ff9a9a' }}>{fbMsg.text}</div> : null}
+              <div className="tiny faint" style={{ marginTop: 6 }}>
+                「我接管」把这张工单认领到人头上（记录谁、几点）；「处置完毕 · 关闭」必须写原因，而且当目标仍然采不到时会提醒你
+                「关闭只是处置登记，不代表它已经通」。目标重新采到时工单会自动关闭，不需要人管。
+              </div>
+            </>
           ) : null}
           <Table minWidth={1080} head={['监控目标', '地址', '取数口径 / 密钥', '间隔 / 窗口', '最近一轮', '操作']} rows={mon.targets.map((t) => [
             <span className="small strong">{t.name}<div className="tiny mono faint">{t.id} · {t.enabled ? '启用' : '已停用'}</div></span>,

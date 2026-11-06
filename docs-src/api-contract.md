@@ -293,6 +293,10 @@ python3 server/server.py --reset             # 清空数据库后退出
 - 兜底追办：配置项 `fallback-escalate-min`（`0 / 10 / 15 / 30 / 60`，默认 15）——兜底工单挂太久无人接管 → 状态 `已升级`、
   改派给派单映射里「资源异常」的带班角色（默认「值班长」）、追加一条「紧急」通知与事件，审计 `monitor_escalate`；`0` = 不自动升级。
   巡检线程自动跑，也可以 `POST /api/monitor/sweep`（权限点 compute·操作）手动巡检一次，返回升级张数与待接管清单。
+- 闭环认领：`POST /api/monitor/fallback/decide`（权限点 compute·操作）`{"id","action":"take"|"close","note"}` ——
+  `take` 把工单认领到当前登录人（状态 `已接管`、`owner` 写人名、审计 `monitor_fallback_take`）；
+  `close` 必须带 `note`（否则 400），状态 `已关闭`，审计 `monitor_fallback_close`；若目标此刻仍采不到，返回里明确写
+  「关闭只是处置登记，不代表它已经通」。`GET /api/monitor` 返回 `fallback` 清单（待接管 → 已升级 → 已关闭 排序）。
 - 通知保护：页面自己的通知投影（`dsh-demo-notif-v1`）只覆盖演示推导的通知，服务端告警写入的通知（`N-MON…` / `N-ESCL…`）不被清掉。
 - 时间口径：事件与通知的显示时间用数据服务所在机器的本地钟点（`HH:MM:SS` / `MM-DD HH:MM:SS`），与页面其它台账一致。
 - 未做（诚实边界）：时延 / 错误率 / 排队深度这类**指标阈值**告警目前还在页面常量里，没搬进配置项。

@@ -1859,6 +1859,10 @@ class Handler(BaseHTTPRequestHandler):
                 'kinds': list(COLLECT_KINDS), 'approval_mode': cfg('data-source-approval', 'off'),
                 'rows': {r['kind']: json.loads(r['rows_json']) for r in
                          conn.execute('SELECT kind, rows_json FROM collect_payloads')},
+                'fallback': [dict(r) for r in conn.execute(
+                    "SELECT id, ref, title, status, owner, created_at, updated_at FROM fallback_tasks"
+                    " WHERE kind='monitor_unreachable' ORDER BY CASE status WHEN '待接管' THEN 0"
+                    " WHEN '已升级' THEN 1 ELSE 2 END, created_at DESC LIMIT 12")],
                 'note': '资源接入全部在系统里配（配置中心 → 资源接入与采集）；采集只读拉取，平台不向外部系统写数据；'
                         '密钥只存 env:环境变量名 引用，值由启动环境提供'})
         if key == 'monitor':
@@ -1876,6 +1880,10 @@ class Handler(BaseHTTPRequestHandler):
                 'key_env_present': {t['id']: bool(os.environ.get(t['api_key_env'] or '')) for t in targets},
                 'state': MONITOR_STATE, 'tick_seconds': MONITOR_TICK,
                 'retention_hours': SAMPLE_RETENTION_HOURS,
+                'fallback': [dict(r) for r in conn.execute(
+                    "SELECT id, ref, title, status, owner, created_at, updated_at FROM fallback_tasks"
+                    " WHERE kind='monitor_unreachable' ORDER BY CASE status WHEN '待接管' THEN 0"
+                    " WHEN '已升级' THEN 1 ELSE 2 END, created_at DESC LIMIT 12")],
                 'total_samples': conn.execute('SELECT COUNT(*) c FROM metric_samples').fetchone()['c'],
                 'note': '探针只读拉取外部服务的 /metrics 与 /health；库里只存环境变量名，不存密钥'})
         if key == 'commands':
@@ -2384,6 +2392,45 @@ class Handler(BaseHTTPRequestHandler):
             audit(conn, actor_of(self), 'duty_route_put', kind, '%s → %s（超时升级 %s）'
                   % (kind, role, p.get('escalate_role') or '值班长'))
             return self._json(HTTPStatus.OK, {'ok': True, 'kind': kind})
+
+        if key == 'monitor/fallback/decide':
+            if not self._need('compute', 'manage', 'denied_monitor_fallback_decide'):
+                return
+            payload, err = self._body()
+            if err:
+                return self._json(HTTPStatus.BAD_REQUEST, {'ok': False, 'error': err})
+            b = payload or {}
+            fid = str(b.get('id') or '')[:40]
+            row = conn.execute('SELECT * FROM fallback_tasks WHERE id=?', (fid,)).fetchone()
+            if not row:
+                return self._json(HTTPStatus.NOT_FOUND, {'ok': False, 'error': '没有这张兜底工单'})
+            action = str(b.get('action') or '')
+            note = str(b.get('note') or '')[:300]
+            if action not in ('take', 'close'):
+                return self._json(HTTPStatus.BAD_REQUEST, {'ok': False,
+                                                           'error': 'action 只能是 take（我接管）或 close（处置完毕关闭）'})
+            if action == 'close' and not note.strip():
+                return self._json(HTTPStatus.BAD_REQUEST, {'ok': False,
+                                                           'error': '关闭要写原因（已联系对方重启 / 已切流量 / 误报 / 换成备用地址）'})
+            who = (self.user['name'] or self.user['username'])[:60]
+            ts = now_iso()
+            clock = datetime.now().astimezone().strftime('%H:%M:%S')
+            status = '已接管' if action == 'take' else '已关闭'
+            mark = ('（%s 于 %s 认领）' % (who, clock)) if action == 'take' else ('（%s 于 %s 关闭：%s）' % (who, clock, note))
+            conn.execute("UPDATE fallback_tasks SET status=?, owner=?, updated_at=?, detail=detail||? WHERE id=?",
+                         (status, who, ts, mark, fid))
+            still = conn.execute("SELECT last_status, fail_streak FROM monitor_targets WHERE id=?",
+                                 (row['ref'],)).fetchone()
+            tail = ''
+            if action == 'close' and still and still['last_status'] == '取数失败':
+                tail = '；注意：这个目标到现在还采不到（连续 %d 轮），工单关闭是处置登记，不代表它已经通' % int(still['fail_streak'] or 0)
+            conn.execute('INSERT INTO events(time, level, text, source, created_at) VALUES(?,?,?,?,?)',
+                         (clock, '一般', '【兜底闭环】%s → %s（%s）%s' % (row['title'], status, who, tail), '兜底值守', ts))
+            audit(conn, actor_of(self), 'monitor_fallback_' + ('take' if action == 'take' else 'close'), fid,
+                  '%s（%s）由 %s %s%s' % (fid, row['ref'], who, status, '：%s' % note if note else ''))
+            conn.commit()
+            return self._json(HTTPStatus.OK, {'ok': True, 'id': fid, 'status': status, 'owner': who,
+                                              'note': '工单状态与责任人已记录%s' % tail})
 
         if key == 'monitor/sweep':
             if not self._need('compute', 'manage', 'denied_monitor_sweep'):
