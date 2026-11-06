@@ -76,7 +76,7 @@ export default function AppTools() {
         </Panel>
         <Panel title="运行时管控">
           {['调用前校验调用主体权限与工具授权范围', '参数安全审查：拦截注入指令与越权操作', '返回结果安全检测，含敏感信息须脱敏后进入上下文', '高危工具（数据查询 / 系统操作 / 外部访问）须二次确认或审批依据', '持续异常工具自动从可用目录隔离，恢复后重新纳入'].map((t) => (
-            <div key={t} className="small" style={{ color: '#a9c4e8', lineHeight: 1.9 }}>{t}</div>
+            <div key={t} className="small" style={{ color: 'var(--text-dim)', lineHeight: 1.9 }}>{t}</div>
           ))}
           <Callout warn text="视频图像检索（v0.9）成功率 94.8%，已连续 3 日低于阈值：使用目录中标注不可选，并通知已绑定该工具的业务方。" />
         </Panel>

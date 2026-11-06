@@ -1,5 +1,5 @@
 import React from 'react'
-import { Kpi, Panel, PageHead, Badge, Table, Callout } from '../../components/ui'
+import {Kpi, Panel, PageHead, Badge, Table, Callout, Tip} from '../../components/ui'
 import { useNotifs, notifyStore } from '../../engine/ops'
 import { liveAlertStore, useLiveAlerts } from '../../engine/liveAlerts'
 import { flagsStore, usePerm } from '../../engine/auth'
@@ -86,8 +86,8 @@ export default function OpsNotifications() {
             )}
             {srvMsg ? <div className="tiny" style={{ marginTop: 6, color: srvMsg.ok ? '#7ee2b8' : '#ff9a9a' }}>{srvMsg.text}</div> : null}
             <div className="tiny faint" style={{ marginTop: 6 }}>
-              这条是平台自己发现、自己写进库的告警（不是页面演示推导的通知）。<span className="strong">没人处置就一直挂着</span>：
-              对应的兜底工单挂满 15 分钟没人接管会自动升级给带班角色；处置动作会记录是谁、几点，写审计 <span className="mono">monitor_notify_ack</span>。
+              平台自己发现、自己写进库的告警，<span className="strong">没人处置就一直挂着</span>
+              <Tip label="怎么追办、留什么痕" text="兜底工单挂满配置的分钟数（默认 15 分钟）没人接管，会自动升级给带班角色并再发一条紧急通知；处置会记录是谁、几点、说明，写审计 monitor_notify_ack。" />
             </div>
           </div>
         </Panel>

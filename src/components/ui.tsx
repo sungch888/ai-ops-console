@@ -138,6 +138,10 @@ export function Tabs(props: {
   )
 }
 
+export function Tip({ text, label }: { text: string; label?: string }) {
+  return <span className="tip" title={text}>{label || '说明'}</span>
+}
+
 export function Callout({ text, warn, icon }: { text: React.ReactNode; warn?: boolean; icon?: React.ReactNode }) {
   return (
     <div className={`callout ${warn ? 'warn' : ''}`}>

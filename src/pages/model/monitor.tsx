@@ -6,7 +6,7 @@
  * ===================================================================== */
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { Badge, Callout, Kpi, PageHead, Panel, Progress, State, Table } from '../../components/ui'
+import {Badge, Callout, Kpi, PageHead, Panel, Progress, State, Table, Tip} from '../../components/ui'
 import { AXIS_COLOR, CHART_COLORS, Chart, GRID, SPLIT_COLOR, TOOLTIP_STYLE } from '../../components/Chart'
 import { inferenceServices, sourceHint, telemetryStatus, telemetryStore, type InferenceService } from '../../engine/telemetry'
 import { engine, useEngine } from '../../engine/engine'
@@ -272,7 +272,9 @@ export default function ModelMonitor() {
         </div>
       </Panel>
       <Panel title="平台内置监控探针（采样入库 · 只读拉取外部服务）" className="mt14" noPad
-        extra={<span className="tiny faint">探针线程 {mon.state?.thread ? '在跑' : '未起'} · 轮询 {mon.tick} 秒 · 成功 {mon.state?.probes ?? 0} 次 / 失败 {mon.state?.failures ?? 0} 次 · 库里 {mon.total} 条采样（保留 {mon.retention} 小时）</span>}>
+        extra={<span className="tiny faint">探针 {mon.state?.thread ? '在跑' : '未起'} · {mon.tick} 秒一轮 · 成功 {mon.state?.probes ?? 0} / 失败 {mon.state?.failures ?? 0}
+          <Tip label="采样口径" text={'库里 ' + mon.total + ' 条采样，保留 ' + mon.retention + ' 小时；探针只读 GET /metrics 与 /health，不会改对方服务'} />
+        </span>}>
         <div className="panel-body">
           {mon.error ? <Callout warn text={'监控读不到：' + mon.error} /> : null}
           {mon.targets.some((x) => x.alert_state === '已告警') ? (
@@ -322,13 +324,14 @@ export default function ModelMonitor() {
               <div className="tiny faint">{t.api_key_env || '不需要密钥'}{mon.keyEnvPresent[t.id] === false && t.api_key_env ? <span style={{ marginLeft: 6, color: '#f5b83d' }}>环境变量没给</span> : null}</div>
             </span>,
             <span className="tiny">{t.interval_seconds} 秒 / 窗口 {t.window_seconds} 秒</span>,
-            <span className="tiny">{t.last_status === '已采集' ? <Badge tone="good">已采集</Badge> : t.last_status ? <Badge tone="bad">{t.last_status}</Badge> : <Badge tone="muted">还没采过</Badge>}{t.alert_state === '已告警' ? <Badge tone="bad">已告警 · 连续 {t.fail_streak} 轮采不到</Badge> : null}{t.last_error ? <div className="tiny" style={{ color: '#ff9a9a', maxWidth: 260 }}>{t.last_error}</div> : null}</span>,
+            <span className="tiny">{t.last_status === '已采集' ? <Badge tone="good">已采集</Badge> : t.last_status ? <Badge tone="bad">{t.last_status}</Badge> : <Badge tone="muted">还没采过</Badge>}{t.alert_state === '已告警' ? <Badge tone="bad">已告警 · 连续 {t.fail_streak} 轮采不到</Badge> : null}{t.last_error ? <div className="tiny" style={{ color: 'var(--bad-text)', maxWidth: 260 }}>{t.last_error}</div> : null}</span>,
             <div className="row gap6" style={{ flexWrap: 'wrap' }}>
               <button className="btn sm ghost" disabled={!canProbe} onClick={() => void monitorStore.probe(t.id).then((r) => setMonMsg({ ok: !!r.ok, text: r.ok ? t.name + ' 已采一轮（样本写进 metric_samples）' : '采集被拒：' + (r.error || '') }))}>立即采一轮</button>
               <button className="btn sm ghost" disabled={!canProbe} onClick={() => void monitorStore.saveTarget({ ...t, enabled: t.enabled ? 0 : 1 }).then((r) => setMonMsg({ ok: !!r.ok, text: r.ok ? (t.enabled ? t.name + ' 已停用' : t.name + ' 已启用') : '被拒：' + (r.error || '') }))}>{t.enabled ? '停用' : '启用'}</button>
             </div>,
           ])} />
-          {mon.targets.length === 0 ? <div className="tiny faint" style={{ marginTop: 6 }}>还没有监控目标：在下面填一台推理服务。它暴露 <span className="mono">/metrics</span>（JSON 或 Prometheus 文本）就选对应口径；只有 OpenAI 兼容接口（<span className="mono">/v1/models</span>）就选「只有 OpenAI 兼容接口」，卡指标会标「对方未开放」。</div> : null}
+          {mon.targets.length === 0 ? <div className="tiny faint" style={{ marginTop: 6 }}>还没有监控目标：在下面填一台推理服务。
+            <Tip label="怎么填" text="它暴露 /metrics（JSON 或 Prometheus 文本）就选对应口径；只有 OpenAI 兼容接口（/v1/models）就选「只有 OpenAI 兼容接口」，卡指标会标「对方未开放」。填完不用重启，下一轮探针就采。" /></div> : null}
 
           <div className="row gap6 wrap" style={{ marginTop: 12 }}>
             <input className="btn sm" style={{ width: 210 }} value={tgt.name} placeholder="目标显示名" onChange={(e) => setTgt({ ...tgt, name: e.target.value })} />
@@ -391,7 +394,7 @@ export default function ModelMonitor() {
             <span className="num small">{x.kv_hit_pct === null ? '对方未开放' : `${x.kv_hit_pct}%`}</span>,
             <span className="num small">{x.hbm_pct === null ? '对方未开放' : `${x.hbm_pct}%`}</span>,
             <span className="tiny">{x.gpu_temp_c === null ? '卡指标对方未开放' : `${x.gpu_temp_c} ℃ / ${x.gpu_power_w} W`}<div className="tiny faint">{x.gpu_name || '对方未开放卡型'}</div></span>,
-            <span className="num small">{metricNum(x.req_window)}{x.status === '取数失败' ? <div className="tiny" style={{ color: '#ff9a9a', maxWidth: 240 }}>{(x.note || '').slice(0, 70)}</div> : null}</span>,
+            <span className="num small">{metricNum(x.req_window)}{x.status === '取数失败' ? <div className="tiny" style={{ color: 'var(--bad-text)', maxWidth: 240 }}>{(x.note || '').slice(0, 70)}</div> : null}</span>,
           ])} />
           <div className="tiny faint" style={{ marginTop: 8 }}>
             探针取数：数据服务自己按目标各自的间隔去拉，口径按目标选（JSON 指标 / Prometheus 文本 / 只有 OpenAI 兼容接口）；

@@ -6,7 +6,7 @@
  * 权限：改配置需要「权限矩阵」操作权；排班与派单需要「资源调配」操作权
  * ===================================================================== */
 import { useEffect, useState } from 'react'
-import { Badge, Callout, Kpi, Panel, PageHead, Table } from '../../components/ui'
+import {Badge, Callout, Kpi, Panel, PageHead, Table, Tip} from '../../components/ui'
 import { listLinks, loadConfig, saveConfig, syncLinks, useFlags, usePerm } from '../../engine/auth'
 import { COLLECT_KINDS, buildSourceConfig, collectStore, useCollect } from '../../engine/collect'
 import { apiSend } from '../../engine/db'
@@ -115,7 +115,7 @@ export default function OpsSettings() {
             disabled={!matrixPerm.manage} onChange={(e) => setDraft({ ...draft, 'command-ack-timeout-min': e.target.value })} />
           <button className="btn sm primary" disabled={!matrixPerm.manage || (draft['command-ack-timeout-min'] ?? cfg['command-ack-timeout-min']) === cfg['command-ack-timeout-min']}
             onClick={() => void put('command-ack-timeout-min', draft['command-ack-timeout-min'] ?? '30')}>保存</button>
-          {err ? <span className="tiny" style={{ color: '#ff9a9a' }}>{err}</span> : null}
+          {err ? <span className="tiny" style={{ color: 'var(--bad-text)' }}>{err}</span> : null}
         </div>
         <div className="tiny faint" style={{ marginTop: 8 }}>
           迁移三步（写进实施方案，不在演示里假装完成）：<b>① 影子同步</b> —— 外部账号只读导进来比对差异；
@@ -131,7 +131,7 @@ export default function OpsSettings() {
           <div className="row gap6 mt14" style={{ marginTop: 12 }}>
             <button className="btn primary sm" disabled={!matrixPerm.manage} onClick={() => void doSync()}>执行影子同步</button>
             <span className="tiny faint">当前身份来源：{cfg['auth-provider'] || 'local'}</span>
-            {syncMsg ? <span className="tiny" style={{ color: '#7ee2b8' }}>{syncMsg}</span> : null}
+            {syncMsg ? <span className="tiny" style={{ color: 'var(--ok-text)' }}>{syncMsg}</span> : null}
           </div>
           <Table minWidth={820} head={['外部账号', '外部姓名', '外部角色', '对应本地账号', '比对结果', '最近同步']} rows={links.map((r) => [
             <span className="small mono">{r.external_id}</span>,
@@ -197,7 +197,12 @@ export default function OpsSettings() {
         </div>
       </Panel>
       <Panel title="资源接入与采集（加资源不用改代码）" className="mt14" noPad
-        extra={<span className="tiny faint">采集线程 {col.state?.thread ? '在跑' : '未起'} · 成功 {col.state?.runs ?? 0} 次 / 失败 {col.state?.failures ?? 0} 次 · 接入要先审批：{col.approvalMode === 'off' ? '关（登记即生效 + 审计）' : '开（先生成资源接入工单）'} · 断连告警：{(flags.config['monitor-alert-enabled'] || 'on') === 'on' ? '开（连续 ' + (flags.config['monitor-alert-fail-count'] || '2') + ' 轮采不到就告）' : '关（只留痕）'}</span>}>
+        extra={<span className="tiny faint">采集线程 {col.state?.thread ? '在跑' : '未起'} · 成功 {col.state?.runs ?? 0} / 失败 {col.state?.failures ?? 0}
+          <Tip label="接入与告警口径" text={'接入要先审批：' + (col.approvalMode === 'off' ? '关（登记即生效 + 审计）' : '开（先生成资源接入工单）')
+            + ' · 断连告警：' + ((flags.config['monitor-alert-enabled'] || 'on') === 'on'
+              ? '开（连续 ' + (flags.config['monitor-alert-fail-count'] || '2') + ' 轮采不到就告警、开兜底工单）' : '关（只留痕，不发通知）')
+            + ' · 改这些只动配置，不用改代码'} />
+        </span>}>
         <div className="panel-body">
           {col.error ? <Callout warn text={'资源接入读不到：' + col.error} /> : null}
           <Table minWidth={1120} head={['资源 / 类型', '关键配置（密钥只写环境变量名）', '间隔', '最近一轮', '接入状态', '操作']} rows={col.sources.map((d) => [
@@ -205,7 +210,7 @@ export default function OpsSettings() {
             <span className="tiny mono" style={{ maxWidth: 340 }}>{(JSON.stringify(JSON.parse(d.config_json || '{}')) || '').slice(0, 190)}</span>,
             <span className="tiny">{d.interval_seconds} 秒</span>,
             <span className="tiny">{d.last_status === '已采集' ? <Badge tone="good">已采集</Badge> : d.last_status ? <Badge tone="bad">{d.last_status}</Badge> : <Badge tone="muted">还没采过</Badge>}
-              {d.last_error ? <div className="tiny" style={{ color: '#ff9a9a', maxWidth: 260 }}>{d.last_error}</div> : null}
+              {d.last_error ? <div className="tiny" style={{ color: 'var(--bad-text)', maxWidth: 260 }}>{d.last_error}</div> : null}
               <div className="tiny faint">{(d.last_run_at || '').replace('T', ' ').replace('Z', '')}</div></span>,
             <span>{d.approval_state === '已生效' ? <Badge tone="good">已生效</Badge> : d.approval_state === '待审批' ? <Badge tone="warn">待审批 {d.order_id}</Badge> : <Badge tone="bad">已驳回</Badge>}</span>,
             <div className="row gap6" style={{ flexWrap: 'wrap' }}>
@@ -272,7 +277,7 @@ export default function OpsSettings() {
               <span className="tiny strong">{k.label}</span>,
               <span className="num small">{one ? one.items : 0}</span>,
               <span className="tiny faint">{one ? (one.at || '').replace('T', ' ').replace('Z', '') : '未采'}</span>,
-              <span className="tiny">{one ? (one.error ? <span style={{ color: '#ff9a9a' }}>{one.error}</span> : <Badge tone="good">正常</Badge>) : <Badge tone="muted">未配置</Badge>}{one && one.sources > 1 ? <span className="tiny faint"> 由 {one.sources} 个源合并</span> : null}</span>,
+              <span className="tiny">{one ? (one.error ? <span style={{ color: 'var(--bad-text)' }}>{one.error}</span> : <Badge tone="good">正常</Badge>) : <Badge tone="muted">未配置</Badge>}{one && one.sources > 1 ? <span className="tiny faint"> 由 {one.sources} 个源合并</span> : null}</span>,
             ]
           })} />
           <div className="tiny faint" style={{ marginTop: 8 }}>

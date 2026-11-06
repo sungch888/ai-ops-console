@@ -99,7 +99,7 @@ export default function Network() {
         <span className="small faint" style={{ marginLeft: 'auto' }}>切换视图即切换该网络内的可见资产与用量口径</span>
       </div>
 
-      <Callout text={<><b>{v.name}</b> · {v.desc}<div className="small" style={{ color: '#a9c4e8', marginTop: 6 }}>数据密级上限：{v.clsCap} · 可发放凭证：{v.credKinds.join(' / ')} · {v.notes.join(' · ')}</div></>} />
+      <Callout text={<><b>{v.name}</b> · {v.desc}<div className="small" style={{ color: 'var(--text-dim)', marginTop: 6 }}>数据密级上限：{v.clsCap} · 可发放凭证：{v.credKinds.join(' / ')} · {v.notes.join(' · ')}</div></>} />
 
       <div className="grid g-6">
         <Kpi label="可见模型" value={visibleModels.length} unit={`/ ${st.models.length}`} foot={`其中 ${liveModels.length} 个有存活副本 · 承载 ${cards} 卡`} />

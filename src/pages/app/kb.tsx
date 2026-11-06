@@ -49,7 +49,7 @@ export default function AppKb() {
         </Panel>
         <Panel title="检索前权限过滤" noPad>
           <div className="panel-body">
-            <div className="small" style={{ color: '#a9c4e8', lineHeight: 2 }}>
+            <div className="small" style={{ color: 'var(--text-dim)', lineHeight: 2 }}>
               向量检索与关键词检索均携带权限过滤条件（租户 / 组织 / 业务线 / 密级），从源头阻断跨租户、跨密级知识泄露。
             </div>
             <div className="divider" />
@@ -112,19 +112,19 @@ export default function AppKb() {
       <div className="grid g-3 mt14">
         <Panel title="开通与准入审批">
           {['受理创建申请：名称 / 用途 / 权限边界 / 密级标签', '审核通过后方可授权接入构建平台', '文档入库核验来源、审批记录与密级标签', '无审批、来源不明、密级不符不得入库'].map((t) => (
-            <div key={t} className="small" style={{ color: '#a9c4e8', lineHeight: 1.9 }}>{t}</div>
+            <div key={t} className="small" style={{ color: 'var(--text-dim)', lineHeight: 1.9 }}>{t}</div>
           ))}
         </Panel>
         <Panel title="运行异常告警与处置">
           {['解析失败率升高 · 向量化队列阻塞 · 检索超时突增', '存储容量触顶 → 暂停入库任务，恢复后自动解除', '处置过程全程留痕并纳入事件台账'].map((t) => (
-            <div key={t} className="small" style={{ color: '#a9c4e8', lineHeight: 1.9 }}>{t}</div>
+            <div key={t} className="small" style={{ color: 'var(--text-dim)', lineHeight: 1.9 }}>{t}</div>
           ))}
         </Panel>
         <Panel title="知识资产治理">
           <div className="row between small"><span>培训教材 2023（停更）</span><Badge tone="muted">僵尸库</Badge></div>
           <div className="small" style={{ color: '#8fb0d6', marginTop: 6, lineHeight: 1.8 }}>月检索 200 次 · 12 个月未更新 · 建议归档或销毁</div>
           <div className="divider" />
-          <div className="small" style={{ color: '#a9c4e8', lineHeight: 1.9 }}>月盘点数据量 / 使用频率 / 更新状态，维护知识资产台账；含敏感或超权限开放风险的知识库提请权限复核。</div>
+          <div className="small" style={{ color: 'var(--text-dim)', lineHeight: 1.9 }}>月盘点数据量 / 使用频率 / 更新状态，维护知识资产台账；含敏感或超权限开放风险的知识库提请权限复核。</div>
         </Panel>
       </div>
     </div>

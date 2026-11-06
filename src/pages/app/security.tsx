@@ -91,7 +91,7 @@ export default function AppSecurity() {
               e.level === '紧急' ? <Badge tone="bad">紧急</Badge> : e.level === '重要' ? <Badge tone="warn">重要</Badge> : <Badge tone="muted">一般</Badge>,
               <span className="strong small">{e.type}</span>,
               <span className="muted small" style={{ maxWidth: 260 }}>{e.desc}</span>,
-              <span className="small" style={{ color: '#a9c4e8' }}>{e.action}</span>,
+              <span className="small" style={{ color: 'var(--text-dim)' }}>{e.action}</span>,
               e.status === '处置中' ? <Badge tone="warn">处置中</Badge> : <Badge tone="good">已闭环</Badge>,
             ])}
           />
@@ -189,7 +189,7 @@ export default function AppSecurity() {
               ].map((r) => [
                 <Badge tone={r[2].includes('可执行') || r[2].includes('可编辑') ? 'good' : 'muted'}>{r[0]}</Badge>,
                 <span className="small">{r[1]}</span>,
-                <span className="small" style={{ color: '#a9c4e8' }}>{r[2]}</span>,
+                <span className="small" style={{ color: 'var(--text-dim)' }}>{r[2]}</span>,
                 <span className="tag gray">{r[3]}</span>,
               ])}
             />

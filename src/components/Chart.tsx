@@ -1,5 +1,6 @@
 import React, { useEffect, useRef } from 'react'
 import * as echarts from 'echarts'
+import { themeInk, useTheme } from '../engine/ui'
 
 export const CHART_COLORS = ['#22d3ee', '#3d8bfd', '#2fd6a3', '#f5b83d', '#a78bfa', '#ff6b6b', '#5eead4', '#818cf8']
 export const AXIS_COLOR = '#7f9cc7'
@@ -31,9 +32,33 @@ export function Chart({ option, height = 260 }: { option: any; height?: number }
     }
   }, [])
 
+  const theme = useTheme()
+
   useEffect(() => {
-    inst.current?.setOption(option, true)
-  }, [option])
+    // 配色切换时图表跟着换色：文字 / 坐标轴 / 网格 / 提示框 / 系列配色都按当前方案覆盖
+    const ink = themeInk()
+    const opt: Record<string, unknown> = { ...(option || {}) }
+    const arr = (v: unknown): any[] => (Array.isArray(v) ? v : v ? [v] : [])
+    for (const key of ['xAxis', 'yAxis']) {
+      opt[key] = arr(opt[key]).map((a) => ({
+        ...a,
+        axisLabel: { ...(a.axisLabel || {}), color: ink.axis },
+        axisLine: { ...(a.axisLine || {}), lineStyle: { ...((a.axisLine || {}).lineStyle || {}), color: ink.axis } },
+        splitLine: { ...(a.splitLine || {}), lineStyle: { ...(((a.splitLine || {}).lineStyle) || {}), color: ink.split } },
+      }))
+      if (!arr(opt[key]).length) delete opt[key]
+    }
+    const tips = arr(opt.tooltip)
+    if (tips.length) {
+      opt.tooltip = tips.map((t) => ({ ...t, backgroundColor: ink.tipBg, borderColor: ink.tipBorder,
+        textStyle: { ...(t.textStyle || {}), color: ink.label } }))
+      if (tips.length === 1) opt.tooltip = (opt.tooltip as any[])[0]
+    }
+    opt.textStyle = { ...((opt.textStyle as object) || {}), color: ink.label }
+    const palette = arr(opt.color)
+    opt.color = palette.length ? palette : ink.series
+    inst.current?.setOption(opt, true)
+  }, [option, theme])
 
   return <div ref={ref} style={{ height, width: '100%' }} />
 }

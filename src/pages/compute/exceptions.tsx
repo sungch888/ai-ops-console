@@ -5,7 +5,7 @@
  * 闭环：处置 → 自动开整改单派给当班角色 → 接单 / 整改 / 复核 → 复核通过才允许恢复接入
  * ===================================================================== */
 import { useEffect, useState } from 'react'
-import { Kpi, Panel, PageHead, Badge, Table, Callout } from '../../components/ui'
+import {Kpi, Panel, PageHead, Badge, Table, Callout, Tip} from '../../components/ui'
 import { Chart, CHART_COLORS, AXIS_COLOR, SPLIT_COLOR, TOOLTIP_STYLE, GRID } from '../../components/Chart'
 import { Link } from 'react-router-dom'
 import { monitorStore, monitorSummary, exceptions, MONITOR_RULES, type ExcView, type BlockAction } from '../../engine/exceptions'
@@ -214,7 +214,7 @@ export default function ComputeExceptions() {
                 <div className="tiny faint">归口 {cur.owner} · 首次 {cur.firstSeen} → 最近 {cur.lastSeen} · 检出 {cur.hits} 次{curConn ? ` · 关联接入 ${curConn.name}` : ''}</div>
                 <div className="divider" />
                 <div className="small strong">检出证据</div>
-                <ul className="tiny" style={{ margin: '6px 0 0 16px', lineHeight: 1.9, color: '#a9c4e8' }}>
+                <ul className="tiny" style={{ margin: '6px 0 0 16px', lineHeight: 1.9, color: 'var(--text-dim)' }}>
                   {cur.evidence.map((x, i) => <li key={i}>{x}</li>)}
                 </ul>
                 <div className="tiny" style={{ color: '#ffc9c9', marginTop: 8 }}>影响：{cur.impact}</div>
@@ -311,7 +311,8 @@ export default function ComputeExceptions() {
 
       <Panel title="整改闭环台账（处置只是止损，复核通过才算闭环）" className="mt14" noPad>
         <div className="panel-body">
-          {rect.length === 0 ? <div className="tiny faint">当前没有整改单：做一次阻断处置就会自动开单，并派给对应值班角色（旁路接入 → 网络与接入值班 · 接管缺口 / 资源异常 → 算力资源值班 · 配额越界 → 安全值班 · 旁路调用 / 目录不一致 → 应用与智能体值班）。</div> : (
+          {rect.length === 0 ? <div className="tiny faint">当前没有整改单：做一次阻断处置就会自动开单并派给对应值班角色。
+            <Tip label="派单映射" text="旁路接入 → 网络与接入值班 · 接管缺口 / 资源异常 → 算力资源值班 · 配额越界 → 安全值班 · 旁路调用 / 目录不一致 → 应用与智能体值班（映射在值班派单页可改）" /></div> : (
             <Table minWidth={1260} head={['例外', '处置动作 / 工单', '派给（当班）', '整改状态', '期限', '整改动作与记录']} rows={rectRows} />
           )}
           <div className="tiny faint" style={{ marginTop: 8 }}>派单口径（可在「配置中心 → 排班与派单」改）：{dutyRoutes.map((r) => `${r.kind} → ${r.duty_role}`).join(' · ')}。超时未接单自动升级到该例外类型设定的升级岗位，超整改期限在台账与事件流里同时标出。</div>

@@ -119,7 +119,7 @@ export default function AccountSecurity() {
             <button className="btn sm ghost" disabled={!matrixPerm.manage} onClick={() => void resetPw(a.id, 'Reset' + a.id.slice(-2) + '2026demo')}>重置为临时口令</button>,
             <button className="btn sm ghost" disabled={!matrixPerm.manage} onClick={() => void toggle(a.id, false)}>停用</button>,
           ])} />
-          {acctMsg ? <div className="tiny" style={{ marginTop: 8, color: '#7ee2b8' }}>{acctMsg}</div> : null}
+          {acctMsg ? <div className="tiny" style={{ marginTop: 8, color: 'var(--ok-text)' }}>{acctMsg}</div> : null}
           <div className="tiny faint" style={{ marginTop: 8 }}>
             停用 = 登录被拒（403）+ 该账号会话全部撤销；重新开通后仍是「必须改口令」状态。
             切到外部身份源之后，本地账号只保留运维兜底用途，账号来源改由「配置中心 → 身份来源与账号映射」的影子同步核对。

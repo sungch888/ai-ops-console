@@ -240,7 +240,7 @@ export default function OpsWorkflow() {
           {scenario ? (
             <div style={{ marginTop: 12, border: '1px dashed rgba(64,130,220,.35)', borderRadius: 10, padding: 12 }}>
               <div className="small strong">已执行：{scenario.title}</div>
-              <ul className="small" style={{ margin: '8px 0 0 16px', lineHeight: 1.9, color: '#a9c4e8' }}>
+              <ul className="small" style={{ margin: '8px 0 0 16px', lineHeight: 1.9, color: 'var(--text-dim)' }}>
                 {scenario.steps.map((x, i) => <li key={i}>{x}</li>)}
               </ul>
             </div>
@@ -529,7 +529,7 @@ export default function OpsWorkflow() {
                 {e.level === '紧急' ? <Badge tone="bad">紧急</Badge> : e.level === '重要' ? <Badge tone="warn">重要</Badge> : <Badge tone="muted">一般</Badge>}
                 <span className="mono tiny faint">{e.time}</span>
               </div>
-              <div className="small" style={{ color: '#a9c4e8', marginTop: 3, lineHeight: 1.6 }}>{e.text}</div>
+              <div className="small" style={{ color: 'var(--text-dim)', marginTop: 3, lineHeight: 1.6 }}>{e.text}</div>
             </div>
           ))}
         </Panel>

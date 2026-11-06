@@ -131,7 +131,7 @@ export default function OpsAnalytics() {
               ])}
             />
             <div className="divider" />
-            <div className="small" style={{ color: '#a9c4e8', lineHeight: 1.9 }}>
+            <div className="small" style={{ color: 'var(--text-dim)', lineHeight: 1.9 }}>
               例行交付：日值班日志与事件台账 · 周运行周报 · 月运营报表（含成本分摊）· 季度容量评估报告。生成的报表取<b>当前引擎实时快照</b>，导出为 UTF-8 BOM 编码 CSV，Excel 可直接打开。
             </div>
           </div>

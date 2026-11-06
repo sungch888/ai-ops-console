@@ -148,7 +148,7 @@ export default function AppAccounts() {
             </table>
           </div>
           <div className="row between mt14" style={{ marginTop: 14, flexWrap: 'wrap', gap: 10 }}>
-            <div className="small" style={{ color: '#a9c4e8', maxWidth: 720 }}>
+            <div className="small" style={{ color: 'var(--text-dim)', maxWidth: 720 }}>
               生效范围：<b>菜单可见性</b>（不可见即导航消失）、<b>操作按钮</b>（无权限即隐藏或只读）、<b>数据范围</b>（密级不在可访问范围时，知识库与应用列表直接过滤掉）。
               当前登录角色：<span className="strong">{ROLE_LABEL[matrixPermRole]}</span>
             </div>
@@ -162,17 +162,17 @@ export default function AppAccounts() {
       <div className="grid g-3 mt14">
         <Panel title="权限复核与回收">
           {['每月：盘点高权限账号与长期未用权限', '每季：冗余授权清理并输出复核报告', '回收动作登记台账，变更前后值留痕'].map((t) => (
-            <div key={t} className="small" style={{ color: '#a9c4e8', lineHeight: 1.9 }}>{t}</div>
+            <div key={t} className="small" style={{ color: 'var(--text-dim)', lineHeight: 1.9 }}>{t}</div>
           ))}
         </Panel>
         <Panel title="集成配置支撑">
           {['存量系统对接、单点登录、专属报表等配置类需求受理', '平台内完成参数配置与连通性验证（不含代码开发）', '输出集成操作指引与用户培训'].map((t) => (
-            <div key={t} className="small" style={{ color: '#a9c4e8', lineHeight: 1.9 }}>{t}</div>
+            <div key={t} className="small" style={{ color: 'var(--text-dim)', lineHeight: 1.9 }}>{t}</div>
           ))}
         </Panel>
         <Panel title="日志留存核验">
           {['核验调用日志与操作日志采集完整性（关键字段缺失率 ≤1%）', '每周抽样核验脱敏策略执行', '审计查询 4 小时内完成日志批量导出'].map((t) => (
-            <div key={t} className="small" style={{ color: '#a9c4e8', lineHeight: 1.9 }}>{t}</div>
+            <div key={t} className="small" style={{ color: 'var(--text-dim)', lineHeight: 1.9 }}>{t}</div>
           ))}
         </Panel>
       </div>

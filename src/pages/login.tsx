@@ -145,7 +145,7 @@ export default function Login() {
                   <div className="tiny faint" style={{ marginTop: 6 }}>
                     口令策略：至少 {policy.min_len} 位、必须同时含字母和数字、不接受常见弱口令、不能与账号相同、不能复用当前口令或最近 {policy.reuse_check} 次用过的口令、有效期 {policy.max_age_days} 天。
                   </div>
-                  {pwErr ? <div className="tiny" style={{ color: '#ff9a9a', marginTop: 6 }}>改口令被拒：{pwErr}（判定在数据服务里）</div> : null}
+                  {pwErr ? <div className="tiny" style={{ color: 'var(--bad-text)', marginTop: 6 }}>改口令被拒：{pwErr}（判定在数据服务里）</div> : null}
                 </div>
               </div>
             </div>

@@ -4,6 +4,7 @@ import { auth, useSession, useMatrix, ROLE_LABEL, type PermKey } from './engine/
 import { useExceptions } from './engine/exceptions'
 import { useUnread } from './engine/ops'
 import { liveAlertStore, startLiveAlertPoll, useLiveAlertBadge, useLiveAlerts } from './engine/liveAlerts'
+import { THEMES, setTheme, useTheme } from './engine/ui'
 import { telemetryStore } from './engine/telemetry'
 import { useDbStatus } from './engine/db'
 import './engine/alerts'
@@ -217,6 +218,7 @@ function Shell() {
   const acc = useSession()
   const matrix = useMatrix()
   const unread = useUnread()
+  const theme = useTheme()
   const liveBadge = useLiveAlertBadge()
   const liveList = useLiveAlerts()
   useEffect(() => { startLiveAlertPoll(20) }, [])
@@ -297,15 +299,21 @@ function Shell() {
               title={db.lastError ? '数据服务：' + db.lastError : '业务状态写入数据服务的数据库（SQLite），浏览器本地不保存'}
               style={{
                 fontSize: 11, padding: '2px 8px', borderRadius: 7, whiteSpace: 'nowrap',
-                border: '1px solid ' + (dbBad ? 'rgba(220,100,100,.45)' : 'rgba(60,130,210,.4)'),
-                color: dbBad ? '#ffb9b9' : '#9fd6ff',
-                background: dbBad ? 'rgba(120,30,30,.25)' : 'rgba(20,60,110,.3)',
+                border: '1px solid ' + (dbBad ? 'rgba(var(--red-rgb), .45)' : 'rgba(var(--blue-rgb), .4)'),
+                color: dbBad ? 'var(--bad-text)' : 'var(--link-text)',
+                background: dbBad ? 'rgba(var(--red-rgb), .16)' : 'rgba(var(--blue-rgb), .14)',
               }}
             >
               {dbLabel}
             </span>
+            <span className="row gap6" title="配色：五套可选，选择记在数据服务里，换电脑登录也是这套">
+              <select className="btn sm" style={{ minWidth: 96 }} value={theme} aria-label="配色"
+                onChange={(e) => setTheme(e.target.value)}>
+                {THEMES.map((t) => <option key={t.id} value={t.id} title={t.note}>{t.name}</option>)}
+              </select>
+            </span>
             <span className="mono">{date}</span>
-            <span className="mono" style={{ color: '#bfe9ff' }}>{time}</span>
+            <span className="mono" style={{ color: 'var(--brand-text)' }}>{time}</span>
             <span
               className="row gap6"
               style={{ cursor: 'pointer', position: 'relative' }}
@@ -314,7 +322,7 @@ function Shell() {
                 + (liveList.length ? '（最近：' + liveList[0].level + ' ' + liveList[0].title.slice(0, 40) + '）' : '')
                 + (liveAlertStore.error() ? ' · ' + liveAlertStore.error() : '')}
             >
-              <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#8fb6e8" strokeWidth="1.8" strokeLinecap="round">
+              <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="var(--text-dim)" strokeWidth="1.8" strokeLinecap="round">
                 <path d="M18 8A6 6 0 006 8c0 7-3 8-3 8h18s-3-1-3-8" />
                 <path d="M10.3 21a2 2 0 003.4 0" />
               </svg>
@@ -326,7 +334,7 @@ function Shell() {
                   className="tiny"
                   style={{
                     maxWidth: 260, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-                    color: liveBadge > 0 ? (liveList[0].level === '紧急' ? '#ff8f8f' : '#ffc36b') : '#8fb6e8',
+                    color: liveBadge > 0 ? (liveList[0].level === '紧急' ? 'var(--bad-text)' : 'var(--warn-text)') : 'var(--text-dim)',
                   }}
                   title={liveList[0].title + ' · ' + liveList[0].body}
                 >
@@ -335,7 +343,7 @@ function Shell() {
               ) : null}
             </span>
             <span className="row gap6">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#8fb6e8" strokeWidth="1.8">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--text-dim)" strokeWidth="1.8">
                 <circle cx="12" cy="8" r="4" />
                 <path d="M4 21c0-4 3.6-7 8-7s8 3 8 7" />
               </svg>
@@ -351,7 +359,7 @@ function Shell() {
             <div className="panel" style={{ maxWidth: 620, margin: '40px auto' }}>
               <div className="panel-head"><span className="ph-left">无访问权限</span><span className="extra">{TITLES[loc.pathname] ?? loc.pathname}</span></div>
               <div className="panel-body">
-                <div className="small" style={{ color: '#a9c4e8', lineHeight: 1.9 }}>
+                <div className="small" style={{ color: 'var(--text-dim)', lineHeight: 1.9 }}>
                   当前角色 <b>{ROLE_LABEL[acc.role]}</b>（{acc.domain}）不具备该功能点的可见权限。权限由「应用中心 · 跨平台运营」中的<b>权限矩阵</b>决定，矩阵修改后立即可见生效结果。
                 </div>
                 <div className="row gap12 mt14" style={{ marginTop: 14 }}>

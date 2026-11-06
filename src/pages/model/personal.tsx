@@ -116,7 +116,7 @@ export default function Personal() {
                 <div className="small strong">接入示例 · {c.id}（{c.kind}）</div>
                 <div className="tiny faint" style={{ marginTop: 4 }}>端点 {ep.api} · 模型 {c.model} · 渠道 {st.channels.find((ch) => ch.id === c.channel)?.name ?? c.channel} · 限额 {c.rpm} RPM / {c.tpm} TPM · 仅允许 {c.ip}</div>
                 <pre className="mono small" style={{ marginTop: 8, background: 'rgba(8,18,34,.6)', border: '1px solid rgba(64,130,220,.18)', borderRadius: 8, padding: 10, overflowX: 'auto' }}>{`curl -X POST https://ai-ops.gaj.local/api/v1/chat/completions \\\n  -H "Authorization: Bearer ${maskKey(c.id)}" \\\n  -H "Content-Type: application/json" \\\n  -d '{"model":"${c.model}","messages":[{"role":"user","content":"生成 11-04 咨询记录摘要"}]}'`}</pre>
-                <div className="small" style={{ color: '#a9c4e8', marginTop: 8, lineHeight: 1.9 }}>
+                <div className="small" style={{ color: 'var(--text-dim)', marginTop: 8, lineHeight: 1.9 }}>
                   常见返回：<b>429</b> 触发配额限流 → 在下方用积分兑换配额包或提交提额工单；<b>403</b> 来源 IP 不在白名单 → 提交终端 IP 变更工单；<b>401</b> 凭证已吊销 → 重新申请并说明原因。密钥不得写入代码仓库、脚本或外发文档，发现外发迹象应立即申请吊销。
                 </div>
               </div>
@@ -133,7 +133,7 @@ export default function Personal() {
       <div className="grid g-2 mt14">
         <Panel title="积分与额度兑换" extra="积分按真实用量折算，兑换即生成工单或人工审核单" noPad>
           <div className="panel-body">
-            <div className="small" style={{ color: '#a9c4e8', lineHeight: 1.9 }}>
+            <div className="small" style={{ color: 'var(--text-dim)', lineHeight: 1.9 }}>
               积分构成：本月 Token 消耗 <b>{(me?.tokens ?? 0).toLocaleString('zh-CN')} 万 × 8 分/万</b> = <b>{(me?.points ?? 0).toLocaleString('zh-CN')} 分</b>。
               兑换配额包会直接生成 <b>quota_adjust</b> 工单并过准入（个人密钥默认上限 120 RPM，超限直接拦截）；其余兑换包转运营人工审核。
             </div>
@@ -178,7 +178,7 @@ export default function Personal() {
                   </div>
                 ))}
                 <div className="divider" />
-                <div className="small" style={{ color: '#a9c4e8' }}>
+                <div className="small" style={{ color: 'var(--text-dim)' }}>
                   我的配额占全平台 {(me.share / 100).toFixed(1)}%；本人调用全部进入调用审计检索，可按账号 <span className="mono">{acc?.id}</span> 与凭证 {mine.map((c) => c.id).join(' / ')} 追溯六节点链路。
                 </div>
               </>

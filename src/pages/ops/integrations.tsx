@@ -287,7 +287,7 @@ export default function OpsIntegrations() {
                 <div className="divider" />
                 <div className="small strong">配置变更历史（协议与字段逐版完善的记录）</div>
                 {cur.changes.length === 0 ? <div className="tiny faint" style={{ marginTop: 6 }}>暂无变更记录</div> : (
-                  <ul className="tiny" style={{ margin: '6px 0 0 16px', lineHeight: 1.9, color: '#a9c4e8' }}>
+                  <ul className="tiny" style={{ margin: '6px 0 0 16px', lineHeight: 1.9, color: 'var(--text-dim)' }}>
                     {cur.changes.map((c, i) => <li key={i}>{c.time} · {c.text}</li>)}
                   </ul>
                 )}
@@ -417,7 +417,7 @@ export default function OpsIntegrations() {
           </Panel>
           <Panel title="中断后的真实影响（可现场演示）">
             {ints.filter((c) => c.health !== 'ok').length === 0 ? (
-              <div className="small" style={{ color: '#a9c4e8', lineHeight: 1.9 }}>当前所有通道正常。点任一对象的「模拟中断」，对应纳管页面会立即出现数据缺口提示，并生成一条「重要」通知。</div>
+              <div className="small" style={{ color: 'var(--text-dim)', lineHeight: 1.9 }}>当前所有通道正常。点任一对象的「模拟中断」，对应纳管页面会立即出现数据缺口提示，并生成一条「重要」通知。</div>
             ) : (
               <div>
                 {ints.filter((c) => c.health !== 'ok').map((c) => (

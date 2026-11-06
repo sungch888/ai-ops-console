@@ -6,7 +6,7 @@
  *   权限拆三档：security（看事件）/ security_issue（日常下发）/ security_emergency（紧急下发，不受变更窗口限制）
  * ===================================================================== */
 import { useEffect, useState } from 'react'
-import { Badge, Callout, Kpi, Panel, PageHead, Table } from '../../components/ui'
+import {Badge, Callout, Kpi, Panel, PageHead, Table, Tip} from '../../components/ui'
 import { COMMAND_ACTIONS, TARGET_CLASSES, consoleStore, useConsole } from '../../engine/console'
 import { flagsStore, usePerm } from '../../engine/auth'
 
@@ -57,7 +57,7 @@ export default function OpsCommands() {
     <span className="small">{c.action}</span>,
     <span>{c.dry_run ? <Badge tone="purple">dry-run</Badge> : null}<Badge tone={STATUS_TONE[c.status] || 'info'}>{c.status}</Badge>{c.emergency ? <Badge tone="bad">紧急</Badge> : null}</span>,
     <span className="tiny">{c.issued_by || '—'}<br /><span className="faint tiny mono">{(c.issued_at || c.created_at || '').replace('T', ' ').replace('Z', '')}</span></span>,
-    <span className="tiny">{c.ack_at ? ('已确认 ' + (c.ack_by || '')) : (c.fail_reason ? <span style={{ color: '#ff9a9a' }}>{c.fail_reason}</span> : '未确认')}</span>,
+    <span className="tiny">{c.ack_at ? ('已确认 ' + (c.ack_by || '')) : (c.fail_reason ? <span style={{ color: 'var(--bad-text)' }}>{c.fail_reason}</span> : '未确认')}</span>,
     <span className="row gap6">
       <button className="btn sm ghost" disabled={!issuePerm.manage || c.status !== '已下发'} onClick={() => void consoleStore.ack(c.id, true).then((r) => r.ok ? say(true, c.id + ' 设备已确认') : say(false, '被拒：' + (r.error || '')))}>模拟设备确认</button>
       <button className="btn sm ghost" disabled={!issuePerm.manage || c.status !== '已下发'} onClick={() => void consoleStore.ack(c.id, false, '设备侧拒绝（演练）').then((r) => r.ok ? say(true, c.id + ' 失败，已生成人工兜底工单') : say(false, '被拒：' + (r.error || '')))}>模拟失败</button>
@@ -120,13 +120,12 @@ export default function OpsCommands() {
                 走紧急通道（不受变更窗口限制，需要「紧急处置」权限）
               </label>
               <button className="btn primary sm" disabled={!issuePerm.manage || busy || (emergency && !emgPerm.manage)} onClick={() => void issue()}>② 看过影响面，确认下发</button>
-              <span className="tiny faint">没有这一步「确认下发」点不动：服务端要求二次确认，且必须已有预检记录。</span>
+              <Tip label="为什么要先预检" text="没有这一步「确认下发」点不动：服务端要求二次确认，且必须已有预检记录。dry-run 只算不发，不产生任何外部调用。" />
             </div>
           </div>
         ) : (
-          <div className="tiny faint" style={{ marginTop: 10 }}>
-            还没做预检。口径：任何处置指令都要先算影响面（哪些凭证 / 模型副本 / 纳管对象 / 通道会被牵连），预检不过不能下发。
-            dry-run 只算不发，不产生任何外部调用。
+          <div className="tiny faint" style={{ marginTop: 10 }}>还没做预检。
+            <Tip label="口径" text="任何处置指令都要先算影响面（哪些凭证 / 模型副本 / 纳管对象 / 通道会被牵连），预检不过不能下发；dry-run 只算不发，不产生任何外部调用。" />
           </div>
         )}
       </Panel>
