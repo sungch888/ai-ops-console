@@ -18,7 +18,7 @@ export const COLLECT_KINDS = [
 
 export interface DataSource {
   id: string; kind: string; name: string; config_json: string; interval_seconds: number
-  enabled: number; last_status: string; last_error: string; last_run_at: string
+  enabled: number; last_status: string; last_error: string; fail_streak: number; alert_state: string; last_run_at: string
   approval_state: string; order_id: string; created_at: string; updated_at: string
 }
 export interface CollectStatus { items: number; error: string; sources: number; at: string }

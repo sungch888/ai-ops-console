@@ -9,7 +9,7 @@ import { apiGet, apiSend } from './db'
 export interface MonitorTarget {
   id: string; name: string; base: string; api_key_env: string; pool: string; cards: number
   window_seconds: number; interval_seconds: number; metric_format: string; active_probe: number
-  enabled: number; last_status: string; last_error: string
+  enabled: number; last_status: string; last_error: string; fail_streak: number; alert_state: string
 }
 export interface MetricSample {
   id: number; target: string; service: string; model: string; version: string; status: string
@@ -24,7 +24,8 @@ export interface GpuCardRow {
   cpu_pct: number | null; ram_used_mib: number | null; ram_total_mib: number | null
   health: string; note: string; updated_at: string
 }
-export interface MonitorState { thread: boolean; last_run_at: string; last_error: string; probes: number; failures: number }
+export interface MonitorState { thread: boolean; last_run_at: string; last_error: string; probes: number; failures: number; alerts?: Record<string, MonitorAlert>; last_recovery?: { notification_id: string; closed: number } }
+export interface MonitorAlert { notification_id: string; fallback_id: string; owner: string; level: string; streak: number }
 
 interface MonitorStore {
   targets: MonitorTarget[]; latest: (MetricSample | null)[]; samples: MetricSample[]; cards: GpuCardRow[]

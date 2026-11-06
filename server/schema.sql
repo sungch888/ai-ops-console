@@ -267,6 +267,8 @@ CREATE TABLE IF NOT EXISTS monitor_targets(
   enabled INTEGER NOT NULL DEFAULT 1,
   last_status TEXT,                -- 最近一轮：已采集 | 取数失败
   last_error TEXT,
+  fail_streak INTEGER NOT NULL DEFAULT 0,   -- 连续取数失败轮数（成功即清零）
+  alert_state TEXT NOT NULL DEFAULT '正常', -- 正常 | 已告警（断连已发通知与兜底工单）
   created_at TEXT NOT NULL, updated_at TEXT NOT NULL
 );
 
@@ -311,6 +313,8 @@ CREATE TABLE IF NOT EXISTS data_sources(
   enabled INTEGER NOT NULL DEFAULT 1,
   last_status TEXT,                -- 已采集 | 取数失败
   last_error TEXT,
+  fail_streak INTEGER NOT NULL DEFAULT 0,
+  alert_state TEXT NOT NULL DEFAULT '正常',
   last_run_at TEXT,
   approval_state TEXT NOT NULL DEFAULT '已生效',  -- 已生效 | 待审批 | 已驳回（配置项 data-source-approval 打开时先走工单）
   order_id TEXT,                        -- 资源接入工单号（WO-xxxx）

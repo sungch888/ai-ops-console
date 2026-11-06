@@ -196,11 +196,11 @@ export default function OpsSettings() {
         </div>
       </Panel>
       <Panel title="资源接入与采集（加资源不用改代码）" className="mt14" noPad
-        extra={<span className="tiny faint">采集线程 {col.state?.thread ? '在跑' : '未起'} · 成功 {col.state?.runs ?? 0} 次 / 失败 {col.state?.failures ?? 0} 次 · 接入要先审批：{col.approvalMode === 'off' ? '关（登记即生效 + 审计）' : '开（先生成资源接入工单）'}</span>}>
+        extra={<span className="tiny faint">采集线程 {col.state?.thread ? '在跑' : '未起'} · 成功 {col.state?.runs ?? 0} 次 / 失败 {col.state?.failures ?? 0} 次 · 接入要先审批：{col.approvalMode === 'off' ? '关（登记即生效 + 审计）' : '开（先生成资源接入工单）'} · 断连告警：{(flags.config['monitor-alert-enabled'] || 'on') === 'on' ? '开（连续 ' + (flags.config['monitor-alert-fail-count'] || '2') + ' 轮采不到就告）' : '关（只留痕）'}</span>}>
         <div className="panel-body">
           {col.error ? <Callout warn text={'资源接入读不到：' + col.error} /> : null}
           <Table minWidth={1120} head={['资源 / 类型', '关键配置（密钥只写环境变量名）', '间隔', '最近一轮', '接入状态', '操作']} rows={col.sources.map((d) => [
-            <span className="small strong">{d.name}<div className="tiny faint">{d.kind} · {d.id} · {d.enabled ? '启用' : '已停用'}</div></span>,
+            <span className="small strong">{d.name}<div className="tiny faint">{d.kind} · {d.id} · {d.enabled ? '启用' : '已停用'}{d.alert_state === '已告警' ? ' · 已告警（连续 ' + d.fail_streak + ' 轮）' : ''}</div></span>,
             <span className="tiny mono" style={{ maxWidth: 340 }}>{(JSON.stringify(JSON.parse(d.config_json || '{}')) || '').slice(0, 190)}</span>,
             <span className="tiny">{d.interval_seconds} 秒</span>,
             <span className="tiny">{d.last_status === '已采集' ? <Badge tone="good">已采集</Badge> : d.last_status ? <Badge tone="bad">{d.last_status}</Badge> : <Badge tone="muted">还没采过</Badge>}
@@ -245,6 +245,11 @@ export default function OpsSettings() {
             <button className="btn sm ghost" disabled={!matrixPerm.manage} onClick={() => void collectStore.run().then((r) => setColMsg({ ok: !!r.ok, text: r.ok ? '全部启用资源已采一轮' : '采集有失败：' + JSON.stringify(r.result?.errors || r.error || '') }))}>立即采全部</button>
             <button className="btn sm ghost" disabled={!matrixPerm.manage} onClick={() => void collectStore.importFile().then((r) => setColMsg({ ok: !!r.ok, text: r.ok ? '已从采集脚本配置文件导入 ' + (r.imported || []).length + ' 类资源；之后只在系统里改，文件不再被读' : '导入失败：' + (r.error || '') }))}>从采集脚本配置文件导入</button>
             <button className="btn sm ghost" disabled={!matrixPerm.manage} onClick={() => void saveConfig('data-source-approval', col.approvalMode === 'off' ? 'on' : 'off').then(() => collectStore.refresh())}>接入要先审批：{col.approvalMode === 'off' ? '开' : '关'}</button>
+            <button className="btn sm ghost" disabled={!matrixPerm.manage} onClick={() => void saveConfig('monitor-alert-enabled', (flags.config['monitor-alert-enabled'] || 'on') === 'on' ? 'off' : 'on')}>断连要告警：{(flags.config['monitor-alert-enabled'] || 'on') === 'on' ? '关' : '开'}</button>
+            <select className="btn sm" style={{ width: 200 }} disabled={!matrixPerm.manage} value={flags.config['monitor-alert-fail-count'] || '2'}
+              onChange={(e) => void saveConfig('monitor-alert-fail-count', e.target.value)}>
+              {['1', '2', '3', '5'].map((v) => <option key={v} value={v}>连续 {v} 轮采不到就告警</option>)}
+            </select>
             {!matrixPerm.manage ? <span className="tiny faint">要「权限矩阵」操作权才能接入 / 改 / 删采集源（与改配置同级）</span> : null}
           </div>
           {colMsg ? <div className="tiny" style={{ marginTop: 8, color: colMsg.ok ? '#7ee2b8' : '#ff9a9a' }}>{colMsg.text}</div> : null}
@@ -266,6 +271,8 @@ export default function OpsSettings() {
             <span className="mono">npu-smi</span> 直采要在数据服务所在机器上执行命令，仍只保留在采集脚本里，不由界面触发。
             打开「接入要先审批」后，新增或变更会先生成一张 <span className="mono">resource_onboard</span> 工单，
             在审批台通过后才生效（驳回则不生效）；两种模式都会写审计（<span className="mono">data_source_put</span>）。
+            连不通也会告：连续采不到到达阈值（默认 2 轮，可改）→ 事件台账 + 通知中心 + 兜底工单（按派单映射派给值班岗位，默认「算力资源值班」），
+            只告一次不刷屏；重新采到 → 恢复通知 + 兜底工单自动关闭；关掉「断连要告警」时仍然留痕（状态与连续轮数），只是不发通知。
           </div>
         </div>
       </Panel>

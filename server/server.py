@@ -40,7 +40,7 @@ STATIC_DIR = os.path.join(ROOT, 'dist')
 API_PREFIX = '/api'
 MAX_BODY = 8 * 1024 * 1024
 SCHEMA_VERSION = '5'
-SERVER_VERSION = '3.3.0'
+SERVER_VERSION = '3.4.0'
 
 CONTENT_TYPES = {
     '.html': 'text/html; charset=utf-8',
@@ -300,6 +300,8 @@ CONFIG_DEFAULTS = {
     'duty-source': 'local',
     'command-ack-timeout-min': '30',
     'data-source-approval': 'off',
+    'monitor-alert-enabled': 'on',
+    'monitor-alert-fail-count': '2',
 }
 CONFIG_CHOICES = {
     'auth-provider': list(PROVIDERS.keys()),
@@ -307,9 +309,12 @@ CONFIG_CHOICES = {
     'notify-channels': ['site', 'site,email', 'site,email,sms,im'],
     'duty-source': ['local', 'external'],
     'data-source-approval': ['off', 'on'],
+    'monitor-alert-enabled': ['off', 'on'],
+    'monitor-alert-fail-count': ['1', '2', '3', '5'],
 }
 CONFIG_LABEL_CN = {'auth-provider': '身份来源', 'approval-source': '审批来源',
-                   'data-source-approval': '资源接入要先审批', 'notify-channels': '通知渠道',
+                   'data-source-approval': '资源接入要先审批',
+                   'monitor-alert-enabled': '断连要告警', 'monitor-alert-fail-count': '连续几轮取数失败就告警', 'notify-channels': '通知渠道',
                    'duty-source': '排班来源', 'command-ack-timeout-min': '指令确认超时（分钟）'}
 
 DUTY_DEFAULT = [
@@ -379,7 +384,11 @@ def upgrade_schema(conn) -> None:
     ensure_columns(conn, 'metric_samples', [('req_total', 'REAL'), ('req_failed', 'REAL'),
                                            ('req_seconds_sum', 'REAL')])
     ensure_columns(conn, 'data_sources', [('approval_state', "TEXT NOT NULL DEFAULT '已生效'"),
-                                         ('order_id', 'TEXT')])
+                                         ('order_id', 'TEXT'),
+                                         ('fail_streak', 'INTEGER NOT NULL DEFAULT 0'),
+                                         ('alert_state', "TEXT NOT NULL DEFAULT '正常'")])
+    ensure_columns(conn, 'monitor_targets', [('fail_streak', 'INTEGER NOT NULL DEFAULT 0'),
+                                            ('alert_state', "TEXT NOT NULL DEFAULT '正常'")])
 
 
 def cfg(key: str, default: str = '') -> str:
@@ -511,7 +520,8 @@ def sweep_commands(conn, actor: str = 'system') -> int:
 MONITOR_TICK = 5                      # 监控线程轮询粒度（秒）
 SAMPLE_RETENTION_HOURS = 24           # 采样保留时长（小时）
 SAMPLE_MAX_ROWS = 20000               # 采样上限（超过按最旧的删）
-MONITOR_STATE = {'thread': False, 'last_run_at': '', 'last_error': '', 'probes': 0, 'failures': 0}
+MONITOR_STATE = {'thread': False, 'last_run_at': '', 'last_error': '', 'probes': 0, 'failures': 0,
+                 'alerts': {}}
 
 
 def _get_json(url: str, headers=None, timeout: int = 10):
@@ -840,6 +850,17 @@ def record_probe(t: dict, actor: str = 'monitor') -> dict:
                      (msg, now_iso(), t['id']))
         audit(conn, actor, 'monitor_probe_failed', t['id'], msg)
         conn.commit()
+        row = conn.execute('SELECT fail_streak, alert_state FROM monitor_targets WHERE id=?',
+                           (t['id'],)).fetchone()
+        streak = int(row['fail_streak'] or 0) + 1
+        conn.execute('UPDATE monitor_targets SET fail_streak=? WHERE id=?', (streak, t['id']))
+        conn.commit()
+        if cfg('monitor-alert-enabled', 'on') == 'on' and streak >= _alert_threshold() \
+                and row['alert_state'] != '已告警':
+                conn.execute("UPDATE monitor_targets SET alert_state='已告警' WHERE id=?", (t['id'],))
+                conn.commit()
+                MONITOR_STATE['alerts'][t['id']] = raise_probe_alert(conn, '监控探针', t['id'], t['name'],
+                                                                     msg, streak, actor)
         trim_samples(conn)
         conn.commit()
         MONITOR_STATE['failures'] += 1
@@ -873,6 +894,15 @@ def record_probe(t: dict, actor: str = 'monitor') -> dict:
     conn.commit()
     trim_samples(conn)
     conn.commit()
+    row = conn.execute('SELECT fail_streak, alert_state FROM monitor_targets WHERE id=?', (t['id'],)).fetchone()
+    if int(row['fail_streak'] or 0):
+        conn.execute('UPDATE monitor_targets SET fail_streak=0 WHERE id=?', (t['id'],))
+        conn.commit()
+    if cfg('monitor-alert-enabled', 'on') == 'on' and row['alert_state'] == '已告警':
+        conn.execute("UPDATE monitor_targets SET alert_state='正常' WHERE id=?", (t['id'],))
+        conn.commit()
+        MONITOR_STATE['alerts'].pop(t['id'], None)
+        MONITOR_STATE['last_recovery'] = clear_probe_alert(conn, '监控探针', t['id'], t['name'], actor)
     MONITOR_STATE['probes'] += 1
     return {'ok': True, 'sample': sample, 'card': card}
 
@@ -904,7 +934,8 @@ def monitor_loop(stop: threading.Event) -> None:
 
 # --------------------------------------------------------------------------- v3.8 资源接入（配置化，不改代码）
 COLLECT_KINDS = ('services', 'cards', 'gateway', 'routes', 'apps', 'deploy')
-COLLECT_STATE = {'thread': False, 'last_run_at': '', 'last_error': '', 'runs': 0, 'failures': 0}
+COLLECT_STATE = {'thread': False, 'last_run_at': '', 'last_error': '', 'runs': 0, 'failures': 0,
+                 'alerts': {}}
 SECRET_KEYS = ('api_key', 'token', 'password', 'secret', 'authorization')
 
 
@@ -960,6 +991,16 @@ def run_collect(kinds=None, actor: str = 'collector') -> dict:
             out.setdefault(src['kind'], []).extend(rows)
             conn.execute("UPDATE data_sources SET last_status='已采集', last_error='', last_run_at=? WHERE id=?",
                          (now_iso(), src['id']))
+            row = conn.execute('SELECT fail_streak, alert_state FROM data_sources WHERE id=?',
+                               (src['id'],)).fetchone()
+            if int(row['fail_streak'] or 0):
+                conn.execute('UPDATE data_sources SET fail_streak=0 WHERE id=?', (src['id']))
+            if cfg('monitor-alert-enabled', 'on') == 'on' and row['alert_state'] == '已告警':
+                conn.execute("UPDATE data_sources SET alert_state='正常' WHERE id=?", (src['id'],))
+                conn.commit()
+                COLLECT_STATE.setdefault('alerts', {}).pop(src['id'], None)
+                COLLECT_STATE['last_recovery'] = clear_probe_alert(conn, '资源采集 / %s' % src['kind'],
+                                                                   src['id'], src['name'], actor)
             COLLECT_STATE['runs'] += 1
         except Exception as exc:
             msg = '取数失败：%s' % (str(exc)[:150])
@@ -968,6 +1009,17 @@ def run_collect(kinds=None, actor: str = 'collector') -> dict:
                          (msg, now_iso(), src['id']))
             audit(conn, actor, 'collect_failed', src['kind'], '%s：%s' % (src['name'], msg))
             COLLECT_STATE['failures'] += 1
+            row = conn.execute('SELECT fail_streak, alert_state FROM data_sources WHERE id=?',
+                               (src['id'],)).fetchone()
+            streak = int(row['fail_streak'] or 0) + 1
+            conn.execute('UPDATE data_sources SET fail_streak=? WHERE id=?', (streak, src['id']))
+            conn.commit()
+            if cfg('monitor-alert-enabled', 'on') == 'on' and streak >= _alert_threshold() \
+                    and row['alert_state'] != '已告警':
+                    conn.execute("UPDATE data_sources SET alert_state='已告警' WHERE id=?", (src['id'],))
+                    conn.commit()
+                    COLLECT_STATE.setdefault('alerts', {})[src['id']] = raise_probe_alert(
+                        conn, '资源采集 / %s' % src['kind'], src['id'], src['name'], msg, streak, actor)
     fn = collector_module()
     for kind in COLLECT_KINDS:
         rows = out.get(kind)
@@ -1046,6 +1098,67 @@ def apply_source_approval(conn, order_id: str, decision: str) -> int:
     if decision == 'approve' and rows:
         run_collect(sorted({r['kind'] for r in rows}), 'system')
     return len(rows)
+
+
+def _duty_owner(conn, kind: str = '资源异常') -> str:
+    row = conn.execute('SELECT duty_role FROM duty_routes WHERE kind=?', (kind,)).fetchone()
+    return row['duty_role'] if row else '算力资源值班'
+
+
+def _alert_threshold() -> int:
+    try:
+        return max(1, min(20, int(cfg('monitor-alert-fail-count', '2'))))
+    except (TypeError, ValueError):
+        return 2
+
+
+def raise_probe_alert(conn, source: str, sid: str, name: str, msg: str, streak: int,
+                      actor: str = 'monitor') -> dict:
+    """连续取数失败（例如网络断了）→ 事件台账 + 通知中心 + 兜底工单（按派单映射给值班岗位）+ 审计。
+
+    只在「正常 → 连续失败」这一跳发一次，不会每轮刷一条；恢复时另发恢复通知并自动关闭兜底工单。
+    """
+    level = '紧急' if streak >= 3 else '重要'
+    title = '%s 取数中断：连续 %d 轮采不到' % (name, streak)
+    body = ('连续 %d 轮取不到这个目标的数（来源 %s / %s）。最近一次错误：%s。'
+            '断连期间页面上的指标不再更新，看到的是最后一次成功采到的读数。' % (streak, source, sid, msg))
+    ts = now_iso()
+    conn.execute('INSERT INTO events(time, level, text, source, created_at) VALUES(?,?,?,?,?)',
+                 (ts[11:16], level, '【监控断连】%s（%s / %s）' % (title, source, sid), source, ts))
+    nid = 'N-MON-%s-%s' % (sid, secrets.token_hex(2).upper())
+    conn.execute('INSERT INTO notifications(id, time, level, title, body, channels, read_flag, handled, source,'
+                 ' updated_at) VALUES(?,?,?,?,?,?,0,0,?,?)',
+                 (nid, ts[11:16], level, title, body, cfg('notify-channels', 'site'), source, ts))
+    fid = 'FB-MON-%s' % sid
+    owner = _duty_owner(conn)
+    conn.execute('INSERT INTO fallback_tasks(id, kind, ref, title, detail, status, owner, created_at, updated_at)'
+                 ' VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET title=excluded.title,'
+                 ' detail=excluded.detail, status=CASE WHEN fallback_tasks.status=\'已关闭\' THEN \'待接管\''
+                 ' ELSE fallback_tasks.status END, owner=excluded.owner, updated_at=excluded.updated_at',
+                 (fid, 'monitor_unreachable', sid, title, body, '待接管', owner, ts, ts))
+    audit(conn, actor, 'monitor_alert', sid, '%s / %s 连续 %d 轮取数失败 → 通知 %s + 兜底工单 %s（派 %s）'
+          % (source, name, streak, nid, fid, owner))
+    conn.commit()
+    return {'notification_id': nid, 'fallback_id': fid, 'owner': owner, 'level': level, 'streak': streak}
+
+
+def clear_probe_alert(conn, source: str, sid: str, name: str, actor: str = 'monitor') -> dict:
+    """恢复即通知（之前告过警才发，正常状态不刷屏），并自动关闭对应的兜底工单。"""
+    ts = now_iso()
+    conn.execute('INSERT INTO events(time, level, text, source, created_at) VALUES(?,?,?,?,?)',
+                 (ts[11:16], '一般', '【监控恢复】%s（%s / %s）取数已恢复' % (name, source, sid), source, ts))
+    nid = 'N-MONOK-%s-%s' % (sid, secrets.token_hex(2).upper())
+    conn.execute('INSERT INTO notifications(id, time, level, title, body, channels, read_flag, handled, source,'
+                 ' updated_at) VALUES(?,?,?,?,?,?,0,0,?,?)',
+                 (nid, ts[11:16], '一般', '%s 取数已恢复' % name,
+                  '监控目标 %s（%s / %s）重新采到数据，兜底工单已自动关闭' % (name, source, sid),
+                  cfg('notify-channels', 'site'), source, ts))
+    cur = conn.execute("UPDATE fallback_tasks SET status='已关闭', updated_at=?, detail=detail||'（已自动关闭：取数恢复）'"
+                       " WHERE ref=? AND kind='monitor_unreachable' AND status<>'已关闭'", (ts, sid))
+    audit(conn, actor, 'monitor_recover', sid, '%s / %s 取数恢复 → 通知 %s，兜底工单关闭 %d 张'
+          % (source, name, nid, cur.rowcount))
+    conn.commit()
+    return {'notification_id': nid, 'closed': cur.rowcount}
 
 
 def public_config() -> dict:

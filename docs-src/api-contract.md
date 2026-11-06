@@ -1,4 +1,4 @@
-# 数据服务接口契约（v3.8）
+# 数据服务接口契约（v3.9）
 
 数据服务：`server/server.py`（Python 3 标准库 + SQLite）。前端不再使用浏览器本地存储，
 所有业务状态的权威副本在数据库；浏览器只保留一份内存副本。
@@ -275,3 +275,19 @@ python3 server/server.py --reset             # 清空数据库后退出
   源置为「待审批」不采集；审批通过 → `已生效` 并自动采一轮；驳回 → `已驳回` 不生效。审计：`data_source_put` / `data_source_approval`。
 - 采集失败留痕：源上 `last_status='取数失败'` + `last_error`，类型状态里也写错误，不会静默变空页。
 - `data_sources` / `collect_payloads` 不在「重置演示数据」的清理范围里。
+
+### 断连告警（v3.9）
+
+监控探针或采集源连续取数失败（网络断了、对方服务重启、地址填错都算）到达阈值后，系统主动告警：
+
+| 落点 | 内容 |
+|---|---|
+| 事件台账 `events` | `【监控断连】<资源> 取数中断：连续 N 轮采不到（来源 / 编号）`，连续 ≥3 轮记「紧急」，否则「重要」 |
+| 通知中心 `notifications` | 标题 `<资源> 取数中断：连续 N 轮采不到`，正文含最近一次错误与「断连期间指标不再更新」的说明，渠道取配置项 `notify-channels` |
+| 兜底工单 `fallback_tasks` | `kind=monitor_unreachable`、`id=FB-MON-<编号>`、状态「待接管」，`owner` 取派单映射里「资源异常」对应的值班岗位（默认「算力资源值班」） |
+| 审计 `audit_log` | `monitor_alert`（告警）/ `monitor_recover`（恢复）；失败本身仍是 `monitor_probe_failed` / `collect_failed` |
+
+- 去重：只在「正常 → 连续失败」这一跳发一次，后续轮次继续留痕但不刷通知；恢复时发一条恢复通知并把兜底工单置「已关闭」。
+- 配置项：`monitor-alert-enabled`（`on` / `off`，默认 `on`）、`monitor-alert-fail-count`（`1 / 2 / 3 / 5`，默认 `2`）。关掉开关仍然累计 `fail_streak` 与 `last_status='取数失败'`，只是不发通知。
+- 监控接口 `GET /api/monitor` 的 `state.alerts`、采集接口 `GET /api/collect` 的 `state.alerts` 会列出当前正在告警的目标（通知号 / 兜底工单号 / 派给谁 / 连续几轮）。
+- 未做（诚实边界）：时延 / 错误率 / 排队深度这类**指标阈值**告警目前还在页面常量里，没搬进配置项。

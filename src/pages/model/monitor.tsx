@@ -274,6 +274,11 @@ export default function ModelMonitor() {
         extra={<span className="tiny faint">探针线程 {mon.state?.thread ? '在跑' : '未起'} · 轮询 {mon.tick} 秒 · 成功 {mon.state?.probes ?? 0} 次 / 失败 {mon.state?.failures ?? 0} 次 · 库里 {mon.total} 条采样（保留 {mon.retention} 小时）</span>}>
         <div className="panel-body">
           {mon.error ? <Callout warn text={'监控读不到：' + mon.error} /> : null}
+          {mon.targets.some((x) => x.alert_state === '已告警') ? (
+            <Callout warn text={'已经告出来的断连：' + mon.targets.filter((x) => x.alert_state === '已告警')
+              .map((x) => x.name + '（连续 ' + x.fail_streak + ' 轮采不到 · 通知已发 · 兜底工单派给 '
+                + ((mon.state?.alerts || {})[x.id]?.owner || '值班岗位') + '）').join('；')} />
+          ) : null}
           <Table minWidth={1080} head={['监控目标', '地址', '取数口径 / 密钥', '间隔 / 窗口', '最近一轮', '操作']} rows={mon.targets.map((t) => [
             <span className="small strong">{t.name}<div className="tiny mono faint">{t.id} · {t.enabled ? '启用' : '已停用'}</div></span>,
             <span className="tiny mono">{t.base}</span>,
@@ -281,7 +286,7 @@ export default function ModelMonitor() {
               <div className="tiny faint">{t.api_key_env || '不需要密钥'}{mon.keyEnvPresent[t.id] === false && t.api_key_env ? <span style={{ marginLeft: 6, color: '#f5b83d' }}>环境变量没给</span> : null}</div>
             </span>,
             <span className="tiny">{t.interval_seconds} 秒 / 窗口 {t.window_seconds} 秒</span>,
-            <span className="tiny">{t.last_status === '已采集' ? <Badge tone="good">已采集</Badge> : t.last_status ? <Badge tone="bad">{t.last_status}</Badge> : <Badge tone="muted">还没采过</Badge>}{t.last_error ? <div className="tiny" style={{ color: '#ff9a9a', maxWidth: 260 }}>{t.last_error}</div> : null}</span>,
+            <span className="tiny">{t.last_status === '已采集' ? <Badge tone="good">已采集</Badge> : t.last_status ? <Badge tone="bad">{t.last_status}</Badge> : <Badge tone="muted">还没采过</Badge>}{t.alert_state === '已告警' ? <Badge tone="bad">已告警 · 连续 {t.fail_streak} 轮采不到</Badge> : null}{t.last_error ? <div className="tiny" style={{ color: '#ff9a9a', maxWidth: 260 }}>{t.last_error}</div> : null}</span>,
             <div className="row gap6" style={{ flexWrap: 'wrap' }}>
               <button className="btn sm ghost" disabled={!canProbe} onClick={() => void monitorStore.probe(t.id).then((r) => setMonMsg({ ok: !!r.ok, text: r.ok ? t.name + ' 已采一轮（样本写进 metric_samples）' : '采集被拒：' + (r.error || '') }))}>立即采一轮</button>
               <button className="btn sm ghost" disabled={!canProbe} onClick={() => void monitorStore.saveTarget({ ...t, enabled: t.enabled ? 0 : 1 }).then((r) => setMonMsg({ ok: !!r.ok, text: r.ok ? (t.enabled ? t.name + ' 已停用' : t.name + ' 已启用') : '被拒：' + (r.error || '') }))}>{t.enabled ? '停用' : '启用'}</button>
