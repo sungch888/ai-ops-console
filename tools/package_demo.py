@@ -25,7 +25,7 @@ if _map_path and os.path.exists(_map_path):
     import json
     EXTERNAL_DOCS = json.load(open(_map_path, encoding='utf-8'))
 # Markdown -> Word / PDF, so the package ships formats that survive font differences.
-DOC_FORMATS = ('operation-manual', 'iteration-plan')
+DOC_FORMATS = ('operation-manual', 'iteration-plan', 'confirmation-list')
 
 
 def build_doc_formats(stage_dir):
