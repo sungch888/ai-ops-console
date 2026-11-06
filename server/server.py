@@ -597,7 +597,7 @@ def probe_openai_target(t: dict, base: str, headers: dict):
         if not isinstance(mm, dict):
             continue
         nm = mm.get('id') or mm.get('name') or ''
-        if nm:
+        if nm and str(nm) not in names:          # data 与 models 两种形状可能重复列同一个模型
             names.append(str(nm))
         d = mm.get('details') or {}
         spec = ' / '.join(x for x in [str(d.get('format') or ''), str(d.get('parameter_size') or ''),
