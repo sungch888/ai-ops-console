@@ -390,6 +390,7 @@ def upgrade_schema(conn) -> None:
                                          ('order_id', 'TEXT'),
                                          ('fail_streak', 'INTEGER NOT NULL DEFAULT 0'),
                                          ('alert_state', "TEXT NOT NULL DEFAULT '正常'")])
+    ensure_columns(conn, 'notifications', [('handled_by', 'TEXT')])
     ensure_columns(conn, 'monitor_targets', [('fail_streak', 'INTEGER NOT NULL DEFAULT 0'),
                                             ('alert_state', "TEXT NOT NULL DEFAULT '正常'")])
 
@@ -997,7 +998,7 @@ def run_collect(kinds=None, actor: str = 'collector') -> dict:
             row = conn.execute('SELECT fail_streak, alert_state FROM data_sources WHERE id=?',
                                (src['id'],)).fetchone()
             if int(row['fail_streak'] or 0):
-                conn.execute('UPDATE data_sources SET fail_streak=0 WHERE id=?', (src['id']))
+                conn.execute('UPDATE data_sources SET fail_streak=0 WHERE id=?', (src['id'],))
             if cfg('monitor-alert-enabled', 'on') == 'on' and row['alert_state'] == '已告警':
                 conn.execute("UPDATE data_sources SET alert_state='正常' WHERE id=?", (src['id'],))
                 conn.commit()
@@ -2392,6 +2393,35 @@ class Handler(BaseHTTPRequestHandler):
             audit(conn, actor_of(self), 'duty_route_put', kind, '%s → %s（超时升级 %s）'
                   % (kind, role, p.get('escalate_role') or '值班长'))
             return self._json(HTTPStatus.OK, {'ok': True, 'kind': kind})
+
+        if key == 'monitor/notification/ack':
+            if not self._need('analytics', 'manage', 'denied_monitor_notify_ack'):
+                return
+            payload, err = self._body()
+            if err:
+                return self._json(HTTPStatus.BAD_REQUEST, {'ok': False, 'error': err})
+            b = payload or {}
+            nid = str(b.get('id') or '')[:40]
+            row = conn.execute('SELECT * FROM notifications WHERE id=?', (nid,)).fetchone()
+            if not row:
+                return self._json(HTTPStatus.NOT_FOUND, {'ok': False, 'error': '没有这条通知'})
+            if not str(row['id']).startswith(('N-MON', 'N-ESCL')):
+                return self._json(HTTPStatus.BAD_REQUEST, {'ok': False,
+                                                           'error': '这条是页面推导的通知，不在这里处置'})
+            who = (self.user['name'] or self.user['username'])[:60]
+            note = str(b.get('note') or '')[:200]
+            ts = now_iso()
+            clock = datetime.now().astimezone().strftime('%H:%M:%S')
+            mark = '（已处置：%s 于 %s%s）' % (who, clock, ('：%s' % note) if note else '')
+            conn.execute("UPDATE notifications SET read_flag=1, handled=1, handled_by=?, updated_at=?,"
+                         " body=body||? WHERE id=?", (who, ts, mark, nid))
+            conn.execute('INSERT INTO events(time, level, text, source, created_at) VALUES(?,?,?,?,?)',
+                         (clock, '一般', '【通知已处置】%s（%s）%s' % (row['title'], who, mark), '通知中心', ts))
+            audit(conn, actor_of(self), 'monitor_notify_ack', nid, '%s 处置通知 %s（%s）%s'
+                  % (who, nid, row['title'][:60], '：%s' % note if note else ''))
+            conn.commit()
+            return self._json(HTTPStatus.OK, {'ok': True, 'id': nid, 'handled_by': who,
+                                              'note': '通知已标记为已处置并记录到人（审计 monitor_notify_ack）'})
 
         if key == 'monitor/fallback/decide':
             if not self._need('compute', 'manage', 'denied_monitor_fallback_decide'):

@@ -293,6 +293,9 @@ python3 server/server.py --reset             # 清空数据库后退出
 - 兜底追办：配置项 `fallback-escalate-min`（`0 / 10 / 15 / 30 / 60`，默认 15）——兜底工单挂太久无人接管 → 状态 `已升级`、
   改派给派单映射里「资源异常」的带班角色（默认「值班长」）、追加一条「紧急」通知与事件，审计 `monitor_escalate`；`0` = 不自动升级。
   巡检线程自动跑，也可以 `POST /api/monitor/sweep`（权限点 compute·操作）手动巡检一次，返回升级张数与待接管清单。
+- 通知处置：`POST /api/monitor/notification/ack`（权限点 analytics·操作）`{"id","note"}` —— 只接受平台自己写进库的告警通知（`N-MON…` / `N-ESCL…`），
+  置 `read_flag=1`、`handled=1`、`handled_by=<登录人>`，正文追加「已处置：谁 于 几点」，事件台账一条【通知已处置】，审计 `monitor_notify_ack`；
+  页面推导的通知返回 400。通知表新增列 `handled_by`。
 - 闭环认领：`POST /api/monitor/fallback/decide`（权限点 compute·操作）`{"id","action":"take"|"close","note"}` ——
   `take` 把工单认领到当前登录人（状态 `已接管`、`owner` 写人名、审计 `monitor_fallback_take`）；
   `close` 必须带 `note`（否则 400），状态 `已关闭`，审计 `monitor_fallback_close`；若目标此刻仍采不到，返回里明确写

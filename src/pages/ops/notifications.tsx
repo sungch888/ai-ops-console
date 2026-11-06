@@ -2,6 +2,7 @@ import React from 'react'
 import { Kpi, Panel, PageHead, Badge, Table, Callout } from '../../components/ui'
 import { useNotifs, notifyStore } from '../../engine/ops'
 import { flagsStore, usePerm } from '../../engine/auth'
+import { apiGet, apiSend } from '../../engine/db'
 import { Chart, CHART_COLORS, AXIS_COLOR, SPLIT_COLOR, TOOLTIP_STYLE, GRID } from '../../components/Chart'
 
 const CHANNELS = ['站内看板', '短信', '即时通讯', '值班电话', '邮件']
@@ -9,6 +10,11 @@ const CHANNELS = ['站内看板', '短信', '即时通讯', '值班电话', '邮
 export default function OpsNotifications() {
   const notifs = useNotifs()
   const perm = usePerm('analytics')
+  const [srv, setSrv] = React.useState<any[]>([])
+  const [srvMsg, setSrvMsg] = React.useState<{ ok: boolean; text: string } | null>(null)
+  const loadSrv = () => apiGet('/notifications?limit=50').then((r: any) => setSrv(((r && r.rows) || []).filter((n: any) =>
+    String(n.id).startsWith('N-MON') || String(n.id).startsWith('N-ESCL')))).catch(() => setSrv([]))
+  React.useEffect(() => { void loadSrv() }, [])
   const routes = notifyStore.routes()
   const unread = notifs.filter((n) => !n.read).length
   const urgent = notifs.filter((n) => n.level === '紧急').length
@@ -51,6 +57,34 @@ export default function OpsNotifications() {
       </div>
 
       <div className="grid g-21 mt14">
+        <Panel title="真实告警通知（数据服务写进库里的）" noPad
+          extra={<span className="tiny faint">监控断连 / 兜底升级 / 恢复通知都落在这里 · 未处置 {srv.filter((n) => !n.handled).length} 条</span>}>
+          <div className="panel-body">
+            {srv.length === 0 ? <div className="empty">库里还没有服务端告警通知 · 采不到数或兜底升级时会写进来</div> : (
+              <Table minWidth={980} head={['编号', '时间（本地）', '等级', '来源', '内容', '处置状态']} rows={srv.map((n: any) => [
+                <span className="tiny mono">{n.id}</span>,
+                <span className="tiny faint">{n.time}</span>,
+                <span>{n.level === '紧急' ? <Badge tone="bad">紧急</Badge> : n.level === '重要' ? <Badge tone="warn">重要</Badge> : <Badge tone="info">一般</Badge>}</span>,
+                <span className="tiny">{n.source}</span>,
+                <span className="tiny">{n.title}<div className="tiny faint" style={{ maxWidth: 420 }}>{(n.body || '').slice(0, 150)}</div></span>,
+                <span className="tiny">{n.handled ? <Badge tone="good">已处置 · {n.handled_by || '记录在案'}</Badge>
+                  : <><Badge tone="warn">未处置</Badge>{perm.manage ? <button className="btn sm ghost" style={{ marginLeft: 6 }}
+                    onClick={() => {
+                      const note = window.prompt('处置说明（可空）：已联系对方 / 已切流量 / 已知悉等值班处理') || ''
+                      void apiSend('POST', '/api/monitor/notification/ack', { id: n.id, note }).then((r) => {
+                        setSrvMsg({ ok: !!r.ok, text: r.ok ? String(r.note || '已处置并记录到人') : '被拒：' + (r.error || '') })
+                        void loadSrv()
+                      })
+                    }}>我处置了</button> : <span className="tiny faint" style={{ marginLeft: 6 }}>要「运营分析」操作权才能处置</span>}</>}</span>,
+              ])} />
+            )}
+            {srvMsg ? <div className="tiny" style={{ marginTop: 6, color: srvMsg.ok ? '#7ee2b8' : '#ff9a9a' }}>{srvMsg.text}</div> : null}
+            <div className="tiny faint" style={{ marginTop: 6 }}>
+              这条是平台自己发现、自己写进库的告警（不是页面演示推导的通知）。<span className="strong">没人处置就一直挂着</span>：
+              对应的兜底工单挂满 15 分钟没人接管会自动升级给带班角色；处置动作会记录是谁、几点，写审计 <span className="mono">monitor_notify_ack</span>。
+            </div>
+          </div>
+        </Panel>
         <Panel title="通知列表" extra="引擎事件自动生成 · 点击处置写入闭环" noPad>
           <div className="panel-body">
             {notifs.length === 0 ? <div className="empty">暂无通知 · 在工作台执行一次变更或点「演示冲击场景」即可产生</div> : (
