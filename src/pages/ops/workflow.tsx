@@ -10,11 +10,14 @@ import { Link } from 'react-router-dom'
 const TYPE_OPTS: OrderType[] = ['pool_expand', 'pool_release', 'preempt', 'replica_scale', 'weight_adjust', 'credential_issue', 'credential_revoke', 'quota_adjust']
 
 import { usePerm } from '../../engine/auth'
+import { consoleStore, useConsole } from '../../engine/console'
 
 export default function OpsWorkflow() {
   const st = useEngine()
   const rent = rentInfo(st)
   const canApprove = usePerm('approve').manage
+  const cons = useConsole()
+  useEffect(() => { void consoleStore.refresh() }, [])
   const [type, setType] = useState<OrderType>('pool_expand')
   const [level, setLevel] = useState<Level>('高保')
   const [pool, setPool] = useState<'hp' | 'shared' | 'train'>('hp')
@@ -270,15 +273,19 @@ export default function OpsWorkflow() {
           {queued.length > 0 ? (
             <div style={{ marginTop: 12 }}>
               <Table
-                minWidth={760}
-                head={['位次', '工单', '类型 / 对象', '准入预检', '状态']}
-                rows={queued.map((q, i) => [
+                minWidth={1000}
+                head={['位次', '工单', '类型 / 对象', '准入预检', '审批来源 / 外部回写', '状态']}
+                rows={queued.map((q, i) => {
+                  const ap = cons.approvals.filter((a) => a.order_id === q.id)
+                  return [
                   <span className="num strong">{i + 1}</span>,
                   <span className="mono small">{q.id}{q.auto ? <span className="tag gray" style={{ marginLeft: 6 }}>自动建议</span> : null}</span>,
                   <span className="small">{TYPE_LABEL[q.type]} · {q.target} {q.amount}</span>,
                   <span className="tiny faint" style={{ maxWidth: 260 }}>{String(q.spec.affected ?? q.reason).slice(0, 70)}</span>,
+                  <span className="tiny">{ap.length === 0 ? <Badge tone="muted">平台内审批</Badge> : ap.map((a) => <span key={a.id} style={{ marginRight: 6 }}>{a.state === '超时' ? <Badge tone="warn">外部超时未回写</Badge> : a.state === '已审' ? <Badge tone="good">已回写</Badge> : a.state === '驳回' ? <Badge tone="bad">已驳回</Badge> : <Badge tone="info">等外部回写</Badge>}<span className="faint tiny mono"> {a.external_ref}</span></span>)}{ap.length > 0 ? <div className="tiny faint">可在「申请与审批台」人工接管</div> : null}</span>,
                   <State s="queued" />,
-                ])}
+                  ]
+                })}
               />
             </div>
           ) : null}
