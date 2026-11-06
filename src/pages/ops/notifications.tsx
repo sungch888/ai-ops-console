@@ -74,7 +74,9 @@ export default function OpsNotifications() {
                       void apiSend('POST', '/api/monitor/notification/ack', { id: n.id, note }).then((r) => {
                         setSrvMsg({ ok: !!r.ok, text: r.ok ? String(r.note || '已处置并记录到人') : '被拒：' + (r.error || '') })
                         void loadSrv()
-                      })
+                      }).catch((e) => setSrvMsg({ ok: false,
+                        text: '处置没成：' + String((e && e.message) || e) + '（若是「未登录或会话已过期」，先重新登录再点一次）',
+                      }))
                     }}>我处置了</button> : <span className="tiny faint" style={{ marginLeft: 6 }}>要「运营分析」操作权才能处置</span>}</>}</span>,
               ])} />
             )}

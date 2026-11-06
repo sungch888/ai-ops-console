@@ -52,7 +52,17 @@ export function useDbStatus(): Status {
 
 const enc = encodeURIComponent
 
-async function req(method: string, path: string, body?: unknown): Promise<any> {
+async function refreshCsrf(): Promise<boolean> {
+  // 令牌过期时（例如数据服务重启后）重新探一次会话，拿新令牌
+  try {
+    const res = await fetch(BASE + '/api/session', { cache: 'no-store' })
+    const j = await res.json().catch(() => null)
+    if (j && j.csrf) { csrfToken = String(j.csrf); return true }
+  } catch { /* 网络不通就不重试 */ }
+  return false
+}
+
+async function req(method: string, path: string, body?: unknown, retried = false): Promise<any> {
   const headers: Record<string, string> = { 'Content-Type': 'application/json' }
   const acc = accountHeader()
   if (acc) headers['X-Demo-Account'] = acc
@@ -66,7 +76,13 @@ async function req(method: string, path: string, body?: unknown): Promise<any> {
   const text = await res.text()
   let json: any = null
   try { json = text ? JSON.parse(text) : null } catch { /* 非 JSON 响应 */ }
-  if (!res.ok) throw new Error((json && json.error) || 'HTTP ' + res.status)
+  if (!res.ok) {
+    const msg = (json && json.error) || ('HTTP ' + res.status)
+    if (!retried && method !== 'GET' && res.status === 403 && /令牌|CSRF/i.test(String(msg)) && await refreshCsrf()) {
+      return req(method, path, body, true)
+    }
+    throw new Error(String(msg))
+  }
   return json
 }
 
