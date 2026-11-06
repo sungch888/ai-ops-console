@@ -9,6 +9,7 @@ import { useEffect, useState } from 'react'
 import { Badge, Callout, Kpi, Panel, PageHead, Table } from '../../components/ui'
 import { listLinks, loadConfig, saveConfig, syncLinks, useFlags, usePerm } from '../../engine/auth'
 import { COLLECT_KINDS, buildSourceConfig, collectStore, useCollect } from '../../engine/collect'
+import { apiSend } from '../../engine/db'
 import { consoleStore, useConsole } from '../../engine/console'
 
 const SOURCE_KEYS = ['auth-provider', 'approval-source', 'notify-channels', 'duty-source'] as const
@@ -250,6 +251,16 @@ export default function OpsSettings() {
               onChange={(e) => void saveConfig('monitor-alert-fail-count', e.target.value)}>
               {['1', '2', '3', '5'].map((v) => <option key={v} value={v}>连续 {v} 轮采不到就告警</option>)}
             </select>
+            <select className="btn sm" style={{ width: 230 }} disabled={!matrixPerm.manage} value={flags.config['fallback-escalate-min'] || '15'}
+              onChange={(e) => void saveConfig('fallback-escalate-min', e.target.value)}>
+              {['0', '10', '15', '30', '60'].map((v) => <option key={v} value={v}>{v === '0' ? '兜底工单不自动升级' : '兜底挂 ' + v + ' 分钟没人接管就升级'}</option>)}
+            </select>
+            <button className="btn sm ghost" disabled={!matrixPerm.manage}
+              onClick={() => void apiSend('POST', '/api/monitor/sweep', {}).then((r) => setColMsg({
+                ok: !!r.ok,
+                text: r.ok ? '巡检兜底工单：升级 ' + (r.escalated ?? 0) + ' 张（挂太久没人接管的派给带班角色）；待接管清单 '
+                  + ((r.pending || []).filter((x: any) => x.status === '待接管').length) + ' 张'
+                  : '巡检失败：' + (r.error || '') }))}>巡检兜底工单</button>
             {!matrixPerm.manage ? <span className="tiny faint">要「权限矩阵」操作权才能接入 / 改 / 删采集源（与改配置同级）</span> : null}
           </div>
           {colMsg ? <div className="tiny" style={{ marginTop: 8, color: colMsg.ok ? '#7ee2b8' : '#ff9a9a' }}>{colMsg.text}</div> : null}
@@ -273,6 +284,8 @@ export default function OpsSettings() {
             在审批台通过后才生效（驳回则不生效）；两种模式都会写审计（<span className="mono">data_source_put</span>）。
             连不通也会告：连续采不到到达阈值（默认 2 轮，可改）→ 事件台账 + 通知中心 + 兜底工单（按派单映射派给值班岗位，默认「算力资源值班」），
             只告一次不刷屏；重新采到 → 恢复通知 + 兜底工单自动关闭；关掉「断连要告警」时仍然留痕（状态与连续轮数），只是不发通知。
+            兜底工单挂了没人接管也会追：默认挂 15 分钟无人接管 → 状态变「已升级」、改派给派单映射里的带班角色（默认「值班长」）并发一条「紧急」通知；
+            设成「不自动升级」就只靠人工巡检，界面上的「巡检兜底工单」按钮可以随时手动巡检一次。
           </div>
         </div>
       </Panel>

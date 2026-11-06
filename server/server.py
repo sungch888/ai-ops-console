@@ -302,6 +302,7 @@ CONFIG_DEFAULTS = {
     'data-source-approval': 'off',
     'monitor-alert-enabled': 'on',
     'monitor-alert-fail-count': '2',
+    'fallback-escalate-min': '15',
 }
 CONFIG_CHOICES = {
     'auth-provider': list(PROVIDERS.keys()),
@@ -311,10 +312,12 @@ CONFIG_CHOICES = {
     'data-source-approval': ['off', 'on'],
     'monitor-alert-enabled': ['off', 'on'],
     'monitor-alert-fail-count': ['1', '2', '3', '5'],
+    'fallback-escalate-min': ['0', '10', '15', '30', '60'],
 }
 CONFIG_LABEL_CN = {'auth-provider': '身份来源', 'approval-source': '审批来源',
                    'data-source-approval': '资源接入要先审批',
-                   'monitor-alert-enabled': '断连要告警', 'monitor-alert-fail-count': '连续几轮取数失败就告警', 'notify-channels': '通知渠道',
+                   'monitor-alert-enabled': '断连要告警', 'monitor-alert-fail-count': '连续几轮取数失败就告警',
+                   'fallback-escalate-min': '兜底工单多久没人接管就升级', 'notify-channels': '通知渠道',
                    'duty-source': '排班来源', 'command-ack-timeout-min': '指令确认超时（分钟）'}
 
 DUTY_DEFAULT = [
@@ -1060,6 +1063,7 @@ def collect_loop(stop: threading.Event) -> None:
                     due.append(r['kind'])
             if due:
                 run_collect(sorted(set(due)))
+            COLLECT_STATE['escalated'] = sweep_fallback(db())
         except Exception as exc:
             COLLECT_STATE['last_error'] = str(exc)[:160]
         stop.wait(10)
@@ -1123,12 +1127,14 @@ def raise_probe_alert(conn, source: str, sid: str, name: str, msg: str, streak: 
     body = ('连续 %d 轮取不到这个目标的数（来源 %s / %s）。最近一次错误：%s。'
             '断连期间页面上的指标不再更新，看到的是最后一次成功采到的读数。' % (streak, source, sid, msg))
     ts = now_iso()
+    clock = datetime.now().astimezone().strftime('%H:%M:%S')
     conn.execute('INSERT INTO events(time, level, text, source, created_at) VALUES(?,?,?,?,?)',
-                 (ts[11:16], level, '【监控断连】%s（%s / %s）' % (title, source, sid), source, ts))
+                 (clock, level, '【监控断连】%s（%s / %s）' % (title, source, sid), source, ts))
     nid = 'N-MON-%s-%s' % (sid, secrets.token_hex(2).upper())
     conn.execute('INSERT INTO notifications(id, time, level, title, body, channels, read_flag, handled, source,'
                  ' updated_at) VALUES(?,?,?,?,?,?,0,0,?,?)',
-                 (nid, ts[11:16], level, title, body, cfg('notify-channels', 'site'), source, ts))
+                 (nid, datetime.now().astimezone().strftime('%m-%d %H:%M:%S'), level, title, body,
+                  cfg('notify-channels', 'site'), source, ts))
     fid = 'FB-MON-%s' % sid
     owner = _duty_owner(conn)
     conn.execute('INSERT INTO fallback_tasks(id, kind, ref, title, detail, status, owner, created_at, updated_at)'
@@ -1146,11 +1152,12 @@ def clear_probe_alert(conn, source: str, sid: str, name: str, actor: str = 'moni
     """恢复即通知（之前告过警才发，正常状态不刷屏），并自动关闭对应的兜底工单。"""
     ts = now_iso()
     conn.execute('INSERT INTO events(time, level, text, source, created_at) VALUES(?,?,?,?,?)',
-                 (ts[11:16], '一般', '【监控恢复】%s（%s / %s）取数已恢复' % (name, source, sid), source, ts))
+                 (datetime.now().astimezone().strftime('%H:%M:%S'), '一般',
+                  '【监控恢复】%s（%s / %s）取数已恢复' % (name, source, sid), source, ts))
     nid = 'N-MONOK-%s-%s' % (sid, secrets.token_hex(2).upper())
     conn.execute('INSERT INTO notifications(id, time, level, title, body, channels, read_flag, handled, source,'
                  ' updated_at) VALUES(?,?,?,?,?,?,0,0,?,?)',
-                 (nid, ts[11:16], '一般', '%s 取数已恢复' % name,
+                 (nid, datetime.now().astimezone().strftime('%m-%d %H:%M:%S'), '一般', '%s 取数已恢复' % name,
                   '监控目标 %s（%s / %s）重新采到数据，兜底工单已自动关闭' % (name, source, sid),
                   cfg('notify-channels', 'site'), source, ts))
     cur = conn.execute("UPDATE fallback_tasks SET status='已关闭', updated_at=?, detail=detail||'（已自动关闭：取数恢复）'"
@@ -1159,6 +1166,52 @@ def clear_probe_alert(conn, source: str, sid: str, name: str, actor: str = 'moni
           % (source, name, nid, cur.rowcount))
     conn.commit()
     return {'notification_id': nid, 'closed': cur.rowcount}
+
+
+def sweep_fallback(conn, actor: str = 'system') -> int:
+    """兜底工单挂太久没人接管 → 升级给带班角色（派单映射里的升级岗位），再发一条紧急通知。
+
+    配置项 fallback-escalate-min = 0 表示不自动升级（只靠巡检）。
+    """
+    try:
+        minutes = int(cfg('fallback-escalate-min', '15'))
+    except (TypeError, ValueError):
+        minutes = 15
+    if minutes <= 0:
+        return 0
+    cutoff = datetime.now(timezone.utc).timestamp() - minutes * 60
+    up = 0
+    for r in conn.execute("SELECT id, ref, title, owner, created_at FROM fallback_tasks"
+                          " WHERE kind='monitor_unreachable' AND status='待接管'").fetchall():
+        try:
+            when = datetime.fromisoformat(str(r['created_at']).replace('Z', '+00:00')).timestamp()
+        except ValueError:
+            continue
+        if when > cutoff:
+            continue
+        route = conn.execute("SELECT escalate_role FROM duty_routes WHERE kind='资源异常'").fetchone()
+        to = route['escalate_role'] if route and route['escalate_role'] else '值班长'
+        ts = now_iso()
+        conn.execute("UPDATE fallback_tasks SET status='已升级', owner=?, updated_at=?,"
+                     ' detail=detail||? WHERE id=?',
+                     (to, ts, '（超过 %d 分钟无人接管，升级给 %s）' % (minutes, to), r['id']))
+        conn.execute('INSERT INTO events(time, level, text, source, created_at) VALUES(?,?,?,?,?)',
+                     (datetime.now().astimezone().strftime('%H:%M:%S'), '紧急',
+                      '【兜底升级】%s 挂 %d 分钟无人接管 → 升级给 %s' % (r['title'], minutes, to), '兜底值守', ts))
+        conn.execute('INSERT INTO notifications(id, time, level, title, body, channels, read_flag, handled, source,'
+                     ' updated_at) VALUES(?,?,?,?,?,?,0,0,?,?)',
+                     ('N-ESCL-%s-%s' % (r['id'], secrets.token_hex(2).upper()),
+                      datetime.now().astimezone().strftime('%m-%d %H:%M:%S'), '紧急',
+                      '%s 无人接管，已升级' % r['title'],
+                      '这张兜底工单挂了 %d 分钟没人接管（原来派给 %s）。现在升级给 %s：请带班确认谁去处理；'
+                      '处理动作仍在工单里走，系统不替你去改外部系统。' % (minutes, r['owner'], to),
+                      cfg('notify-channels', 'site'), '兜底值守', ts))
+        audit(conn, actor, 'monitor_escalate', r['id'],
+              '兜底工单 %s（%s）挂 %d 分钟无人接管 → 升级给 %s' % (r['id'], r['ref'], minutes, to))
+        up += 1
+    if up:
+        conn.commit()
+    return up
 
 
 def public_config() -> dict:
@@ -1267,7 +1320,8 @@ def project_state(conn, key: str, payload, updated_at: str) -> int:
                      ('permission_matrix', json.dumps(payload, ensure_ascii=False), updated_at))
 
     elif key == 'dsh-demo-notif-v1' and isinstance(payload, list):
-        conn.execute('DELETE FROM notifications')
+        # 页面投影只覆盖「演示推导出来的」通知；服务端主动告警写进去的通知（N-MON…）不能被清掉
+        conn.execute("DELETE FROM notifications WHERE id NOT LIKE 'N-MON%'")
         for i, n in enumerate(payload):
             if not isinstance(n, dict):
                 continue
@@ -2330,6 +2384,20 @@ class Handler(BaseHTTPRequestHandler):
             audit(conn, actor_of(self), 'duty_route_put', kind, '%s → %s（超时升级 %s）'
                   % (kind, role, p.get('escalate_role') or '值班长'))
             return self._json(HTTPStatus.OK, {'ok': True, 'kind': kind})
+
+        if key == 'monitor/sweep':
+            if not self._need('compute', 'manage', 'denied_monitor_sweep'):
+                return
+            conn = db()
+            swept = sweep_fallback(conn, actor_of(self))
+            return self._json(HTTPStatus.OK, {'ok': True, 'escalated': swept,
+                                              'pending': [dict(r) for r in conn.execute(
+                                                  "SELECT id, ref, title, status, owner, created_at"
+                                                  " FROM fallback_tasks WHERE kind='monitor_unreachable'"
+                                                  ' ORDER BY created_at DESC LIMIT 20')],
+                                              'escalate_minutes': cfg('fallback-escalate-min', '15'),
+                                              'note': '巡检兜底工单：挂太久没人接管就升级给带班角色'
+                                                      '（配置项 fallback-escalate-min，0 为不升级）'})
 
         # ---- v3.8 资源接入：采集源在界面上配（可选先走资源接入工单）
         if key == 'collect/source':

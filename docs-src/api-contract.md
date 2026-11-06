@@ -290,4 +290,9 @@ python3 server/server.py --reset             # 清空数据库后退出
 - 去重：只在「正常 → 连续失败」这一跳发一次，后续轮次继续留痕但不刷通知；恢复时发一条恢复通知并把兜底工单置「已关闭」。
 - 配置项：`monitor-alert-enabled`（`on` / `off`，默认 `on`）、`monitor-alert-fail-count`（`1 / 2 / 3 / 5`，默认 `2`）。关掉开关仍然累计 `fail_streak` 与 `last_status='取数失败'`，只是不发通知。
 - 监控接口 `GET /api/monitor` 的 `state.alerts`、采集接口 `GET /api/collect` 的 `state.alerts` 会列出当前正在告警的目标（通知号 / 兜底工单号 / 派给谁 / 连续几轮）。
+- 兜底追办：配置项 `fallback-escalate-min`（`0 / 10 / 15 / 30 / 60`，默认 15）——兜底工单挂太久无人接管 → 状态 `已升级`、
+  改派给派单映射里「资源异常」的带班角色（默认「值班长」）、追加一条「紧急」通知与事件，审计 `monitor_escalate`；`0` = 不自动升级。
+  巡检线程自动跑，也可以 `POST /api/monitor/sweep`（权限点 compute·操作）手动巡检一次，返回升级张数与待接管清单。
+- 通知保护：页面自己的通知投影（`dsh-demo-notif-v1`）只覆盖演示推导的通知，服务端告警写入的通知（`N-MON…` / `N-ESCL…`）不被清掉。
+- 时间口径：事件与通知的显示时间用数据服务所在机器的本地钟点（`HH:MM:SS` / `MM-DD HH:MM:SS`），与页面其它台账一致。
 - 未做（诚实边界）：时延 / 错误率 / 排队深度这类**指标阈值**告警目前还在页面常量里，没搬进配置项。
