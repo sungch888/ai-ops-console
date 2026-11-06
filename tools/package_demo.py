@@ -14,6 +14,37 @@ ROOT = os.path.dirname(HERE)
 OUT = sys.argv[1] if len(sys.argv) > 1 else os.path.join(ROOT, 'ai-ops-demo.zip')
 STAGE = os.path.join('/tmp', 'aiops-demo-stage')
 
+# Documents kept outside the repository (owner-facing working notes). Included when present.
+DL = os.environ.get('DSH_DL', '/sdcard/Download')
+# Working notes kept outside the repository. Mapping lives in a JSON file so the
+# public repository never references private document names:
+#   DSH_DOC_MAP=/path/ext_docs.json python3 tools/package_demo.py out.zip
+EXTERNAL_DOCS = {}
+_map_path = os.environ.get('DSH_DOC_MAP', '')
+if _map_path and os.path.exists(_map_path):
+    import json
+    EXTERNAL_DOCS = json.load(open(_map_path, encoding='utf-8'))
+# Markdown -> Word / PDF, so the package ships formats that survive font differences.
+DOC_FORMATS = ('operation-manual', 'iteration-plan')
+
+
+def build_doc_formats(stage_dir):
+    made = []
+    for base in DOC_FORMATS:
+        src = os.path.join(stage_dir, 'docs', base + '.md')
+        if not os.path.exists(src):
+            continue
+        for tool, suffix in (('md2docx.py', '.docx'), ('md2pdf.py', '.pdf')):
+            out = os.path.join(stage_dir, 'docs', base + suffix)
+            try:
+                subprocess.run(['python3', os.path.join(ROOT, 'tools', tool), src, out],
+                               check=True, capture_output=True)
+                made.append('docs/' + base + suffix)
+            except Exception as exc:
+                print('skip docs/%s%s: %s' % (base, suffix, str(exc)[:100]))
+    return made
+
+
 DOC_MAP = {
     'docs-src/operation-manual.md': 'docs/operation-manual.md',
     'docs-src/architecture.md': 'docs/architecture.md',
@@ -59,6 +90,16 @@ def main():
         os.makedirs(os.path.dirname(dst), exist_ok=True)
         shutil.copyfile(p, dst)
         n += 1
+    for src, dst in EXTERNAL_DOCS.items():
+        p = os.path.join(DL, src)
+        if not os.path.exists(p):
+            continue
+        dst = os.path.join(STAGE, dst)
+        os.makedirs(os.path.dirname(dst), exist_ok=True)
+        shutil.copyfile(p, dst)
+        n += 1
+    for extra in build_doc_formats(STAGE):
+        print('built', extra)
     for d in ('server/data', 'dist/data'):
         os.makedirs(os.path.join(STAGE, d), exist_ok=True)
 
