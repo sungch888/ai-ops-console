@@ -260,7 +260,7 @@ export default function OpsSettings() {
                 ok: !!r.ok,
                 text: r.ok ? '巡检兜底工单：升级 ' + (r.escalated ?? 0) + ' 张（挂太久没人接管的派给带班角色）；待接管清单 '
                   + ((r.pending || []).filter((x: any) => x.status === '待接管').length) + ' 张'
-                  : '巡检失败：' + (r.error || '') }))}>巡检兜底工单</button>
+                  : '巡检失败：' + (r.error || '') })).catch((e) => setColMsg({ ok: false, text: '巡检没成：' + String((e && e.message) || e) }))}>巡检兜底工单</button>
             {!matrixPerm.manage ? <span className="tiny faint">要「权限矩阵」操作权才能接入 / 改 / 删采集源（与改配置同级）</span> : null}
           </div>
           {colMsg ? <div className="tiny" style={{ marginTop: 8, color: colMsg.ok ? '#7ee2b8' : '#ff9a9a' }}>{colMsg.text}</div> : null}
