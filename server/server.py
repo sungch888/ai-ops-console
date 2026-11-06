@@ -1156,11 +1156,11 @@ def clear_probe_alert(conn, source: str, sid: str, name: str, actor: str = 'moni
                  (datetime.now().astimezone().strftime('%H:%M:%S'), '一般',
                   '【监控恢复】%s（%s / %s）取数已恢复' % (name, source, sid), source, ts))
     nid = 'N-MONOK-%s-%s' % (sid, secrets.token_hex(2).upper())
-    conn.execute('INSERT INTO notifications(id, time, level, title, body, channels, read_flag, handled, source,'
-                 ' updated_at) VALUES(?,?,?,?,?,?,0,0,?,?)',
+    conn.execute('INSERT INTO notifications(id, time, level, title, body, channels, read_flag, handled, source, handled_by,'
+                 ' updated_at) VALUES(?,?,?,?,?,?,1,1,?,?,?)',
                  (nid, datetime.now().astimezone().strftime('%m-%d %H:%M:%S'), '一般', '%s 取数已恢复' % name,
                   '监控目标 %s（%s / %s）重新采到数据，兜底工单已自动关闭' % (name, source, sid),
-                  cfg('notify-channels', 'site'), source, ts))
+                  cfg('notify-channels', 'site'), source, ts, '系统自动闭环'))
     cur = conn.execute("UPDATE fallback_tasks SET status='已关闭', updated_at=?, detail=detail||'（已自动关闭：取数恢复）'"
                        " WHERE ref=? AND kind='monitor_unreachable' AND status<>'已关闭'", (ts, sid))
     audit(conn, actor, 'monitor_recover', sid, '%s / %s 取数恢复 → 通知 %s，兜底工单关闭 %d 张'

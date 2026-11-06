@@ -58,7 +58,7 @@ export default function OpsNotifications() {
 
       <div className="grid g-21 mt14">
         <Panel title="真实告警通知（数据服务写进库里的）" noPad
-          extra={<span className="tiny faint">监控断连 / 兜底升级 / 恢复通知都落在这里 · 未处置 {srv.filter((n) => !n.handled).length} 条</span>}>
+          extra={<span className="tiny faint">监控断连 / 兜底升级 / 恢复通知都落在这里 · 未处置 {srv.filter((n) => !n.handled).length} 条<button className="btn sm ghost" style={{ marginLeft: 8 }} onClick={() => void loadSrv()}>重新拉取</button></span>}>
           <div className="panel-body">
             {srv.length === 0 ? <div className="empty">库里还没有服务端告警通知 · 采不到数或兜底升级时会写进来</div> : (
               <Table minWidth={980} head={['编号', '时间（本地）', '等级', '来源', '内容', '处置状态']} rows={srv.map((n: any) => [
