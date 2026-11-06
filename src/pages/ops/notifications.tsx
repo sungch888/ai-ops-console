@@ -1,6 +1,7 @@
 import React from 'react'
 import { Kpi, Panel, PageHead, Badge, Table, Callout } from '../../components/ui'
 import { useNotifs, notifyStore } from '../../engine/ops'
+import { liveAlertStore, useLiveAlerts } from '../../engine/liveAlerts'
 import { flagsStore, usePerm } from '../../engine/auth'
 import { apiGet, apiSend } from '../../engine/db'
 import { Chart, CHART_COLORS, AXIS_COLOR, SPLIT_COLOR, TOOLTIP_STYLE, GRID } from '../../components/Chart'
@@ -10,15 +11,17 @@ const CHANNELS = ['站内看板', '短信', '即时通讯', '值班电话', '邮
 export default function OpsNotifications() {
   const notifs = useNotifs()
   const perm = usePerm('analytics')
-  const [srv, setSrv] = React.useState<any[]>([])
+  const srv = useLiveAlerts()
   const [srvMsg, setSrvMsg] = React.useState<{ ok: boolean; text: string } | null>(null)
-  const loadSrv = () => apiGet('/notifications?limit=50').then((r: any) => setSrv(((r && r.rows) || []).filter((n: any) =>
-    String(n.id).startsWith('N-MON') || String(n.id).startsWith('N-ESCL')))).catch(() => setSrv([]))
-  React.useEffect(() => { void loadSrv() }, [])
+  const loadSrv = () => void liveAlertStore.refresh()
+  React.useEffect(() => { loadSrv() }, [])
   const routes = notifyStore.routes()
   const unread = notifs.filter((n) => !n.read).length
   const urgent = notifs.filter((n) => n.level === '紧急').length
   const handled = notifs.filter((n) => n.handled).length
+  const realUnhandled = srv.filter((n: any) => !n.handled).length
+  const realUrgent = srv.filter((n: any) => !n.handled && n.level === '紧急').length
+  const realHandled = srv.filter((n: any) => !!n.handled).length
 
   const bySource = ['模型中心 / 算力中心', '外部对接', '运营分析']
   const srcOpt = {
@@ -50,10 +53,10 @@ export default function OpsNotifications() {
       />
 
       <div className="grid g-4">
-        <Kpi label="未读通知" value={unread} unit="条" foot="顶栏铃铛同步计数" />
-        <Kpi label="通知总数" value={notifs.length} unit="条" foot="保留最近 60 条" />
-        <Kpi label="紧急通知" value={urgent} unit="条" foot="路由含短信与值班电话" />
-        <Kpi label="已处置" value={handled} unit="条" foot={<span className="up">闭环确认</span>} />
+        <Kpi label="真实告警待处置" value={realUnhandled} unit="条"
+          foot={<span className={realUnhandled ? 'down' : 'up'}>{realUnhandled ? '要有人认领处置' : '全部已处置'}</span>} />
+        <Kpi label="紧急待处置" value={realUrgent} unit="条" foot="监控断连与兜底升级会升紧急" />
+        <Kpi label="已处置" value={realHandled} unit="条" foot="含系统自动闭环的取数恢复通知" />
       </div>
 
       <div className="grid g-21 mt14">
@@ -71,12 +74,13 @@ export default function OpsNotifications() {
                   : <><Badge tone="warn">未处置</Badge>{perm.manage ? <button className="btn sm ghost" style={{ marginLeft: 6 }}
                     onClick={() => {
                       const note = window.prompt('处置说明（可空）：已联系对方 / 已切流量 / 已知悉等值班处理') || ''
-                      void apiSend('POST', '/api/monitor/notification/ack', { id: n.id, note }).then((r) => {
-                        setSrvMsg({ ok: !!r.ok, text: r.ok ? String(r.note || '已处置并记录到人') : '被拒：' + (r.error || '') })
-                        void loadSrv()
-                      }).catch((e) => setSrvMsg({ ok: false,
-                        text: '处置没成：' + String((e && e.message) || e) + '（若是「未登录或会话已过期」，先重新登录再点一次）',
-                      }))
+                      void liveAlertStore.ack(n.id, note).then((r) => {
+                        setSrvMsg({
+                          ok: !!r.ok,
+                          text: r.ok ? String(r.note || '已处置并记录到人')
+                            : '处置没成：' + String(r.error || '') + '（若是「未登录或会话已过期」，先重新登录再点一次）',
+                        })
+                      })
                     }}>我处置了</button> : <span className="tiny faint" style={{ marginLeft: 6 }}>要「运营分析」操作权才能处置</span>}</>}</span>,
               ])} />
             )}
@@ -87,7 +91,7 @@ export default function OpsNotifications() {
             </div>
           </div>
         </Panel>
-        <Panel title="通知列表" extra="引擎事件自动生成 · 点击处置写入闭环" noPad>
+        <Panel title="通知列表（演示推导 · 不是真实采集）" extra="引擎事件自动生成 · 点击处置写入闭环" noPad>
           <div className="panel-body">
             {notifs.length === 0 ? <div className="empty">暂无通知 · 在工作台执行一次变更或点「演示冲击场景」即可产生</div> : (
               <Table

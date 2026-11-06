@@ -3,6 +3,7 @@ import { HashRouter, Routes, Route, useLocation, useNavigate, Navigate } from 'r
 import { auth, useSession, useMatrix, ROLE_LABEL, type PermKey } from './engine/auth'
 import { useExceptions } from './engine/exceptions'
 import { useUnread } from './engine/ops'
+import { liveAlertStore, startLiveAlertPoll, useLiveAlertBadge, useLiveAlerts } from './engine/liveAlerts'
 import { telemetryStore } from './engine/telemetry'
 import { useDbStatus } from './engine/db'
 import './engine/alerts'
@@ -216,6 +217,9 @@ function Shell() {
   const acc = useSession()
   const matrix = useMatrix()
   const unread = useUnread()
+  const liveBadge = useLiveAlertBadge()
+  const liveList = useLiveAlerts()
+  useEffect(() => { startLiveAlertPoll(20) }, [])
   const excList = useExceptions()
   const excOpen = excList.filter((e) => e.status === '待分析' && e.severity !== '中').length
   const db = useDbStatus()
@@ -260,7 +264,7 @@ function Shell() {
                 >
                   {I(ICONS[it.icon])}
                   <span>{it.label}</span>
-                  {it.to === '/ops/notifications' && unread > 0 ? <span className="tag red" style={{ marginLeft: 'auto' }}>{unread}</span> : null}
+                  {it.to === '/ops/notifications' && liveBadge > 0 ? <span className="tag red" style={{ marginLeft: 'auto' }}>{unread}</span> : null}
                   {it.to === '/compute/exceptions' && excOpen > 0 ? <span className="tag red" style={{ marginLeft: 'auto' }}>{excOpen}</span> : null}
                 </div>
               ))}
@@ -306,13 +310,29 @@ function Shell() {
               className="row gap6"
               style={{ cursor: 'pointer', position: 'relative' }}
               onClick={() => nav('/ops/notifications')}
-              title="通知中心"
+              title={'通知中心 · 真实告警待处置 ' + liveBadge + ' 条'
+                + (liveList.length ? '（最近：' + liveList[0].level + ' ' + liveList[0].title.slice(0, 40) + '）' : '')
+                + (liveAlertStore.error() ? ' · ' + liveAlertStore.error() : '')}
             >
               <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#8fb6e8" strokeWidth="1.8" strokeLinecap="round">
                 <path d="M18 8A6 6 0 006 8c0 7-3 8-3 8h18s-3-1-3-8" />
                 <path d="M10.3 21a2 2 0 003.4 0" />
               </svg>
-              {unread > 0 ? <span className="tag red">{unread}</span> : <span className="tiny faint">无未读</span>}
+              {liveBadge > 0
+                ? <span className="tag red">真实告警待处置 {liveBadge}</span>
+                : <span className="tiny faint">无待处置告警</span>}
+              {liveList.length ? (
+                <span
+                  className="tiny"
+                  style={{
+                    maxWidth: 260, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                    color: liveBadge > 0 ? (liveList[0].level === '紧急' ? '#ff8f8f' : '#ffc36b') : '#8fb6e8',
+                  }}
+                  title={liveList[0].title + ' · ' + liveList[0].body}
+                >
+                  {liveList[0].level} · {liveList[0].title.slice(0, 34)}（{liveList[0].time}）
+                </span>
+              ) : null}
             </span>
             <span className="row gap6">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#8fb6e8" strokeWidth="1.8">
