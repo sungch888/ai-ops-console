@@ -1,11 +1,11 @@
 :root {
   --bg: #040914;
-  --bg-panel: rgba(13, 27, 51, 0.72);
-  --line: rgba(64, 130, 220, 0.22);
-  --line-strong: rgba(90, 160, 255, 0.45);
+  --bg-panel: rgba(16, 32, 58, 0.92);
+  --line: rgba(var(--line-rgb), 0.34);
+  --line-strong: rgba(var(--blue-lite-rgb), 0.62);
   --text: #d9e8ff;
-  --text-dim: #7f9cc7;
-  --text-faint: #55708f;
+  --text-dim: #93aed4;
+  --text-faint: #7d98bc;
   --cyan: #22d3ee;
   --blue: #3d8bfd;
   --green: #2fd6a3;
@@ -17,7 +17,7 @@
   --cyan-rgb: 34, 211, 238;
   --blue-rgb: 61, 139, 253;
   --blue-lite-rgb: 90, 160, 255;
-  --line-rgb: 64, 130, 220;
+  --line-rgb: 86, 150, 235;
   --glow-rgb: 37, 99, 235;
   --chrome-rgb: 6, 14, 28;
   --panel-rgb: 13, 27, 51;
@@ -52,7 +52,7 @@
   --field-bg: #091527;
   --option-bg: #0c1c33;
   --page-bg: radial-gradient(1200px 600px at 82% -10%, rgba(var(--glow-rgb), 0.16), transparent 60%), radial-gradient(900px 520px at -10% 112%, rgba(var(--cyan-rgb), 0.09), transparent 60%), var(--bg);
-  --panel-grad: linear-gradient(160deg, rgba(var(--panel-a-rgb), 0.5), rgba(var(--panel-b-rgb), 0.82));
+  --panel-grad: linear-gradient(160deg, rgba(var(--panel-a-rgb), 0.9), rgba(var(--panel-b-rgb), 0.96));
   --glow-brand: 0 0 18px rgba(var(--cyan-rgb), 0.25);
   --glow-nav: 0 0 16px rgba(var(--cyan-rgb), 0.08);
   --glow-btn: 0 0 14px rgba(var(--blue-rgb), 0.25);
@@ -403,76 +403,89 @@ textarea { min-height: 72px; resize: vertical; line-height: 1.55; }
 /* ---------- 配色方案：右上角「配色」切换，选择记在库里（换电脑也认） ----------
    deep 深空蓝（默认）· ink 墨青 · paper 纸白 · goyty 公文灰 · contrast 高对比 ---- */
 [data-theme='ink'] {
-  --bg: #0b1113; --chrome-rgb: 8, 14, 16; --panel-rgb: 18, 26, 29;
-  --panel-a-rgb: 22, 32, 35; --panel-b-rgb: 12, 18, 20; --shadow-rgb: 0, 0, 0; --sheen-rgb: 120, 170, 170;
-  --line-rgb: 70, 110, 118; --blue-lite-rgb: 100, 150, 160; --scroll-rgb: 80, 120, 128;
-  --text: #dbe7e6; --text-dim: #8ea6a6; --text-faint: #64797a;
-  --cyan: #56c7c7; --blue: #6096be; --cyan-rgb: 86, 199, 199; --blue-rgb: 96, 150, 190; --cyan-lite-rgb: 120, 210, 210;
-  --title-text: #e8f0ef; --h2-text: #eef5f4; --kpi-text: #f2f8f7; --brand-text: #bfe0e0; --panel-title: #cfe4e2;
-  --nav-text: #9fb6b4; --nav-hover: #dfeaea; --nav-active: #eef6f5; --chip-text: #cfe6e4; --link-text: #a8d4d0;
-  --input-bg: #122024; --input-bg-on: #16262b; --field-bg: #0e181b; --option-bg: #132227;
-  --page-bg: var(--bg); --glow-brand: none; --glow-nav: none; --glow-btn: none;
-  --brand-grad: linear-gradient(135deg, rgba(var(--cyan-rgb), .18), rgba(var(--blue-rgb), .18));
-  --nav-active-grad: linear-gradient(90deg, rgba(var(--cyan-rgb), .12), rgba(var(--cyan-rgb), .02));
+  --bg: #070c0e; --chrome-rgb: 6, 11, 13; --panel-rgb: 20, 29, 32;
+  --panel-a-rgb: 34, 48, 51; --panel-b-rgb: 20, 29, 31; --shadow-rgb: 0, 0, 0; --sheen-rgb: 130, 180, 180;
+  --line-rgb: 96, 140, 148; --blue-lite-rgb: 120, 170, 180; --scroll-rgb: 90, 130, 138;
+  --text: #e6efee; --text-dim: #a4bab9; --text-faint: #7f9695;
+  --bg-panel: rgba(22, 32, 35, 0.94);
+  --cyan: #62d3d3; --blue: #6fa3cf; --cyan-rgb: 98, 211, 211; --blue-rgb: 111, 163, 207; --cyan-lite-rgb: 130, 220, 220;
+  --title-text: #f2f8f7; --h2-text: #f5fbfa; --kpi-text: #f8fdfc; --brand-text: #c8e6e6; --panel-title: #dcedea;
+  --nav-text: #adc2c0; --nav-hover: #eaf3f2; --nav-active: #f4faf9; --chip-text: #dcedea; --link-text: #b4ded9;
+  --input-bg: #122024; --input-bg-on: #17272c; --field-bg: #0e181b; --option-bg: #132227;
+  --radius: 12px; --page-bg: var(--bg); --glow-brand: none; --glow-nav: none; --glow-btn: none;
+  --panel-grad: linear-gradient(160deg, rgba(var(--panel-a-rgb), 0.97), rgba(var(--panel-b-rgb), 0.99));
+  --brand-grad: linear-gradient(135deg, rgba(var(--cyan-rgb), .2), rgba(var(--blue-rgb), .2));
+  --nav-active-grad: linear-gradient(90deg, rgba(var(--cyan-rgb), .14), rgba(var(--cyan-rgb), .02));
 }
 
 [data-theme='paper'] {
-  --bg: #f4f6fa; --chrome-rgb: 255, 255, 255; --panel-rgb: 255, 255, 255;
-  --panel-a-rgb: 255, 255, 255; --panel-b-rgb: 246, 248, 252; --shadow-rgb: 60, 80, 110; --sheen-rgb: 255, 255, 255;
-  --line-rgb: 150, 165, 190; --blue-lite-rgb: 90, 130, 200; --scroll-rgb: 160, 175, 195;
-  --text: #1b2430; --text-dim: #4d5b6c; --text-faint: #77869a;
-  --cyan: #0e748c; --blue: #1e5ebe; --green: #148464; --amber: #b2740a; --red: #be2d2d; --purple: #6d4bb0;
-  --cyan-rgb: 14, 116, 140; --blue-rgb: 30, 94, 190; --green-rgb: 20, 132, 100; --amber-rgb: 178, 116, 10; --red-rgb: 190, 45, 45;
+  --bg: #e6ebf3; --chrome-rgb: 255, 255, 255; --panel-rgb: 255, 255, 255;
+  --panel-a-rgb: 255, 255, 255; --panel-b-rgb: 250, 252, 255; --shadow-rgb: 45, 65, 95; --sheen-rgb: 255, 255, 255;
+  --line-rgb: 118, 140, 170; --blue-lite-rgb: 55, 100, 170; --scroll-rgb: 140, 155, 180;
+  --text: #0e151e; --text-dim: #38424f; --text-faint: #586575;
+  --bg-panel: #ffffff;
+  --cyan: #0a6f86; --blue: #14489c; --green: #0f7a58; --amber: #8a5a00; --red: #a42222; --purple: #5d4394;
+  --cyan-rgb: 10, 111, 134; --blue-rgb: 20, 72, 156; --green-rgb: 15, 122, 88; --amber-rgb: 138, 90, 0; --red-rgb: 164, 34, 34;
   --cyan-lite-rgb: 18, 160, 196; --primary-a: #12a0c4; --on-primary: #ffffff;
-  --title-text: #131b26; --h2-text: #101822; --kpi-text: #0f1720; --brand-text: #0f5f78; --panel-title: #22303f;
-  --nav-text: #41506a; --nav-hover: #16202c; --nav-active: #0f1a26; --chip-text: #1c3f6e; --link-text: #1c4f8a;
-  --ok-text: #146c52; --bad-text: #a82222; --warn-text: #8a5a06;
-  --input-bg: #ffffff; --input-bg-on: #f2f6ff; --field-bg: #ffffff; --option-bg: #ffffff; --option-text: #1b2430;
-  --page-bg: var(--bg); --glow-brand: none; --glow-nav: none; --glow-btn: none;
-  --panel-grad: linear-gradient(160deg, #ffffff, #f6f8fc);
-  --shadow-panel: 0 1px 3px rgba(var(--shadow-rgb), 0.12);
-  --brand-grad: linear-gradient(135deg, rgba(var(--cyan-rgb), .14), rgba(var(--blue-rgb), .14));
-  --nav-hover-bg: rgba(var(--blue-rgb), .08);
-  --nav-active-grad: linear-gradient(90deg, rgba(var(--cyan-rgb), .12), rgba(var(--cyan-rgb), .02));
-  --nav-active-line: rgba(var(--cyan-rgb), .3);
+  --title-text: #0b1219; --h2-text: #070d14; --kpi-text: #050a10; --brand-text: #0a5a70; --panel-title: #101922;
+  --nav-text: #2f3c4f; --nav-hover: #0d141d; --nav-active: #060c14; --chip-text: #12305a; --link-text: #12427c;
+  --ok-text: #0b5c42; --bad-text: #911a1a; --warn-text: #6f4300;
+  --input-bg: #ffffff; --input-bg-on: #eef4ff; --field-bg: #ffffff; --option-bg: #ffffff; --option-text: #0e151e;
+  --radius: 12px; --page-bg: var(--bg); --glow-brand: none; --glow-nav: none; --glow-btn: none;
+  --panel-grad: linear-gradient(160deg, #ffffff, #fafcff);
+  --shadow-panel: 0 1px 3px rgba(var(--shadow-rgb), 0.18);
+  --brand-grad: linear-gradient(135deg, rgba(var(--cyan-rgb), .16), rgba(var(--blue-rgb), .16));
+  --nav-hover-bg: rgba(var(--blue-rgb), .09);
+  --nav-active-grad: linear-gradient(90deg, rgba(var(--cyan-rgb), .14), rgba(var(--cyan-rgb), .02));
+  --nav-active-line: rgba(var(--cyan-rgb), .38);
 }
 
 [data-theme='govty'] {
-  --bg: #eef0f2; --chrome-rgb: 252, 252, 253; --panel-rgb: 255, 255, 255;
-  --panel-a-rgb: 255, 255, 255; --panel-b-rgb: 250, 251, 252; --shadow-rgb: 70, 80, 95; --sheen-rgb: 255, 255, 255;
-  --line-rgb: 168, 176, 188; --blue-lite-rgb: 96, 116, 140; --scroll-rgb: 175, 182, 192;
-  --text: #20262e; --text-dim: #525c69; --text-faint: #7b8593;
-  --cyan: #2f6f7a; --blue: #33597f; --green: #2f7355; --amber: #9a6c14; --red: #a43b3b; --purple: #5c5480;
-  --cyan-rgb: 47, 111, 122; --blue-rgb: 51, 89, 127; --green-rgb: 47, 115, 85; --amber-rgb: 154, 108, 20; --red-rgb: 164, 59, 59;
-  --cyan-lite-rgb: 47, 111, 122; --primary-a: #3b7d88; --on-primary: #ffffff;
-  --title-text: #1a2028; --h2-text: #161c24; --kpi-text: #141a22; --brand-text: #2d5f68; --panel-title: #26313d;
-  --nav-text: #47525f; --nav-hover: #1c232c; --nav-active: #131a22; --chip-text: #2b4762; --link-text: #2c5170;
-  --ok-text: #256a4d; --bad-text: #8f2f2f; --warn-text: #7d5710;
-  --input-bg: #ffffff; --input-bg-on: #f0f3f6; --field-bg: #ffffff; --option-bg: #ffffff; --option-text: #20262e;
-  --page-bg: var(--bg); --glow-brand: none; --glow-nav: none; --glow-btn: none;
-  --panel-grad: #ffffff; --shadow-panel: 0 1px 2px rgba(var(--shadow-rgb), 0.1);
-  --brand-grad: rgba(var(--cyan-rgb), .12); --nav-hover-bg: rgba(var(--blue-rgb), .07);
-  --nav-active-grad: rgba(var(--cyan-rgb), .1); --nav-active-line: rgba(var(--cyan-rgb), .28);
+  --bg: #d7dce1; --chrome-rgb: 246, 247, 249; --panel-rgb: 252, 253, 254;
+  --panel-a-rgb: 252, 253, 254; --panel-b-rgb: 247, 248, 250; --shadow-rgb: 50, 58, 68; --sheen-rgb: 255, 255, 255;
+  --line-rgb: 104, 116, 130; --blue-lite-rgb: 62, 84, 108; --scroll-rgb: 126, 134, 144;
+  --text: #10151b; --text-dim: #333c46; --text-faint: #55606c;
+  --bg-panel: #fbfcfd;
+  --cyan: #1f5f4a; --blue: #2b4a68; --green: #23624a; --amber: #7a5709; --red: #932020; --purple: #4c4770;
+  --cyan-rgb: 31, 95, 74; --blue-rgb: 43, 74, 104; --green-rgb: 35, 98, 74; --amber-rgb: 122, 87, 9; --red-rgb: 147, 32, 32;
+  --cyan-lite-rgb: 31, 95, 74; --primary-a: #2a6b54; --on-primary: #ffffff;
+  --title-text: #0c1116; --h2-text: #080d12; --kpi-text: #05090d; --brand-text: #1d5544; --panel-title: #111821;
+  --nav-text: #2b333d; --nav-hover: #0b1116; --nav-active: #050a0f; --chip-text: #1a3d31; --link-text: #1c4a3c;
+  --ok-text: #1c5340; --bad-text: #831a1a; --warn-text: #6b4a06;
+  --input-bg: #fdfdfe; --input-bg-on: #eaeef2; --field-bg: #fdfdfe; --option-bg: #fdfdfe; --option-text: #10151b;
+  --radius: 7px; --page-bg: var(--bg); --glow-brand: none; --glow-nav: none; --glow-btn: none;
+  --panel-grad: #fbfcfd; --shadow-panel: 0 1px 2px rgba(var(--shadow-rgb), 0.2);
+  --brand-grad: rgba(var(--cyan-rgb), .14); --nav-hover-bg: rgba(var(--blue-rgb), .08);
+  --nav-active-grad: rgba(var(--cyan-rgb), .12); --nav-active-line: rgba(var(--cyan-rgb), .4);
   --primary-grad: var(--blue);
 }
 
 [data-theme='contrast'] {
-  --bg: #000308; --chrome-rgb: 4, 8, 14; --panel-rgb: 10, 16, 26;
-  --panel-a-rgb: 14, 22, 34; --panel-b-rgb: 6, 10, 18; --shadow-rgb: 0, 0, 0; --sheen-rgb: 150, 200, 255;
-  --line-rgb: 110, 160, 230; --blue-lite-rgb: 140, 190, 255; --scroll-rgb: 120, 170, 240;
-  --text: #f2f7ff; --text-dim: #b8cdea; --text-faint: #8fa8c8;
-  --cyan: #4ee2ff; --blue: #66a8ff; --green: #45e8b4; --amber: #ffc851; --red: #ff8080;
-  --cyan-rgb: 78, 226, 255; --blue-rgb: 102, 168, 255; --green-rgb: 69, 232, 180; --amber-rgb: 255, 200, 81; --red-rgb: 255, 128, 128;
-  --title-text: #ffffff; --h2-text: #ffffff; --kpi-text: #ffffff; --brand-text: #d6f2ff; --panel-title: #e2eeff;
-  --nav-text: #c3d7f2; --nav-hover: #ffffff; --nav-active: #ffffff; --chip-text: #d8e9ff; --link-text: #b5d6ff;
-  --ok-text: #9ff2d4; --bad-text: #ffbcbc; --warn-text: #ffdf9c;
-  --page-bg: var(--bg); --glow-brand: none; --glow-nav: none; --glow-btn: none;
-  --brand-grad: rgba(var(--cyan-rgb), .22); --panel-grad: var(--panel-rgb); --shadow-panel: none;
-  --nav-hover-bg: rgba(var(--blue-rgb), .16);
-  --nav-active-grad: rgba(var(--cyan-rgb), .18); --nav-active-line: rgba(var(--cyan-rgb), .5);
-  --input-bg: #081018; --input-bg-on: #0d1622; --field-bg: #070d14; --option-bg: #0a1320;
+  --bg: #01050d; --chrome-rgb: 3, 7, 12; --panel-rgb: 17, 26, 40;
+  --panel-a-rgb: 21, 31, 46; --panel-b-rgb: 13, 20, 32; --shadow-rgb: 0, 0, 0; --sheen-rgb: 160, 210, 255;
+  --line-rgb: 140, 182, 245; --blue-lite-rgb: 155, 198, 255; --scroll-rgb: 140, 182, 245;
+  --text: #f6faff; --text-dim: #c6d9f2; --text-faint: #9db5d4;
+  --bg-panel: rgba(17, 26, 40, 0.98);
+  --cyan: #5fe9ff; --blue: #7cb6ff; --green: #52f0bc; --amber: #ffd06a; --red: #ff9090;
+  --cyan-rgb: 95, 233, 255; --blue-rgb: 124, 182, 255; --green-rgb: 82, 240, 188; --amber-rgb: 255, 208, 106; --red-rgb: 255, 144, 144;
+  --title-text: #ffffff; --h2-text: #ffffff; --kpi-text: #ffffff; --brand-text: #e4f6ff; --panel-title: #f0f7ff;
+  --nav-text: #d3e4fa; --nav-hover: #ffffff; --nav-active: #ffffff; --chip-text: #e6f2ff; --link-text: #c8e0ff;
+  --ok-text: #b0f7dd; --bad-text: #ffcaca; --warn-text: #ffe6ac;
+  --radius: 10px; --page-bg: var(--bg); --glow-brand: none; --glow-nav: none; --glow-btn: none;
+  --brand-grad: rgba(var(--cyan-rgb), .24); --panel-grad: var(--panel-rgb); --shadow-panel: none;
+  --nav-hover-bg: rgba(var(--blue-rgb), .18);
+  --nav-active-grad: rgba(var(--cyan-rgb), .2); --nav-active-line: rgba(var(--cyan-rgb), .55);
+  --input-bg: #081018; --input-bg-on: #0e1824; --field-bg: #070d14; --option-bg: #0a1320;
 }
 
 /* 浅色配色下，个别写死用亮色的地方跟着翻 */
 [data-theme='paper'] .sidebar, [data-theme='govty'] .sidebar { background: rgba(var(--chrome-rgb), 0.94); }
 [data-theme='paper'] .topbar, [data-theme='govty'] .topbar { background: rgba(var(--chrome-rgb), 0.86); }
+/* 浅色两套要看得出区别：纸白=冷白+青蓝+大圆角；公文灰=灰底+墨绿+方角实线框 */
+[data-theme='paper'] .panel { border: 1px solid rgba(var(--line-rgb), 0.4); }
+[data-theme='paper'] .kpi { border: 1px solid rgba(var(--line-rgb), 0.35); }
+[data-theme='govty'] .panel { border: 1px solid rgba(var(--line-rgb), 0.62); border-radius: 6px; }
+[data-theme='govty'] .panel-head { border-bottom: 1px solid rgba(var(--line-rgb), 0.55); }
+[data-theme='govty'] .kpi { border: 1px solid rgba(var(--line-rgb), 0.55); border-radius: 6px; }
+[data-theme='govty'] .tag { border-radius: 4px; }
+[data-theme='govty'] .btn { border-radius: 5px; }
