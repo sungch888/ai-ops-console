@@ -109,7 +109,7 @@ SESSION_TTL = 8 * 3600            # 会话有效期（每次访问滑动续期�
 PBKDF2_ROUNDS = 120000
 LOGIN_FAIL_LIMIT = 5              # 同一账号在窗口内失败次数上限
 LOGIN_FAIL_WINDOW = 300
-PUBLIC_API = {'', 'health', 'login', 'logout', 'session'}
+PUBLIC_API = {'', 'health', 'login', 'logout', 'session', 'login-accounts'}
 
 # 演示口令：演示用，正式版必须改强口令并接统一身份认证 / LDAP / OAuth
 DEMO_USERS = [
@@ -303,6 +303,7 @@ CONFIG_DEFAULTS = {
     'monitor-alert-enabled': 'on',
     'monitor-alert-fail-count': '2',
     'fallback-escalate-min': '15',
+    'login-fail-limit': '5',
 }
 CONFIG_CHOICES = {
     'auth-provider': list(PROVIDERS.keys()),
@@ -313,11 +314,13 @@ CONFIG_CHOICES = {
     'monitor-alert-enabled': ['off', 'on'],
     'monitor-alert-fail-count': ['1', '2', '3', '5'],
     'fallback-escalate-min': ['0', '10', '15', '30', '60'],
+    'login-fail-limit': ['5', '10', '20', '0'],
 }
 CONFIG_LABEL_CN = {'auth-provider': '身份来源', 'approval-source': '审批来源',
                    'data-source-approval': '资源接入要先审批',
                    'monitor-alert-enabled': '断连要告警', 'monitor-alert-fail-count': '连续几轮取数失败就告警',
                    'fallback-escalate-min': '兜底工单多久没人接管就升级', 'notify-channels': '通知渠道',
+                   'login-fail-limit': '登录连错几次暂时拒绝（0 = 不限）',
                    'duty-source': '排班来源', 'command-ack-timeout-min': '指令确认超时（分钟）'}
 
 DUTY_DEFAULT = [
@@ -483,6 +486,23 @@ def change_password(conn, user_id: str, old_pw: str, new_pw: str, actor: str) ->
                  (salt, hash_password(new_pw, salt), ts, ts, u['id']))
     audit(conn, actor, 'password_change', u['id'], '口令已更换，有效期 %d 天' % PASSWORD_MAX_AGE_DAYS)
     return True, ''
+
+
+def fail_limit() -> int:
+    """连错几次暂时拒绝登录；0 = 不限。配置中心可改，不用改代码。"""
+    try:
+        return int(cfg('login-fail-limit', str(LOGIN_FAIL_LIMIT)))
+    except (TypeError, ValueError):
+        return LOGIN_FAIL_LIMIT
+
+
+def retry_after(first_bad) -> int:
+    """最早那次真错什么时候滑出窗口，就是还要等多久。"""
+    try:
+        seen = datetime.strptime(first_bad, '%Y-%m-%dT%H:%M:%SZ').replace(tzinfo=timezone.utc).timestamp()
+    except (TypeError, ValueError):
+        return LOGIN_FAIL_WINDOW
+    return max(1, int(seen + LOGIN_FAIL_WINDOW - time.time()))
 
 
 def pw_expired(u) -> bool:
@@ -1814,6 +1834,15 @@ class Handler(BaseHTTPRequestHandler):
             rows = [{k: v for k, v in dict(r).items() if k not in ('pw_salt', 'pw_hash', 'algo')}
                     for r in conn.execute('SELECT * FROM users ORDER BY id')]
             return self._json(HTTPStatus.OK, {'ok': True, 'rows': rows})
+        if key == 'login-accounts':
+            # 只回答「这个账号还在用初始演示口令吗」：不返回口令、不返回哈希、不返回盐。
+            out = []
+            for r in conn.execute('SELECT id, username, name, role, pw_salt, pw_hash FROM users ORDER BY id').fetchall():
+                seed = next((x for x in DEMO_USERS if x['username'] == r['username']), None)
+                out.append({'id': r['id'], 'username': r['username'], 'name': r['name'], 'role': r['role'],
+                            'seed_active': bool(seed) and hmac.compare_digest(hash_password(seed['password'], r['pw_salt']), r['pw_hash'])})
+            return self._json(HTTPStatus.OK, {'ok': True, 'rows': out,
+                'note': 'seed_active=false 表示该账号已改过口令，初始演示口令对它无效'})
         if key == 'session':
             if not self.user:
                 return self._json(HTTPStatus.OK, {'ok': True, 'signed_in': False})
@@ -2002,13 +2031,19 @@ class Handler(BaseHTTPRequestHandler):
             password = str((payload or {}).get('password') or '')[:200]
             ip = self.client_address[0] if self.client_address else ''
             since = datetime.fromtimestamp(time.time() - LOGIN_FAIL_WINDOW, timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
-            fails = conn.execute('SELECT COUNT(*) c FROM login_log WHERE username=? AND ok=0 AND at>=?',
-                                 (username, since)).fetchone()['c']
-            if fails >= LOGIN_FAIL_LIMIT:
+            # 只数「真的口令错 / 账号不存在」这类失败。被拒的记录不能算进去，
+            # 否则一次拒绝就让计数永远 ≥ 上限，锁定自己给自己续期，永远解不开。
+            row = conn.execute("SELECT COUNT(*) c, MIN(at) first_at FROM login_log WHERE username=? AND ok=0 AND at>=?"
+                               " AND reason NOT IN ('失败次数过多被暂时拒绝', '账号已停用')", (username, since)).fetchone()
+            fails = row['c']
+            limit = fail_limit()
+            if limit > 0 and fails >= limit:
                 conn.execute('INSERT INTO login_log(at, username, ok, reason, ip) VALUES(?,?,?,?,?)',
                              (now_iso(), username, 0, '失败次数过多被暂时拒绝', ip))
+                wait = retry_after(row['first_at'])
                 return self._json(HTTPStatus.TOO_MANY_REQUESTS, {'ok': False,
-                    'error': '该账号 %d 分钟内失败 %d 次，已暂时拒绝登录，请稍后再试' % (LOGIN_FAIL_WINDOW // 60, fails)})
+                    'error': '这个账号 %d 分钟内口令错 %d 次，已暂时拒绝登录；还要等 %d 秒（这期间再试不会解锁更快）'
+                             % (LOGIN_FAIL_WINDOW // 60, fails, wait), 'retry_after': wait, 'locked': True})
             u = conn.execute('SELECT * FROM users WHERE username=?', (username,)).fetchone()
             if u is not None and 'enabled' in u.keys() and not u['enabled']:
                 conn.execute('INSERT INTO login_log(at, username, ok, reason, ip) VALUES(?,?,?,?,?)',
@@ -2020,8 +2055,15 @@ class Handler(BaseHTTPRequestHandler):
             conn.execute('INSERT INTO login_log(at, username, ok, reason, ip) VALUES(?,?,?,?,?)',
                          (now_iso(), username, 1 if ok else 0, reason, ip))
             if not ok:
-                return self._json(HTTPStatus.UNAUTHORIZED, {'ok': False, 'error': '账号或口令不正确',
-                                                           'remaining': max(0, LOGIN_FAIL_LIMIT - fails - 1)})
+                left = max(0, fail_limit() - fails - 1)
+                hint = ''
+                if u is not None:
+                    seed = next((x for x in DEMO_USERS if x['username'] == u['username']), None)
+                    if seed and not hmac.compare_digest(hash_password(seed['password'], u['pw_salt']), u['pw_hash']):
+                        hint = '；这个账号已经改过口令，启动横幅和旧资料里的初始口令 %s 对它无效' % seed['password']
+                return self._json(HTTPStatus.UNAUTHORIZED, {'ok': False,
+                    'error': '账号或口令不正确' + hint + ('（再错 %d 次会暂时拒绝登录 %d 分钟）' % (left, LOGIN_FAIL_WINDOW // 60) if fail_limit() > 0 else ''),
+                    'remaining': left})
             provider = cfg('auth-provider')
             if provider != 'local':
                 # 口径：切到外部身份源后本地账号只留运维兜底；兜底账号由管理员逐个开
@@ -2782,8 +2824,21 @@ def main() -> None:
               % (MONITOR_TICK, n_t, SAMPLE_RETENTION_HOURS))
     else:
         print('  Monitor   已用 AIOPS_MONITOR=0 关闭')
-    print('  Login     %d accounts seeded: %s' % (users or len(DEMO_USERS),
-          ' / '.join('%s=%s' % (u['username'], u['password']) for u in DEMO_USERS)))
+    conn0 = db()
+    still_demo, changed = [], []
+    for u in DEMO_USERS:
+        r = conn0.execute('SELECT pw_salt, pw_hash FROM users WHERE username=?', (u['username'],)).fetchone()
+        if r is None:
+            continue
+        if hmac.compare_digest(hash_password(u['password'], r['pw_salt']), r['pw_hash']):
+            still_demo.append('%s=%s' % (u['username'], u['password']))
+        else:
+            changed.append(u['username'])
+    print('  Login     %d 个账号；当前仍是初始演示口令的：%s'
+          % (len(DEMO_USERS), ' / '.join(still_demo) or '（没有了）'))
+    if changed:
+        print('            已改过口令的：%s —— 别按初始口令试（连错满 %d 次会暂时拒绝 %d 分钟）'
+              % (' / '.join(changed), LOGIN_FAIL_LIMIT, LOGIN_FAIL_WINDOW // 60))
     if users:
         print('            demo passwords are weak on purpose - change them and connect a real identity source')
     print('            sessions: HttpOnly cookie "%s", idle %d min; server checks permissions on every write'

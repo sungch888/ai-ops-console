@@ -173,6 +173,19 @@ export default function OpsSettings() {
         ])} />
         <div className="row gap6 wrap" style={{ marginTop: 10 }}>
           <span className="tiny faint">处置指令确认超时（分钟）</span>
+          <span className="tiny faint">登录连错几次就暂时拒绝登录（分钟窗口 5 分钟内）</span>
+          <select className="btn sm" style={{ width: 130 }} disabled={!matrixPerm.manage}
+            value={draft['login-fail-limit'] ?? cfg['login-fail-limit'] ?? '5'}
+            onChange={(e) => setDraft({ ...draft, 'login-fail-limit': e.target.value })}>
+            {[['5', '5 次（默认）'], ['10', '10 次'], ['20', '20 次'], ['0', '0 = 不限（演示现场用）']].map(([v, label]) => (
+              <option key={v} value={v}>{label}</option>
+            ))}
+          </select>
+          <button className="btn sm primary" disabled={!matrixPerm.manage || (draft['login-fail-limit'] ?? cfg['login-fail-limit']) === cfg['login-fail-limit']}
+            onClick={() => void put('login-fail-limit', draft['login-fail-limit'] ?? cfg['login-fail-limit'] ?? '5')}>保存</button>
+          <Tip label="为什么要有这一项" text="演示现场最常见的事就是领导输错口令。之前连错 5 次会锁 5 分钟，而且被拒绝的尝试也被算成失败，导致锁定自己给自己续期、越试越锁（已修：只数真的口令错）。演示时可以把上限调成 0 = 不限，正式实施再调回 5。" />
+        </div>
+        <div className="row gap6 wrap" style={{ marginTop: 10 }}>
           <input className="btn sm" style={{ width: 90 }} value={draft['command-ack-timeout-min'] ?? cfg['command-ack-timeout-min'] ?? '30'}
             disabled={!matrixPerm.manage} onChange={(e) => setDraft({ ...draft, 'command-ack-timeout-min': e.target.value })} />
           <button className="btn sm primary" disabled={!matrixPerm.manage || (draft['command-ack-timeout-min'] ?? cfg['command-ack-timeout-min']) === cfg['command-ack-timeout-min']}

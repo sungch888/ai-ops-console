@@ -1,5 +1,6 @@
 import React, { useState } from 'react'
 import { Badge } from '../components/ui'
+import { apiGet } from '../engine/db'
 import { auth, changePassword, flagsNow, DEMO_ACCOUNTS, DEMO_LOGIN, ROLE_LABEL, type DemoAccount } from '../engine/auth'
 
 export default function Login() {
@@ -8,7 +9,9 @@ export default function Login() {
   const [ztc, setZtc] = useState(false)
   const [step, setStep] = useState(0)
   const [username, setUsername] = useState(DEMO_LOGIN['U-0001'].username)
-  const [password, setPassword] = useState(DEMO_LOGIN['U-0001'].password)
+  const [password, setPassword] = useState('')
+  // 服务端才知道每个账号的口令有没有被改过；改过的账号界面绝不自动填，免得拿过期口令去试
+  const [seedState, setSeedState] = useState<Record<string, boolean>>({})
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
   // v3.1：演示口令是弱口令，服务端要求首次登录（或口令超 90 天）必须先换口令才能做任何写操作
@@ -17,6 +20,15 @@ export default function Login() {
   const [pw3, setPw3] = useState('')
   const [pwErr, setPwErr] = useState('')
   const policy = flagsNow().policy
+
+  React.useEffect(() => {
+    apiGet('/login-accounts').then((r: any) => {
+      const m: Record<string, boolean> = {}
+      for (const row of (r && r.rows) || []) m[row.id] = !!row.seed_active
+      setSeedState(m)
+      if (m['U-0001']) setPassword(DEMO_LOGIN['U-0001'].password)
+    }).catch(() => { /* 拿不到就不自动填任何口令 */ })
+  }, [])
 
   const accounts = DEMO_ACCOUNTS.filter((a) => a.domain === domain)
   const acc = accounts.find((a) => a.id === picked) ?? accounts[0]
@@ -28,7 +40,7 @@ export default function Login() {
     setStep(0)
     setErr('')
     const cred = DEMO_LOGIN[id]
-    if (cred) { setUsername(cred.username); setPassword(cred.password) }
+    if (cred) { setUsername(cred.username); setPassword(seedState[id] ? cred.password : '') }
   }
 
   const submit = async () => {
@@ -164,12 +176,15 @@ export default function Login() {
             <button className="btn primary" disabled={busy} onClick={() => void submit()}>
               {needZtc && !ztc ? '发起零信任校验' : busy ? '登录中…' : `以「${ROLE_LABEL[acc.role]}」身份登录`}
             </button>
+            {seedState[acc.id] === false ? <span className="small" style={{ color: 'var(--warn-text)' }}>这个账号的口令已改过：界面不自动填，用交付时告知的演示口令</span> : null}
             <span className="small faint">登录后菜单、按钮与可见数据范围按该角色权限矩阵生效；<b>写入与查询权限同时由数据服务判定</b>，越权请求直接 403</span>
           </div>
 
           <div className="divider" />
           <div className="small" style={{ color: 'var(--text-dim)', lineHeight: 1.9 }}>
-            演示口令（仅演示用，正式版必须改强口令）：<span className="mono">admin/admin123 · ops/ops123 · dev/dev123 · user/user123</span>。
+            演示口令（仅演示用，正式版必须改强口令）：<span className="mono">{Object.keys(DEMO_LOGIN).map((id) => (
+              seedState[id] === false ? `${DEMO_LOGIN[id].username}/已改过（初始口令 ${DEMO_LOGIN[id].password} 对它无效）` : `${DEMO_LOGIN[id].username}/${DEMO_LOGIN[id].password}`
+            )).join(' · ')}</span>。
             口令在库里是 PBKDF2-HMAC-SHA256 + 每账号随机盐，接口不返回口令字段；<b>演示口令属弱口令，首次登录会被要求强制更换</b>（至少 {policy.min_len} 位、字母 + 数字、有效期 {policy.max_age_days} 天、不复用最近 {policy.reuse_check} 次）；
             会话 8 小时、每次访问滑动续期，可在「账号与安全」里看当前会话并撤销；同一账号 5 分钟内连错 5 次暂时拒绝登录，登录成功与失败都进 <span className="mono">login_log</span>；写操作要带 <span className="mono">X-CSRF-Token</span>（服务端下发、只存内存）。
             生产环境接客户方侧统一身份认证（用户域 SSO / 数据域零信任），认证协议与账号来源为<b>待客户方确认项</b>，见「运营分析 · 外部对接清单」。
