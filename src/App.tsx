@@ -98,7 +98,7 @@ const ROUTE_PERM: Record<string, PermKey> = {
   '/compute/overview': 'compute', '/compute/schedule': 'compute', '/compute/storage': 'compute',
   '/model/assets': 'gateway', '/model/gateway': 'gateway', '/model/engine': 'gateway', '/model/credentials': 'cred',
   '/model/fineTune': 'cred', '/model/trace': 'audit', '/model/audit': 'audit', '/model/security': 'security',
-  '/model/personal': 'cred',
+  '/model/personal': 'personal',
   '/app/market': 'app', '/app/agents': 'agent', '/app/kb': 'kb', '/app/tools': 'tool', '/app/templates': 'app',
   '/app/security': 'security', '/app/accounts': 'matrix',
   '/ops/workflow': 'workflow', '/ops/alert-rules': 'analytics', '/ops/analytics': 'analytics', '/ops/notifications': 'overview', '/ops/integrations': 'integration',
@@ -234,7 +234,11 @@ function Shell() {
 
   if (!acc) return <P_LOGIN />
 
-  const allowed = (to: string) => to === '/account' || matrix[acc.role].view.includes(ROUTE_PERM[to] ?? 'overview')
+  const personalOnly = acc.role === 'dev' || acc.role === 'user'
+  const allowed = (to: string) => personalOnly
+    ? to === '/model/personal'
+    : to === '/account' || matrix[acc.role].view.includes(ROUTE_PERM[to] ?? 'overview')
+  if (personalOnly && loc.pathname !== '/model/personal') return <Navigate to="/model/personal" replace />
   const navGroups = NAV.map((g) => ({ ...g, items: g.items.filter((it) => allowed(it.to)) })).filter((g) => g.items.length > 0)
   const denied = !allowed(loc.pathname)
   const presentation = loc.pathname === '/briefing'
@@ -280,7 +284,7 @@ function Shell() {
           <br />
           业务状态存数据服务（SQLite）· 登录与权限在服务端判定
           <br />
-          当前角色可见菜单已按权限矩阵过滤
+          {personalOnly ? '当前角色只开放个人模型中心' : '当前角色可见菜单已按权限矩阵过滤'}
         </div>
       </aside>}
       <div className="main-col">
@@ -314,6 +318,7 @@ function Shell() {
             </span>
             <span className="mono">{date}</span>
             <span className="mono" style={{ color: 'var(--brand-text)' }}>{time}</span>
+            {personalOnly ? null : (
             <span
               className="row gap6"
               style={{ cursor: 'pointer', position: 'relative' }}
@@ -342,6 +347,7 @@ function Shell() {
                 </span>
               ) : null}
             </span>
+            )}
             <span className="row gap6">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--text-dim)" strokeWidth="1.8">
                 <circle cx="12" cy="8" r="4" />

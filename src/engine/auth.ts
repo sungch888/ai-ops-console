@@ -11,10 +11,10 @@ import { API_BASE, dbRead, dbWrite, dbSeed, setAuditAccount, setCsrfToken, apiGe
 
 
 export type Role = 'admin' | 'ops' | 'dev' | 'user'
-export type PermKey = 'app' | 'agent' | 'kb' | 'tool' | 'cred' | 'compute' | 'workflow' | 'gateway' | 'security' | 'security_issue' | 'security_emergency' | 'audit' | 'matrix' | 'export' | 'integration' | 'analytics' | 'overview' | 'approve'
+export type PermKey = 'app' | 'agent' | 'kb' | 'tool' | 'cred' | 'personal' | 'compute' | 'workflow' | 'gateway' | 'security' | 'security_issue' | 'security_emergency' | 'audit' | 'matrix' | 'export' | 'integration' | 'analytics' | 'overview' | 'approve'
 
 export const PERM_LABEL: Record<PermKey, string> = {
-  overview: '运营总览', compute: '算力中心', gateway: '推理网关', cred: '凭证与配额', workflow: '资源调配',
+  overview: '运营总览', compute: '算力中心', gateway: '推理网关', cred: '凭证与配额', personal: '个人模型中心', workflow: '资源调配',
   app: '应用广场', agent: '智能体纳管', kb: '知识库纳管', tool: '工具生态', security: '安全事件',
   security_issue: '处置下发', security_emergency: '紧急处置',
   audit: '审计日志', matrix: '权限矩阵', export: '报表导出', integration: '外部对接', analytics: '运营分析',
@@ -39,8 +39,8 @@ export interface DemoAccount {
 export const DEMO_ACCOUNTS: DemoAccount[] = [
   { id: 'U-0001', name: '管理员 A（信息化管理部）', role: 'admin', dept: '信息化管理部', org: '省级单位', domain: '用户域', note: '全部权限 · 可编辑权限矩阵 · 可审批与执行' },
   { id: 'U-0002', name: '运营 B（运营服务团队）', role: 'ops', dept: '运营服务', org: '省级单位', domain: '用户域', note: '可提交/执行/回滚/导出，不可改权限矩阵' },
-  { id: 'U-0003', name: '开发者 C（示例业务一部）', role: 'dev', dept: '示例业务一部', org: '省级单位', domain: '用户域', note: '只看本单位业务线，可提交申请，不可审批' },
-  { id: 'U-0004', name: '用户 D（示范市02单位）', role: 'user', dept: '示范市02单位基层所队', org: '示范市02', domain: '数据域', note: '仅应用广场与个人用量，低权限个人密钥' },
+  { id: 'U-0003', name: '开发者 C（示例业务一部）', role: 'dev', dept: '示例业务一部', org: '省级单位', domain: '用户域', note: '只能看个人模型中心' },
+  { id: 'U-0004', name: '用户 D（示范市02单位）', role: 'user', dept: '示范市02单位基层所队', org: '示范市02', domain: '数据域', note: '只能看个人模型中心' },
 ]
 
 export interface MatrixRow { view: PermKey[]; manage: PermKey[]; cls: string[] }
@@ -49,10 +49,10 @@ export type Matrix = Record<Role, MatrixRow>
 export const CLS_LEVELS = ['公开', '内部', '敏感']
 
 const DEFAULT_MATRIX: Matrix = {
-  admin: { view: ['overview', 'compute', 'gateway', 'cred', 'workflow', 'app', 'agent', 'kb', 'tool', 'security', 'security_issue', 'security_emergency', 'audit', 'matrix', 'export', 'integration', 'analytics', 'approve'], manage: ['overview', 'compute', 'gateway', 'cred', 'workflow', 'app', 'agent', 'kb', 'tool', 'security', 'security_issue', 'security_emergency', 'audit', 'matrix', 'export', 'integration', 'analytics', 'approve'], cls: ['公开', '内部', '敏感'] },
-  ops: { view: ['overview', 'compute', 'gateway', 'cred', 'workflow', 'app', 'agent', 'kb', 'tool', 'security', 'security_issue', 'audit', 'export', 'integration', 'analytics', 'approve'], manage: ['compute', 'gateway', 'cred', 'workflow', 'security', 'security_issue', 'export', 'analytics', 'approve'], cls: ['公开', '内部', '敏感'] },
-  dev: { view: ['overview', 'app', 'agent', 'kb', 'tool', 'workflow', 'cred', 'analytics'], manage: ['workflow', 'agent'], cls: ['公开', '内部'] },
-  user: { view: ['app', 'cred'], manage: [], cls: ['公开'] },
+  admin: { view: ['overview', 'compute', 'gateway', 'cred', 'personal', 'workflow', 'app', 'agent', 'kb', 'tool', 'security', 'security_issue', 'security_emergency', 'audit', 'matrix', 'export', 'integration', 'analytics', 'approve'], manage: ['overview', 'compute', 'gateway', 'cred', 'personal', 'workflow', 'app', 'agent', 'kb', 'tool', 'security', 'security_issue', 'security_emergency', 'audit', 'matrix', 'export', 'integration', 'analytics', 'approve'], cls: ['公开', '内部', '敏感'] },
+  ops: { view: ['overview', 'compute', 'gateway', 'cred', 'personal', 'workflow', 'app', 'agent', 'kb', 'tool', 'security', 'security_issue', 'audit', 'export', 'integration', 'analytics', 'approve'], manage: ['compute', 'gateway', 'cred', 'personal', 'workflow', 'security', 'security_issue', 'export', 'analytics', 'approve'], cls: ['公开', '内部', '敏感'] },
+  dev: { view: ['personal'], manage: ['workflow'], cls: ['公开', '内部'] },
+  user: { view: ['personal'], manage: [], cls: ['公开'] },
 }
 
 const MATRIX_KEY = 'dsh-demo-matrix-v1'
