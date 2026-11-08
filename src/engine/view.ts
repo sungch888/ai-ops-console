@@ -12,7 +12,14 @@ import { dbRead, dbSeed, dbWrite } from './db'
 
 export type ViewMode = 'demo' | 'full'
 
-export interface ViewConf { mode: ViewMode; nav: string[]; fold: boolean; panels: Record<string, string[]> }
+export interface ViewConf {
+  mode: ViewMode
+  nav: string[]
+  fold: boolean
+  panels: Record<string, string[]>
+  /** 说明类文字：false（默认）= 只藏在悬停里；true = 摆出来（打印/投屏时用） */
+  hints: boolean
+}
 
 /** 演示档默认保留的入口：总览 1 + 算力 3 + 模型 4 + 应用 3 + 运营分析 4 */
 export const DEMO_NAV: string[] = [
@@ -49,7 +56,7 @@ export const FOCUS_PANELS: Record<string, string[]> = {
 const KEY = 'dsh-demo-view-v1'
 const LS = 'aiops.view'
 
-const DEFAULTS: ViewConf = { mode: 'demo', nav: DEMO_NAV, fold: true, panels: FOCUS_PANELS }
+const DEFAULTS: ViewConf = { mode: 'demo', nav: DEMO_NAV, fold: true, panels: FOCUS_PANELS, hints: false }
 
 function norm(v: unknown): ViewConf {
   const o = (v && typeof v === 'object' ? v : {}) as Partial<ViewConf>
@@ -60,6 +67,7 @@ function norm(v: unknown): ViewConf {
     nav: nav.length ? nav : DEFAULTS.nav,
     fold: o.fold !== false,
     panels,
+    hints: o.hints === true,
   }
 }
 

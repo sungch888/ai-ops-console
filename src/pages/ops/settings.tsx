@@ -101,7 +101,7 @@ export default function OpsSettings() {
       {!matrixPerm.manage ? <div className="mt14"><Callout text="你现在没有「权限矩阵」操作权，配置只能看不能改。改动本身在服务端判定，改前端没用。" /></div> : null}
 
       <Panel title="演示视图（哪些页面摆在台面上 · 存数据服务）" className="mt14" focus
-        extra={<span className="tiny faint">当前 {view.mode === 'demo' ? '演示档 · 留 ' + view.nav.length + ' 个入口' : '完整模式 · 40 个入口全开'} · 次要面板{view.fold ? '收成一行' : '全部展开'}</span>}>
+        extra={<span className="tiny faint">演示档 {view.nav.length} 个入口 · 次要面板{view.fold ? '折叠' : '展开'} · 说明文字{view.hints ? '显示' : '悬停'}</span>}>
         <div className="row gap6 wrap">
           <button className={'btn sm' + (view.mode === 'demo' ? ' primary' : '')} disabled={!matrixPerm.manage}
             onClick={() => setView({ mode: 'demo' })}>演示档</button>
@@ -110,7 +110,10 @@ export default function OpsSettings() {
           <button className="btn sm ghost" disabled={!matrixPerm.manage}
             onClick={() => setView({ fold: !view.fold })}>{view.fold ? '次要面板改成全部展开' : '次要面板改回收成一行'}</button>
           <button className="btn sm ghost" disabled={!matrixPerm.manage} onClick={() => setView({ nav: DEMO_NAV })}>入口恢复默认清单</button>
-          <Tip label="这一项改的是什么" text="只改界面把哪些页面摆在侧栏上、次要面板要不要折叠；功能、接口、权限、数据一个都没动。配置写进数据服务的状态键 dsh-demo-view-v1，换台电脑登录还是这套。正式实施时把模式切到「完整模式」即可全部启用。" />
+          <button className="btn sm ghost" disabled={!matrixPerm.manage} onClick={() => setView({ hints: !view.hints })}>
+            {view.hints ? '说明文字改回悬停' : '说明文字全部摆出来'}
+          </button>
+          <Tip label="这一项改的是什么" text="说明文字（KPI 底下那行小字、页头描述、面板右上角说明）默认只藏在鼠标悬停里，页面就干净了；要打印或投屏时再点「说明文字全部摆出来」。只改界面，不动功能。只改界面把哪些页面摆在侧栏上、次要面板要不要折叠；功能、接口、权限、数据一个都没动。配置写进数据服务的状态键 dsh-demo-view-v1，换台电脑登录还是这套。正式实施时把模式切到「完整模式」即可全部启用。" />
         </div>
         <div className="divider" />
         <div className="tiny faint">演示档侧栏留哪些入口（勾掉 = 收进「正式实施再启用」那页，功能照常在）：</div>

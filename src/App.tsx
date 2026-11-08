@@ -222,14 +222,8 @@ function Shell() {
             正式实施再启用 · {hiddenCount} 项
           </div>
         ) : null}
-        <div className="sidebar-foot">
-          演示版本 v3.10（选型交流 · 内网可接真实数据 · 资源接入在系统里配 · 连不通会告警）
-          <br />
-          数据均为虚拟模拟 · 外部系统按清单虚拟接入
-          <br />
-          业务状态存数据服务（SQLite）· 登录与权限在服务端判定
-          <br />
-          当前角色可见菜单已按权限矩阵过滤
+        <div className="sidebar-foot" title={'演示版本 v3.10（选型交流 · 内网可接真实数据 · 资源接入在系统里配）\n数据均为虚拟模拟 · 外部系统按清单虚拟接入\n业务状态存数据服务（SQLite）· 登录与权限在服务端判定\n当前角色可见菜单已按权限矩阵过滤'}>
+          v3.10 · 演示数据 · 存 SQLite
         </div>
       </aside>}
       <div className="main-col">
@@ -242,18 +236,12 @@ function Shell() {
             </span>
           </div>
           <div className="topbar-right">
-            <span className="demo-badge">DEMO</span>
-            <span
-              className="mono"
-              title={db.lastError ? '数据服务：' + db.lastError : '业务状态写入数据服务的数据库（SQLite），浏览器本地不保存'}
-              style={{
-                fontSize: 11, padding: '2px 8px', borderRadius: 7, whiteSpace: 'nowrap',
-                border: '1px solid ' + (dbBad ? 'rgba(var(--red-rgb), .45)' : 'rgba(var(--blue-rgb), .4)'),
-                color: dbBad ? 'var(--bad-text)' : 'var(--link-text)',
-                background: dbBad ? 'rgba(var(--red-rgb), .16)' : 'rgba(var(--blue-rgb), .14)',
-              }}
+            <span className="row gap6"
+              title={db.lastError ? '数据服务：' + db.lastError : '业务状态写在数据服务（SQLite）里，不存浏览器；改完就在库里'}
             >
-              {dbLabel}
+              <span style={{ width: 7, height: 7, borderRadius: '50%', display: 'inline-block',
+                background: dbBad ? 'var(--red)' : 'var(--green)' }} />
+              <span className="tiny faint">{dbBad ? '未连接' : '已存库'}</span>
             </span>
             <span className="row gap6" title="配色：五套可选，选择记在数据服务里，换电脑登录也是这套">
               <select className="btn sm" style={{ minWidth: 96 }} value={theme} aria-label="配色"
@@ -261,7 +249,6 @@ function Shell() {
                 {THEMES.map((t) => <option key={t.id} value={t.id} title={t.note}>{t.name}</option>)}
               </select>
             </span>
-            <span className="mono">{date}</span>
             <span className="mono" style={{ color: 'var(--brand-text)' }}>{time}</span>
             <span
               className="row gap6"

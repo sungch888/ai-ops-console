@@ -9,14 +9,16 @@ export function Kpi(props: {
   ico?: React.ReactNode
 }) {
   const { label, value, unit, foot, ico } = props
+  const view = useView()
+  const footText = typeof foot === 'string' ? foot : ''
   return (
-    <div className="kpi">
+    <div className="kpi" title={!view.hints && footText ? footText : undefined}>
       <div className="k-label">{label}</div>
       <div className="k-value">
         {value}
         {unit ? <span className="unit">{unit}</span> : null}
       </div>
-      {foot ? <div className="k-foot">{foot}</div> : null}
+      {foot && (view.hints || typeof foot !== 'string') ? <div className="k-foot">{foot}</div> : null}
       {ico ? <div className="k-ico">{ico}</div> : null}
     </div>
   )
@@ -37,6 +39,8 @@ export function Panel(props: {
   const [open, setOpen] = React.useState(false)
   const text = typeof title === 'string' ? title : ''
   const minor = !focus && !!text && isMinorPanel(text)
+  const extraText = typeof extra === 'string' ? extra : ''
+  const showExtra = !!extra && (view.hints || !extraText)
   if (minor && !open) {
     return (
       <div className={`minor-fold ${className ?? ''}`}>
@@ -50,7 +54,8 @@ export function Panel(props: {
       {title ? (
         <div className="panel-head">
           <span className="ph-left">{title}</span>
-          {extra ? <span className="extra">{extra}</span> : null}
+          {showExtra ? <span className="extra">{extra}</span> : null}
+          {extraText && !view.hints ? <span className="hint-dot" title={extraText} /> : null}
         </div>
       ) : null}
       <div className={`panel-body ${noPad ? 'tight' : ''} ${bodyClass ?? ''}`}>{children}</div>
@@ -125,11 +130,15 @@ export function Progress({ value, tone }: { value: number; tone?: '' | 'warn' | 
 
 export function PageHead(props: { title: string; desc?: string; extra?: React.ReactNode }) {
   const { title, desc, extra } = props
+  const view = useView()
   return (
     <div className="page-head">
       <div>
-        <h2>{title}</h2>
-        {desc ? <p className="desc">{desc}</p> : null}
+        <h2>
+          {title}
+          {desc && !view.hints ? <span className="hint-dot" title={desc} aria-label={desc} /> : null}
+        </h2>
+        {desc && view.hints ? <p className="desc">{desc}</p> : null}
       </div>
       {extra ? <div className="head-actions">{extra}</div> : null}
     </div>
