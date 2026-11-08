@@ -1,4 +1,5 @@
 import React from 'react'
+import { isMinorPanel, useView } from '../engine/view'
 
 export function Kpi(props: {
   label: string
@@ -28,8 +29,22 @@ export function Panel(props: {
   className?: string
   bodyClass?: string
   noPad?: boolean
+  /** 明确标成重点：演示档也不折叠（不标时按「配置中心 · 演示视图」的白名单判） */
+  focus?: boolean
 }) {
-  const { title, extra, children, className, bodyClass, noPad } = props
+  const { title, extra, children, className, bodyClass, noPad, focus } = props
+  const view = useView()
+  const [open, setOpen] = React.useState(false)
+  const text = typeof title === 'string' ? title : ''
+  const minor = !focus && !!text && isMinorPanel(text)
+  if (minor && !open) {
+    return (
+      <div className={`minor-fold ${className ?? ''}`}>
+        <span className="tiny faint">次要内容 · {text}</span>
+        <button className="btn sm ghost" onClick={() => setOpen(true)}>展开看</button>
+      </div>
+    )
+  }
   return (
     <div className={`panel ${className ?? ''}`}>
       {title ? (

@@ -495,3 +495,18 @@ textarea { min-height: 72px; resize: vertical; line-height: 1.55; }
 [data-theme='govty'] .kpi { border: 1px solid rgba(var(--line-rgb), 0.55); border-radius: 6px; }
 [data-theme='govty'] .tag { border-radius: 4px; }
 [data-theme='govty'] .btn { border-radius: 5px; }
+
+/* 演示档：次要面板收成一行 */
+.minor-fold {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  padding: 7px 14px; border: 1px dashed var(--line); border-radius: 9px;
+  background: rgba(var(--well-rgb), 0.35); margin: 6px 0;
+}
+.minor-fold .btn { padding: 3px 10px; font-size: 11.5px; }
+
+.nav-more {
+  margin: 0 12px 10px; padding: 8px 12px; border-radius: 9px;
+  border: 1px dashed var(--line); color: var(--text-dim); font-size: 12px;
+  cursor: pointer; user-select: none;
+}
+.nav-more:hover { color: var(--nav-hover); background: var(--nav-hover-bg); }

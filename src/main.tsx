@@ -16,6 +16,8 @@ async function boot() {
   box.innerHTML = '<div style="padding:40px;color:var(--text-dim);font:14px/1.7 system-ui">正在从数据服务读取业务状态并恢复会话…</div>'
   const res = await hydrate()
   const ui = await import('./engine/ui')
+  const view = await import('./engine/view')
+  view.initView()              // 演示档/完整模式按库里的配置生效
   ui.initTheme()               // 配色按库里的选择上色（没有就用默认深空蓝）
   const auth = await import('./engine/auth')
   await auth.restoreSession()          // 服务端会话还在就接着用，不在就显示登录页

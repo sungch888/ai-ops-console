@@ -7,6 +7,8 @@
  * ===================================================================== */
 import { useEffect, useState } from 'react'
 import {Badge, Callout, Kpi, Panel, PageHead, Table, Tip} from '../../components/ui'
+import { NAV } from '../../navCatalog'
+import { DEMO_NAV, setView, useView } from '../../engine/view'
 import { listLinks, loadConfig, saveConfig, syncLinks, useFlags, usePerm } from '../../engine/auth'
 import { COLLECT_KINDS, buildSourceConfig, collectStore, useCollect } from '../../engine/collect'
 import { apiSend } from '../../engine/db'
@@ -41,6 +43,7 @@ export default function OpsSettings() {
   const col = useCollect()
   const [src, setSrc] = useState({ kind: 'services', name: '', base: '', api_key_env: '', format: '', interval_seconds: 60, extra: '' })
   const [colMsg, setColMsg] = useState<{ ok: boolean; text: string } | null>(null)
+  const view = useView()
   const matrixPerm = usePerm('matrix')
   const dutyPerm = usePerm('workflow')
   const [links, setLinks] = useState<any[]>([])
@@ -94,6 +97,36 @@ export default function OpsSettings() {
       </div>
 
       {!matrixPerm.manage ? <div className="mt14"><Callout text="你现在没有「权限矩阵」操作权，配置只能看不能改。改动本身在服务端判定，改前端没用。" /></div> : null}
+
+      <Panel title="演示视图（哪些页面摆在台面上 · 存数据服务）" className="mt14" focus
+        extra={<span className="tiny faint">当前 {view.mode === 'demo' ? '演示档 · 留 ' + view.nav.length + ' 个入口' : '完整模式 · 40 个入口全开'} · 次要面板{view.fold ? '收成一行' : '全部展开'}</span>}>
+        <div className="row gap6 wrap">
+          <button className={'btn sm' + (view.mode === 'demo' ? ' primary' : '')} disabled={!matrixPerm.manage}
+            onClick={() => setView({ mode: 'demo' })}>演示档</button>
+          <button className={'btn sm' + (view.mode === 'full' ? ' primary' : '')} disabled={!matrixPerm.manage}
+            onClick={() => setView({ mode: 'full' })}>完整模式</button>
+          <button className="btn sm ghost" disabled={!matrixPerm.manage}
+            onClick={() => setView({ fold: !view.fold })}>{view.fold ? '次要面板改成全部展开' : '次要面板改回收成一行'}</button>
+          <button className="btn sm ghost" disabled={!matrixPerm.manage} onClick={() => setView({ nav: DEMO_NAV })}>入口恢复默认清单</button>
+          <Tip label="这一项改的是什么" text="只改界面把哪些页面摆在侧栏上、次要面板要不要折叠；功能、接口、权限、数据一个都没动。配置写进数据服务的状态键 dsh-demo-view-v1，换台电脑登录还是这套。正式实施时把模式切到「完整模式」即可全部启用。" />
+        </div>
+        <div className="divider" />
+        <div className="tiny faint">演示档侧栏留哪些入口（勾掉 = 收进「正式实施再启用」那页，功能照常在）：</div>
+        <div className="grid g-4 mt8">
+          {NAV.map((g) => (
+            <div key={g.group} className="panel" style={{ padding: '10px 12px' }}>
+              <div className="tiny strong">{g.group}</div>
+              {g.items.map((it) => (
+                <label key={it.to} className="row gap6 tiny" style={{ alignItems: 'center', marginTop: 5 }}>
+                  <input type="checkbox" disabled={!matrixPerm.manage} checked={view.nav.includes(it.to)}
+                    onChange={() => setView({ nav: view.nav.includes(it.to) ? view.nav.filter((x) => x !== it.to) : [...view.nav, it.to] })} />
+                  {it.label}
+                </label>
+              ))}
+            </div>
+          ))}
+        </div>
+      </Panel>
 
       <Panel title="来源配置（配置项，不是代码分支）" className="mt14">
         <Table minWidth={860} head={['配置项', '取值', '口径与影响', '保存']} rows={SOURCE_KEYS.map((k) => [
