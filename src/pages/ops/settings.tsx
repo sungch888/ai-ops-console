@@ -7,8 +7,9 @@
  * ===================================================================== */
 import { useEffect, useState } from 'react'
 import {Badge, Callout, Kpi, Panel, PageHead, Table, Tip} from '../../components/ui'
-import { NAV } from '../../navCatalog'
-import { DEMO_NAV, setView, useView } from '../../engine/view'
+import { NAV, NAV_ITEMS } from '../../navCatalog'
+import { DEMO_NAV, FOCUS_PANELS, keptPanels, setView, useView } from '../../engine/view'
+import { PANEL_CATALOG } from '../../panelCatalog'
 import { listLinks, loadConfig, saveConfig, syncLinks, useFlags, usePerm } from '../../engine/auth'
 import { COLLECT_KINDS, buildSourceConfig, collectStore, useCollect } from '../../engine/collect'
 import { apiSend } from '../../engine/db'
@@ -44,6 +45,7 @@ export default function OpsSettings() {
   const [src, setSrc] = useState({ kind: 'services', name: '', base: '', api_key_env: '', format: '', interval_seconds: 60, extra: '' })
   const [colMsg, setColMsg] = useState<{ ok: boolean; text: string } | null>(null)
   const view = useView()
+  const [panelPage, setPanelPage] = useState<string>('/')
   const matrixPerm = usePerm('matrix')
   const dutyPerm = usePerm('workflow')
   const [links, setLinks] = useState<any[]>([])
@@ -125,6 +127,33 @@ export default function OpsSettings() {
               ))}
             </div>
           ))}
+        </div>
+        <div className="divider" />
+        <div className="row gap6 wrap" style={{ alignItems: 'center' }}>
+          <span className="tiny faint">每页保留哪些面板（勾掉 = 收成一行）：</span>
+          <select className="btn sm" style={{ minWidth: 250 }} value={panelPage} disabled={!matrixPerm.manage}
+            onChange={(e) => setPanelPage(e.target.value)}>
+            {Object.keys(PANEL_CATALOG).map((k) => (
+              <option key={k} value={k}>{NAV_ITEMS.find((i) => i.to === k)?.label || k}</option>
+            ))}
+          </select>
+          <button className="btn sm ghost" disabled={!matrixPerm.manage}
+            onClick={() => setView({ panels: { ...view.panels, [panelPage]: FOCUS_PANELS[panelPage] ?? [] } })}>本页恢复默认</button>
+          <Tip label="白名单怎么起作用" text="面板标题包含被勾住的关键词就整块显示，否则收成一行「次要内容 · 展开看」。关键词目录由 tools/gen_panel_catalog.py 从各页源码生成；页面改了目录没跟上，tools/check_focus_panels.py 会报错。改完写进数据服务状态键 dsh-demo-view-v1。" />
+        </div>
+        <div className="grid g-4 mt8">
+          {(PANEL_CATALOG[panelPage] || []).map((t) => {
+            const cur = view.panels[panelPage] ?? FOCUS_PANELS[panelPage] ?? []
+            const on = cur.some((k) => t.includes(k) || k.includes(t))
+            return (
+              <label key={t} className="row gap6 tiny" style={{ alignItems: 'center' }}>
+                <input type="checkbox" disabled={!matrixPerm.manage} checked={on}
+                  onChange={() => setView({ panels: { ...view.panels, [panelPage]: on ? cur.filter((k) => !(t.includes(k) || k.includes(t))) : [...cur, t] } })} />
+                {t}
+              </label>
+            )
+          })}
+          {(PANEL_CATALOG[panelPage] || []).length === 0 ? <div className="tiny faint">这一页没有面板级内容可配。</div> : null}
         </div>
       </Panel>
 

@@ -65,3 +65,6 @@ export const ROUTE_PERM: Record<string, PermKey> = {
   '/ops/workflow': 'workflow', '/ops/alert-rules': 'analytics', '/ops/analytics': 'analytics', '/ops/notifications': 'overview', '/ops/integrations': 'integration',
   '/ops/settings': 'workflow', '/ops/commands': 'security',
 }
+
+/** 全部入口的展平表（配置中心与「正式实施再启用」页找名字用） */
+export const NAV_ITEMS = NAV.flatMap((g) => g.items.map((i) => ({ to: i.to, label: i.label, group: g.group })))

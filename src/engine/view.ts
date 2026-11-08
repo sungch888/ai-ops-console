@@ -12,7 +12,7 @@ import { dbRead, dbSeed, dbWrite } from './db'
 
 export type ViewMode = 'demo' | 'full'
 
-export interface ViewConf { mode: ViewMode; nav: string[]; fold: boolean }
+export interface ViewConf { mode: ViewMode; nav: string[]; fold: boolean; panels: Record<string, string[]> }
 
 /** 演示档默认保留的入口：总览 1 + 算力 3 + 模型 4 + 应用 3 + 运营分析 4 */
 export const DEMO_NAV: string[] = [
@@ -49,15 +49,17 @@ export const FOCUS_PANELS: Record<string, string[]> = {
 const KEY = 'dsh-demo-view-v1'
 const LS = 'aiops.view'
 
-const DEFAULTS: ViewConf = { mode: 'demo', nav: DEMO_NAV, fold: true }
+const DEFAULTS: ViewConf = { mode: 'demo', nav: DEMO_NAV, fold: true, panels: FOCUS_PANELS }
 
 function norm(v: unknown): ViewConf {
   const o = (v && typeof v === 'object' ? v : {}) as Partial<ViewConf>
   const nav = Array.isArray(o.nav) ? o.nav.filter((x) => typeof x === 'string') : DEFAULTS.nav
+  const panels = (o.panels && typeof o.panels === 'object' && !Array.isArray(o.panels)) ? (o.panels as Record<string, string[]>) : DEFAULTS.panels
   return {
     mode: o.mode === 'full' ? 'full' : 'demo',
     nav: nav.length ? nav : DEFAULTS.nav,
     fold: o.fold !== false,
+    panels,
   }
 }
 
@@ -85,7 +87,7 @@ export function initView(): ViewConf {
     const raw = dbRead(KEY)
     if (raw) fromDb = JSON.parse(raw)
   } catch { /* 忽略 */ }
-  if (fromDb !== null) conf = norm(fromDb)
+  if (fromDb !== null) conf = norm(fromDb)   // 库里存的（含每页面板白名单）优先
   persist()
   emit()
   return conf
@@ -112,10 +114,14 @@ export function currentPath(): string {
 /** 演示档 + 开了折叠 + 本页有重点白名单 + 标题不在白名单里 → 这个面板收成一行 */
 export function isMinorPanel(title: string): boolean {
   if (!conf.fold || conf.mode !== 'demo') return false
-  const keep = FOCUS_PANELS[currentPath()]
+  const path = currentPath()
+  const keep = conf.panels[path] ?? FOCUS_PANELS[path]
   if (!keep) return false
-  return !keep.some((k) => title.includes(k))
+  return !keep.some((k) => title.includes(k) || k.includes(title))
 }
+
+/** 本页在配置里生效的面板白名单（配置中心显示用） */
+export function keptPanels(path: string): string[] { return conf.panels[path] ?? FOCUS_PANELS[path] ?? [] }
 
 export function isNavHidden(to: string): boolean {
   if (conf.mode !== 'demo') return false
