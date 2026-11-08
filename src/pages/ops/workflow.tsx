@@ -115,7 +115,9 @@ export default function OpsWorkflow() {
       <td>
         <div className="row gap6" style={{ flexWrap: 'wrap' }}>
           {o.status === 'submitted' ? (
-            canApprove ? (
+            o.type === 'training_dataset' || o.type === 'model_admission' ? (
+              <Link className="btn sm ghost" to={o.type === 'training_dataset' ? '/model/fineTune' : '/model/admission'}>查看审核材料</Link>
+            ) : canApprove ? (
               <>
                 <button className="btn sm primary" onClick={() => engine.approve(o.id)}>{windowOrder ? '通过并排队' : '通过并执行'}</button>
                 <button className="btn sm danger" onClick={() => engine.reject(o.id, '业务必要性不足，请补充场景与预期并发后重新提交')}>驳回</button>

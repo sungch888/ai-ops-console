@@ -135,7 +135,7 @@ body {
   font-size: 11px; color: var(--text-faint); line-height: 1.7;
 }
 
-.main-col { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+.main-col { flex: 1; display: flex; flex-direction: column; min-width: 0; container: console-main / inline-size; }
 .topbar {
   height: 54px; flex-shrink: 0;
   display: flex; align-items: center; justify-content: space-between;
@@ -146,6 +146,47 @@ body {
 }
 .topbar-title { font-size: 15px; font-weight: 600; color: var(--title-text); letter-spacing: 1px; display: flex; align-items: center; gap: 10px; }
 .topbar-right { display: flex; align-items: center; gap: 14px; font-size: 12.5px; color: var(--text-dim); }
+/* Compact the toolbar as the usable console width shrinks. */
+.topbar { gap: 12px; }
+.topbar-title, .topbar-account { min-width: 0; }
+.topbar-right { flex: 0 0 auto; }
+.topbar-right > :not(.topbar-account), .topbar-account > :not(.topbar-account-name), .topbar-title .net-badge { flex-shrink: 0; }
+.topbar-heading, .topbar-account-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.topbar-heading, .topbar-account-name { min-width: 0; }
+.topbar-title .net-badge, .topbar-clock, .topbar-right .btn { white-space: nowrap; }
+
+@container console-main (width < 1220px) {
+  .topbar-title .net-badge, .topbar-right .topbar-clock, .topbar-right .demo-badge { display: none; }
+  .topbar-right { gap: 9px; }
+}
+
+@container console-main (width < 820px) {
+  .topbar-notice > span, .topbar-account .topbar-account-meta { display: none; }
+  .topbar-account-name { max-width: 110px; }
+}
+
+@container console-main (width < 560px) {
+  .topbar { padding-inline: 12px; }
+  .topbar-account-name { max-width: 85px; }
+}
+
+@container console-main (width < 480px) {
+  .topbar-right .topbar-account { display: none; }
+}
+
+@container console-main (width < 330px) {
+  .topbar-right .topbar-theme { display: none; }
+}
+
+@media (max-width: 640px) {
+  .layout > .sidebar { width: 120px; }
+  .sidebar .brand { padding: 10px 8px; }
+  .sidebar .brand-logo, .sidebar .brand-sub, .sidebar .sidebar-foot { display: none; }
+  .sidebar .nav { padding-inline: 5px; }
+  .sidebar .nav-item { padding: 7px 5px; gap: 5px; }
+  .sidebar .nav-item .ico { display: none; }
+  .main-col .main { padding-inline: 12px; }
+}
 .net-badge {
   display: inline-flex; align-items: center; gap: 6px;
   padding: 4px 11px; border-radius: 99px;

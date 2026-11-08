@@ -55,6 +55,7 @@ const NAV: { group: string; items: { to: string; label: string; icon: string }[]
   {
     group: '模型中心',
     items: [
+      { to: '/model/admission', label: '模型准入与评测', icon: 'assets' },
       { to: '/model/deploy', label: '模型部署与发布', icon: 'assets' },
       { to: '/model/assets', label: '模型资产管理', icon: 'assets' },
       { to: '/model/monitor', label: '推理服务监控', icon: 'gateway' },
@@ -91,7 +92,7 @@ const ROUTE_PERM: Record<string, PermKey> = {
   '/briefing': 'overview',
   '/network': 'overview',
   '/compute/exceptions': 'compute', '/compute/cards': 'compute',
-  '/model/deploy': 'gateway', '/model/monitor': 'gateway', '/model/litellm': 'gateway',
+  '/model/admission': 'gateway', '/model/deploy': 'gateway', '/model/monitor': 'gateway', '/model/litellm': 'gateway',
   '/model/safety-flow': 'security', '/app/dify': 'app', '/ops/apply': 'workflow', '/ops/records': 'audit',
   '/govern': 'overview',
   '/': 'overview',
@@ -111,6 +112,7 @@ const TITLES: Record<string, string> = {
   '/network': '部署形态与网络分区视图',
   '/compute/exceptions': '算力中心 · 例外监控与阻断',
   '/compute/cards': '算力中心 · 算力卡监控（昇腾）',
+  '/model/admission': '模型中心 · 模型准入与评测',
   '/model/deploy': '模型中心 · 模型部署与发布',
   '/model/monitor': '模型中心 · 推理服务监控',
   '/model/litellm': '模型中心 · LiteLLM 网关仪表',
@@ -197,6 +199,7 @@ const P_NETWORK = React.lazy(() => import('./pages/network'))
 const P_GOVERN = React.lazy(() => import('./pages/govern'))
 const P_COMPUTE_EXC = React.lazy(() => import('./pages/compute/exceptions'))
 const P_C_CARDS = React.lazy(() => import('./pages/compute/cards'))
+const P_M_ADMISSION = React.lazy(() => import('./pages/model/admission'))
 const P_M_DEPLOY = React.lazy(() => import('./pages/model/deploy'))
 const P_M_MONITOR = React.lazy(() => import('./pages/model/monitor'))
 const P_M_LITELLM = React.lazy(() => import('./pages/model/litellm'))
@@ -290,7 +293,7 @@ function Shell() {
       <div className="main-col">
         <header className="topbar">
           <div className="topbar-title">
-            {TITLES[loc.pathname] ?? 'AI 运营管理平台'}
+            <span className="topbar-heading">{TITLES[loc.pathname] ?? 'AI 运营管理平台'}</span>
             <span className="net-badge">
               <span className="dot" />
               示例单位信息网 · 演示环境
@@ -310,17 +313,17 @@ function Shell() {
             >
               {dbLabel}
             </span>
-            <span className="row gap6" title="配色：五套可选，选择记在数据服务里，换电脑登录也是这套">
+            <span className="row gap6 topbar-theme" title="配色：五套可选，选择记在数据服务里，换电脑登录也是这套">
               <select className="btn sm" style={{ minWidth: 96 }} value={theme} aria-label="配色"
                 onChange={(e) => setTheme(e.target.value)}>
                 {THEMES.map((t) => <option key={t.id} value={t.id} title={t.note}>{t.name}</option>)}
               </select>
             </span>
-            <span className="mono">{date}</span>
-            <span className="mono" style={{ color: 'var(--brand-text)' }}>{time}</span>
+            <span className="mono topbar-clock">{date}</span>
+            <span className="mono topbar-clock" style={{ color: 'var(--brand-text)' }}>{time}</span>
             {personalOnly ? null : (
             <span
-              className="row gap6"
+              className="row gap6 topbar-notice"
               style={{ cursor: 'pointer', position: 'relative' }}
               onClick={() => nav('/ops/notifications')}
               title={'通知中心 · 真实告警待处置 ' + liveBadge + ' 条'
@@ -348,14 +351,14 @@ function Shell() {
               ) : null}
             </span>
             )}
-            <span className="row gap6">
+            <span className="row gap6 topbar-account" title={acc.name}>
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--text-dim)" strokeWidth="1.8">
                 <circle cx="12" cy="8" r="4" />
                 <path d="M4 21c0-4 3.6-7 8-7s8 3 8 7" />
               </svg>
-              {acc.name}
-              <span className="tag gray">{ROLE_LABEL[acc.role]}</span>
-              <span className="tiny faint">{acc.domain}</span>
+              <span className="topbar-account-name">{acc.name}</span>
+              <span className="tag gray topbar-account-meta">{ROLE_LABEL[acc.role]}</span>
+              <span className="tiny faint topbar-account-meta">{acc.domain}</span>
             </span>
             <button className="btn sm ghost" onClick={() => auth.logout()}>退出</button>
           </div>
@@ -382,6 +385,7 @@ function Shell() {
             <Route path="/govern" element={<P_GOVERN />} />
             <Route path="/compute/exceptions" element={<P_COMPUTE_EXC />} />
             <Route path="/compute/cards" element={<P_C_CARDS />} />
+            <Route path="/model/admission" element={<P_M_ADMISSION />} />
             <Route path="/model/deploy" element={<P_M_DEPLOY />} />
             <Route path="/model/monitor" element={<P_M_MONITOR />} />
             <Route path="/model/litellm" element={<P_M_LITELLM />} />

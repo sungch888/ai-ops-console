@@ -22,7 +22,7 @@ export const SCENARIO_LABEL: Record<ScenarioId, string> = {
   compliance: '合规抽查与凭证吊销申请',
   nightWindow: '夜间变更窗口与队列接续',
 }
-export type OrderType = 'pool_expand' | 'pool_release' | 'preempt' | 'replica_scale' | 'weight_adjust' | 'credential_issue' | 'credential_revoke' | 'quota_adjust' | 'containment' | 'model_rollback' | 'model_retire' | 'access_block' | 'access_restore' | 'model_deploy' | 'train_reserve' | 'train_release'
+export type OrderType = 'training_dataset' | 'train_extend' | 'model_admission' | 'pool_expand' | 'pool_release' | 'preempt' | 'replica_scale' | 'weight_adjust' | 'credential_issue' | 'credential_revoke' | 'quota_adjust' | 'containment' | 'model_rollback' | 'model_retire' | 'access_block' | 'access_restore' | 'model_deploy' | 'train_reserve' | 'train_release'
 /** 需要外部执行回执的工单：平台发单、容器平台 / 运维执行，回执到位才生效 */
 export const EXTERNAL_TYPES: OrderType[] = ['model_deploy']
 /** 紧急处置类工单：不受变更窗口与执行队列限制（例外监控阻断走这一类） */
@@ -66,7 +66,17 @@ export interface Order {
   trace: TraceItem[]
 }
 
-export interface TrainJob { id: string; name: string; pool: PoolId; cards: number; applicant: string; dept: string; framework: string; dataLevel: string; hours: number; dueAt: string; state: '运行中' | '排队中' | '已完成' }
+export interface TrainJob { id: string; name: string; pool: PoolId; cards: number; applicant: string; dept: string; framework: string; dataLevel: string; hours: number; dueAt: string; state: '运行中' | '排队中' | '已完成'
+  reserveId?: string
+  deadline?: number
+  execution?: {
+    reference: string
+    parameters: string
+    status: '已登记' | '运行中' | '失败' | '已完成'
+    evidence: string
+    artifact?: { version: string; location: string; sha256: string }
+  }
+}
 
 export interface EngineState {
   pools: Pool[]
@@ -99,7 +109,10 @@ export const TYPE_LABEL: Record<OrderType, string> = {
   model_retire: '模型下线变更',
   access_block: '接入通道阻断',
   access_restore: '接入通道恢复',
+  model_admission: '模型准入',
   model_deploy: '模型部署与发布',
+  training_dataset: '训练数据使用申请',
+  train_extend: '训练算力延期',
   train_reserve: '训练算例申请',
   train_release: '训练卡位归还',
 }
@@ -368,6 +381,23 @@ function admission(st: EngineState, o: Order): { ok: boolean; reason?: string; s
       if (delta > 0 && utilAfter > 92) return { ok: false, reason: `执行后 ${pool.name} 利用率将达 ${utilAfter}%，超过 92% 安全上限，须先扩容资源池` }
       return { ok: true, suggest: `执行后 ${m.short} 副本 ${m.replicas} → ${m.replicas + delta}，${pool.name} 利用率 → ${utilAfter}%` }
     }
+    case 'training_dataset': {
+      const required = ['name', 'version', 'source', 'owner', 'dataLevel']
+      if (required.some((key) => !String(o.spec[key] ?? '').trim())) return { ok: false, reason: '须填写数据集、版本、来源、责任人和密级' }
+      if (st.orders.some((other) => other.id !== o.id && other.type === o.type && ['submitted', 'closed'].includes(other.status) && other.applicant === o.applicant && other.spec.name === o.spec.name && other.spec.version === o.spec.version)) return { ok: false, reason: '本人已有相同数据集版本的在办或已通过申请' }
+      return { ok: true, suggest: '等待登记数据安全检测报告' }
+    }
+    case 'model_admission': {
+      const required = ['model', 'version', 'source', 'artifact', 'owner', 'provenance', 'location', 'integrity', 'scan', 'evaluation', 'image', 'nodes']
+      if (required.some((key) => !String(o.spec[key] ?? '').trim())) return { ok: false, reason: '须填写制品信息、校验与评测证据，以及部署预设' }
+      if (o.spec.source === '平台内微调模型') {
+        const job = st.jobs.find((item) => item.id === o.spec.trainingJobId)
+        const artifact = job?.execution?.artifact
+        if (!artifact || artifact.version !== o.spec.version || artifact.location !== o.spec.location || artifact.sha256 !== o.spec.artifactHash) return { ok: false, reason: '内部模型须引用原训练任务已登记的制品版本、位置与 SHA-256 基准' }
+      }
+      if (st.orders.some((other) => other.id !== o.id && other.type === 'model_admission' && ['submitted', 'closed'].includes(other.status) && other.spec.model === o.spec.model && other.spec.version === o.spec.version)) return { ok: false, reason: '该模型版本已有待审批或已入库的准入工单' }
+      return { ok: true, suggest: '材料已登记，等待人工核验证据' }
+    }
     case 'model_deploy': {
       const short = String(o.spec.model ?? '').trim()
       if (!short) return { ok: false, reason: '要写明部署哪个模型（模型简称或新模型名称）' }
@@ -376,7 +406,11 @@ function admission(st: EngineState, o: Order): { ok: boolean; reason?: string; s
       if (!(replicas >= 1) || replicas > 8) return { ok: false, reason: '单条部署工单的副本数要在 1–8 之间（更大的发布拆成多条工单，便于逐条回滚）' }
       const m = st.models.find((x) => x.short === short)
       const version = String(o.spec.version ?? '').trim()
-      if (m && version && version !== m.ver && !m.versions.includes(version)) return { ok: false, reason: `${short} 的版本「${version}」不在版本清单（可选：${m.versions.join(' / ')}）；新镜像要先在模型资产里登记版本` }
+      if (m && !o.spec.admissionId && version && version !== m.ver && !m.versions.includes(version)) return { ok: false, reason: `${short} 的版本「${version}」不在版本清单（可选：${m.versions.join(' / ')}）；新镜像要先在模型资产里登记版本` }
+      if (!m || o.spec.admissionId || st.orders.some((candidate) => candidate.type === 'model_admission' && candidate.status === 'closed' && candidate.spec.model === short && candidate.spec.version === (version || m.ver))) {
+        const record = st.orders.find((candidate) => candidate.id === o.spec.admissionId && candidate.type === 'model_admission' && candidate.status === 'closed')
+        if (!record || record.spec.model !== short || record.spec.version !== version || record.spec.image !== o.spec.image || record.spec.nodes !== o.spec.nodes) return { ok: false, reason: '部署须引用同版本已入库准入工单及其镜像、节点预设' }
+      }
       const gray = Number(o.spec.gray ?? 100)
       if (!(gray >= 1) || gray > 100) return { ok: false, reason: '灰度比例要在 1–100 之间（灰度发布要写清放量比例）' }
       const nodes = String(o.spec.nodes ?? '').trim()
@@ -401,9 +435,24 @@ function admission(st: EngineState, o: Order): { ok: boolean; reason?: string; s
       if (!String(o.spec.name ?? '').trim()) return { ok: false, reason: '要写任务名称与用途，台账与成本归集要用' }
       if (!String(o.spec.framework ?? '').trim()) return { ok: false, reason: '要写训练框架（例：MindForm / MindIE），镜像与环境要能对上' }
       if (!String(o.spec.dataLevel ?? '').trim()) return { ok: false, reason: '要写训练数据密级（内部 / 敏感 / 已脱敏），密级门禁与网络平面要核验' }
+      if (o.spec.trainingWorkflow === true) {
+        const dataset = st.orders.find((item) => item.id === o.spec.datasetId && item.type === 'training_dataset' && item.status === 'closed')
+        if (!dataset || dataset.applicant !== o.applicant || dataset.spec.dataLevel !== o.spec.dataLevel) return { ok: false, reason: '请绑定本人已审核通过且密级一致的数据集版本' }
+        const base = st.orders.find((item) => item.id === o.spec.baseId && item.type === 'model_admission' && item.status === 'closed')
+        if (!base) return { ok: false, reason: '请绑定已准入入库的基座模型版本' }
+      }
       const free = poolFree(st, 'train')
       if (cards > free) return { ok: false, reason: `训练池空闲 ${free} 卡，本次要 ${cards} 卡；可先排队（不占卡位）或归还其他任务卡位后再提交` }
       return { ok: true, suggest: `训练池预留 ${cards} 卡 × ${hours} 小时（空闲 ${free} 卡 → ${free - cards} 卡）· 任务 ${String(o.spec.name)} · 归口 ${o.dept} · 数据密级 ${String(o.spec.dataLevel)}` }
+    }
+    case 'train_extend': {
+      const job = st.jobs.find((item) => item.id === o.spec.jobId)
+      const extra = Number(o.spec.hours)
+      if (!job?.reserveId || !job.deadline || job.state !== '运行中' || job.deadline <= Date.now()) return { ok: false, reason: '仅未到期且仍占用卡位的训练申请可以延期' }
+      if (job.applicant !== o.applicant || job.reserveId !== o.spec.reserveId) return { ok: false, reason: '延期必须关联本人原算力工单' }
+      if (st.orders.some((item) => item.id !== o.id && item.type === 'train_extend' && ['submitted', 'approved', 'queued'].includes(item.status) && item.spec.jobId === job.id && item.createdAt <= o.createdAt)) return { ok: false, reason: '该任务已有在办延期工单' }
+      if (!Number.isInteger(extra) || extra < 1 || job.hours + extra > 72) return { ok: false, reason: '延期须为整小时，累计不得超过 72 小时' }
+      return { ok: true, suggest: `在原期限基础上延长 ${extra} 小时` }
     }
     case 'train_release': {
       const j = (st.jobs ?? []).find((x) => x.id === String(o.spec.jobId))
@@ -554,7 +603,11 @@ class Engine {
   private save() {
     try { dbWrite(STORAGE_KEY, JSON.stringify(this.state)) } catch { /* 落库失败已在数据层记录 */ }
   }
-  private emit() { this.save(); this.listeners.forEach((l) => l()) }
+  private emit() {
+    this.state = { ...this.state }
+    this.save()
+    this.listeners.forEach((listener) => listener())
+  }
   subscribe = (l: () => void) => { this.listeners.add(l); return () => { this.listeners.delete(l) } }
 
   /** 外部模块（例外监控、接入配置等）写入运行事件并立即广播，通知中心同步 */
@@ -572,7 +625,8 @@ class Engine {
     const st = this.state
     st.seq += 1
     const target = describeTarget(st, input.type, input.spec)
-    const o = mkOrder(st.seq, input.type, `${TYPE_LABEL[input.type]} · ${target}`, input.applicant, input.dept, input.level, target, describeAmount(input.type, input.spec), input.reason || '（未填写业务理由）', 'submitted', input.auto ?? false, input.spec)
+    const spec = input.type === 'train_reserve' ? { ...input.spec, trainingWorkflow: true } : { ...input.spec }
+    const o = mkOrder(st.seq, input.type, `${TYPE_LABEL[input.type]} · ${target}`, input.applicant, input.dept, input.level, target, describeAmount(input.type, input.spec), input.reason || '（未填写业务理由）', 'submitted', input.auto ?? false, spec)
     const pre = admission(st, o)
     st.orders.unshift(o)
     if (!pre.ok) {
@@ -674,10 +728,11 @@ class Engine {
     this.execute(next.id)
   }
 
-  approve(id: string) {
+  approve(id: string, reviewer?: string) {
     const st = this.state
     const o = st.orders.find((x) => x.id === id)
-    if (!o) return
+    if (!o || o.status !== 'submitted') return
+    if (o.type === 'training_dataset' || (o.type === 'model_admission' && !reviewer?.trim())) return
     const chk = admission(st, o)
     if (!chk.ok) {
       o.status = 'rejected'
@@ -685,6 +740,14 @@ class Engine {
       o.decidedBy = '运营主管'
       o.rejectReason = chk.reason
       trace(o, '运营主管', '审批驳回', chk.reason!, 'bad')
+      this.emit()
+      return
+    }
+    if (o.type === 'model_admission') {
+      o.status = 'closed'
+      o.decidedAt = Date.now()
+      o.decidedBy = reviewer
+      trace(o, reviewer!, '核验证据并登记入库', '人工确认完整性、安全扫描与安全评测证据', 'good')
       this.emit()
       return
     }
@@ -699,6 +762,33 @@ class Engine {
       return
     }
     this.execute(id)
+  }
+
+  recordDatasetResult(id: string, actor: string, passed: boolean, report: string) {
+    const order = this.state.orders.find((item) => item.id === id)
+    if (!order || order.type !== 'training_dataset' || order.status !== 'submitted' || !actor.trim() || !report.trim()) return false
+    order.status = passed ? 'closed' : 'rejected'
+    order.decidedBy = actor
+    order.decidedAt = Date.now()
+    order.spec.report = report.trim()
+    if (!passed) order.rejectReason = report.trim()
+    trace(order, actor, passed ? '登记通过报告并固化版本' : '登记未通过报告', report.trim(), passed ? 'good' : 'bad')
+    this.emit()
+    return true
+  }
+
+  recordTraining(id: string, actor: string, update: NonNullable<TrainJob['execution']>) {
+    const job = this.state.jobs.find((item) => item.id === id)
+    const reserve = this.state.orders.find((item) => item.id === job?.reserveId && item.type === 'train_reserve')
+    if (!job || !reserve || job.state !== '运行中' || actor !== job.applicant || !job.deadline || job.deadline <= Date.now()) return false
+    if (!update.reference.trim() || !update.parameters.trim() || !update.evidence.trim()) return false
+    if (!job.execution && update.status !== '已登记') return false
+    if (job.execution && (job.execution.reference !== update.reference || job.execution.parameters !== update.parameters || !['已登记', '运行中'].includes(job.execution.status) || update.status === '已登记')) return false
+    if (update.status === '已完成' && (!update.artifact?.version.trim() || !update.artifact.location.trim() || !/^[a-f0-9]{64}$/i.test(update.artifact.sha256))) return false
+    job.execution = update
+    trace(reserve, actor, `登记外部训练状态 · ${update.status}`, `${update.reference} · ${update.evidence}`, update.status === '失败' ? 'bad' : 'info')
+    this.emit()
+    return true
   }
 
   reject(id: string, reason: string) {
@@ -716,6 +806,8 @@ class Engine {
     const st = this.state
     const o = st.orders.find((x) => x.id === id)
     if (!o || (o.status !== 'approved' && o.status !== 'submitted' && o.status !== 'queued')) return
+    if (o.type === 'training_dataset' || o.type === 'model_admission') return
+    if (['train_extend', 'train_reserve'].includes(o.type) && o.status === 'submitted') return
     const externallyDone = Boolean(o.spec.receiptNote)
     if (EXTERNAL_TYPES.includes(o.type) && !externallyDone) {
       trace(o, '流程门禁', '未下发外部执行 · 不生效', `${o.id} ${TYPE_LABEL[o.type]}须先下发给容器平台 / 运维执行并取回回执，平台不代为生效`, 'warn')
@@ -734,6 +826,14 @@ class Engine {
     trace(o, '变更窗口 · 执行引擎', '执行变更', `${o.target} ${o.amount}`, 'info')
     applyEffect(st, o)
     syncChannelRpm(st)
+    if (o.type === 'train_extend' || (o.type === 'train_reserve' && o.spec.trainingWorkflow === true)) {
+      o.status = 'closed'
+      trace(o, '训练算力台账', '登记完成', '台账已更新，释放变更窗口', 'good')
+      pushHistory(st)
+      this.emit()
+      this.pumpQueue()
+      return
+    }
     trace(o, '健康探针', '生效验证通过', verifyResult(st, o), 'good')
     if (o.type === 'preempt') {
       const list = String(o.spec.affected ?? '')
@@ -765,6 +865,7 @@ class Engine {
     const st = this.state
     const o = st.orders.find((x) => x.id === id)
     if (!o || o.status !== 'running') return
+    if (o.type === 'train_reserve' && st.jobs.some((job) => job.reserveId === o.id && job.execution)) return
     reverseEffect(st, o)
     syncChannelRpm(st)
     o.status = 'rolled_back'
@@ -790,12 +891,16 @@ class Engine {
   }
 
   /** 执行回执回填：成功才生效（占用卡位、副本变化），失败记台账且不动资源 */
-  receipt(id: string, ok: boolean, detail: string, instances: string) {
+  receipt(id: string, ok: boolean, detail: string, instances: string, gateway?: { route: string; trial: string }) {
     const st = this.state
     const o = st.orders.find((x) => x.id === id)
     if (!o) return { ok: false as const, reason: '未找到工单' }
     if (o.status !== 'external') return { ok: false as const, reason: `工单当前是「${ORDER_STATUS_LABEL[o.status]}」，不在「待执行回执」状态` }
     if (!detail.trim()) return { ok: false as const, reason: '回执要写执行结果说明（不少于 6 字），台账与审计要看' }
+    if (ok && o.spec.admissionId && (!instances.trim() || !gateway?.route.trim() || !gateway.trial.trim())) {
+      return { ok: false as const, reason: '已准入模型的成功回执须附健康实例、网关路由和试调用记录' }
+    }
+    o.spec.receiptResult = ok ? '成功' : '失败'
     if (!ok) {
       o.status = 'rejected'
       o.decidedAt = Date.now()
@@ -806,17 +911,24 @@ class Engine {
       this.emit()
       return { ok: true as const }
     }
+    if (gateway?.route.trim() && gateway.trial.trim()) {
+      o.spec.gatewayRoute = gateway.route.trim()
+      o.spec.gatewayTrial = gateway.trial.trim()
+      trace(o, '网关验收回执', '登记路由与试调用', `${o.spec.gatewayRoute} · ${o.spec.gatewayTrial}`, 'info')
+    }
     o.spec.receiptNote = detail.trim()
     o.spec.instances = instances.trim() || '（回执未附实例清单）'
     o.status = 'approved'
     trace(o, '容器平台', '执行回执到位', `${o.spec.instances} · ${o.spec.receiptNote} · 平台侧生效登记不再占变更窗口`, 'good')
     this.execute(id)
+    if (st.orders.find((item) => item.id === id)?.status === 'rejected') return { ok: false as const, reason: o.rejectReason ?? '生效校验未通过' }
     return { ok: true as const }
   }
 
   close(id: string) {
     const o = this.state.orders.find((x) => x.id === id)
     if (!o) return
+    if (o.type === 'model_admission' || o.type === 'training_dataset') return
     const wasWindow = o.status === 'running'
     o.status = 'closed'
     trace(o, '运营值班', '登记台账并闭环', '闭环状态：已闭环' + (wasWindow ? ' · 变更窗口已释放' : ''), 'good')
@@ -1114,9 +1226,12 @@ function describeTarget(st: EngineState, type: OrderType, spec: Record<string, n
   if (type === 'quota_adjust') return String(spec.credId)
   if (type === 'containment') return `${String(spec.kind)} · ${String(spec.name)}`
   if (type === 'access_block' || type === 'access_restore') return connectorStore.find(String(spec.connectorId))?.name ?? String(spec.connectorId)
+  if (type === 'model_admission') return String(spec.model)
   if (type === 'model_rollback') return `${String(spec.model)} 版本`
   if (type === 'model_retire') return String(spec.model)
   if (type === 'model_deploy') return `${String(spec.model)} → ${st.pools.find((p) => p.id === String(spec.pool))?.name ?? String(spec.pool)}`
+  if (type === 'training_dataset') return `${spec.name} · ${spec.version}`
+  if (type === 'train_extend') return String(spec.jobId)
   if (type === 'train_reserve') return String(spec.name)
   if (type === 'train_release') return String(spec.jobId)
   return ''
@@ -1140,6 +1255,7 @@ function describeAmount(type: OrderType, spec: Record<string, number | string | 
   if (type === 'model_retire') return '下线变更'
   if (type === 'model_deploy') return `${spec.replicas} 副本 × ${Number(spec.perReplica) || 1} 卡 · 灰度 ${Number(spec.gray ?? 100)}%`
   if (type === 'train_reserve') return `${spec.cards} 卡 × ${spec.hours} 小时`
+  if (type === 'train_extend') return `+${spec.hours} 小时`
   if (type === 'train_release') return '归还卡位'
   return ''
 }
@@ -1190,14 +1306,22 @@ function applyEffect(st: EngineState, o: Order) {
       break
     }
     case 'train_reserve': {
-      const seq = (st.jobs ?? []).length + 1
       const due = new Date(Date.now() + Number(o.spec.hours) * 3600000)
       st.jobs = [...(st.jobs ?? []), {
-        id: `FT-${130 + seq}`, name: String(o.spec.name), pool: 'train', cards: Number(o.spec.cards),
+        id: `FT-${o.id}`, reserveId: o.id, deadline: due.getTime(), name: String(o.spec.name), pool: 'train', cards: Number(o.spec.cards),
         applicant: o.applicant, dept: o.dept, framework: String(o.spec.framework), dataLevel: String(o.spec.dataLevel),
         hours: Number(o.spec.hours), dueAt: `${String(due.getMonth() + 1).padStart(2, '0')}-${String(due.getDate()).padStart(2, '0')} ${due.toTimeString().slice(0, 5)}`, state: '运行中',
       }]
       trace(o, '调度引擎', '训练卡位已预留', `${o.spec.name} · ${o.spec.cards} 卡 × ${o.spec.hours} 小时 · 归口 ${o.dept} · 数据密级 ${o.spec.dataLevel}`, 'good')
+      break
+    }
+    case 'train_extend': {
+      const job = st.jobs.find((item) => item.id === o.spec.jobId)!
+      o.spec.previousDeadline = job.deadline!
+      job.deadline! += Number(o.spec.hours) * 3600000
+      job.hours += Number(o.spec.hours)
+      job.dueAt = new Date(job.deadline!).toLocaleString('zh-CN', { hour12: false })
+      trace(o, '训练算力台账', '已更新训练期限', job.dueAt, 'good')
       break
     }
     case 'train_release': {
@@ -1322,7 +1446,19 @@ function reverseEffect(st: EngineState, o: Order) {
       trace(o, '变更窗口 · 执行引擎', '部署已回滚', `${short} 恢复到部署前状态 · 卡位已归还 · 路由与凭证不受影响`, 'warn')
       break
     }
-    case 'train_reserve': { st.jobs = (st.jobs ?? []).filter((x) => !((x.name === String(o.spec.name) && x.cards === Number(o.spec.cards) && x.state === '运行中'))) ; break }
+    case 'train_extend': {
+      const job = st.jobs.find((item) => item.id === o.spec.jobId)
+      if (job) {
+        job.deadline = Number(o.spec.previousDeadline)
+        job.hours -= Number(o.spec.hours)
+        job.dueAt = new Date(job.deadline).toLocaleString('zh-CN', { hour12: false })
+      }
+      break
+    }
+    case 'train_reserve': {
+      st.jobs = st.jobs.filter((job) => job.reserveId ? job.reserveId !== o.id : !(job.name === String(o.spec.name) && job.cards === Number(o.spec.cards) && job.state === '运行中'))
+      break
+    }
     case 'train_release': {
       const j = st.jobs.find((x) => x.id === String(o.spec.jobId))
       if (j) { j.state = (o.spec.prevJobState as '运行中') ?? '运行中'; j.cards = Number(o.spec.prevJobCards) || j.cards }

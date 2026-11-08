@@ -18,8 +18,6 @@ import {
   type Level, type Order, type OrderStatus, type PoolId,
 } from '../../engine/engine'
 
-const NEW_MODEL = 'DeepSeek-V3-R1'
-const NEW_MODEL_LABEL = '新模型：DeepSeek-V3-R1（内网新部署）'
 /** 「超时未回执」判定：下发后 30 分钟没有回执即在页面标出 */
 const TIMEOUT_MS = 30 * 60 * 1000
 const LEVELS: Level[] = ['高保', '共享', '灰度']
@@ -73,8 +71,11 @@ function DispatchCell({ id, manage }: { id: string; manage: boolean }) {
 /** external → 回执回填（成功才生效；失败只记台账、不动资源） */
 function ReceiptCell({ o, manage }: { o: Order; manage: boolean }) {
   const [result, setResult] = useState('成功')
-  const [detail, setDetail] = useState('容器平台已按工单参数完成部署，实例就绪并通过健康探针')
-  const [inst, setInst] = useState(`mindie-${String(o.spec.model ?? 'model').toLowerCase().replace(/[^a-z0-9]/g, '-')}-0/1`)
+  const requiresGateway = Boolean(o.spec.admissionId)
+  const [detail, setDetail] = useState(requiresGateway ? '' : '容器平台已按工单参数完成部署，实例就绪并通过健康探针')
+  const [route, setRoute] = useState('')
+  const [trial, setTrial] = useState('')
+  const [inst, setInst] = useState(requiresGateway ? '' : `mindie-${String(o.spec.model ?? 'model').toLowerCase().replace(/[^a-z0-9]/g, '-')}-0/1`)
   const [err, setErr] = useState('')
   return (
     <div className="col gap6">
@@ -84,11 +85,15 @@ function ReceiptCell({ o, manage }: { o: Order; manage: boolean }) {
       </select>
       <input className="btn sm" style={{ width: 210 }} value={detail} onChange={(e) => setDetail(e.target.value)} placeholder="执行说明（回执必填）" />
       <input className="btn sm mono" style={{ width: 210 }} value={inst} onChange={(e) => setInst(e.target.value)} placeholder="实例清单" />
+      {requiresGateway && result === '成功' && <>
+        <input className="btn sm" value={route} onChange={(event) => setRoute(event.target.value)} placeholder="网关路由或注册回执编号" aria-label="网关路由或注册回执编号" />
+        <input className="btn sm" value={trial} onChange={(event) => setTrial(event.target.value)} placeholder="试调用请求 ID 与成功结果" aria-label="试调用请求 ID 与成功结果" />
+      </>}
       <button
         className="btn sm primary"
-        disabled={!manage || detail.trim().length === 0}
+        disabled={!manage || !detail.trim() || (requiresGateway && result === '成功' && (!inst.trim() || !route.trim() || !trial.trim()))}
         onClick={() => {
-          const r = engine.receipt(o.id, result === '成功', detail, inst)
+          const r = engine.receipt(o.id, result === '成功', detail, inst, requiresGateway && result === '成功' ? { route, trial } : undefined)
           if (!r.ok) setErr(`回执回填被拒：${r.reason}`)
         }}
       >
@@ -109,7 +114,10 @@ export default function ModelDeploy() {
   const dept = account?.dept ?? '演示单位'
 
   const models = st.models
-  const [model, setModel] = useState('Qwen2.5-VL')
+  const admitted = st.orders.filter((o) => o.type === 'model_admission' && o.status === 'closed')
+  const [admissionId, setAdmissionId] = useState('')
+  const admission = admitted.find((o) => o.id === admissionId)
+  const [model, setModel] = useState(() => models.find((m) => m.short === 'Qwen2.5-VL')?.short ?? models[0]?.short ?? '')
   const picked = models.find((m) => m.short === model)
   const [version, setVersion] = useState(picked?.ver ?? '')
   const [pool, setPool] = useState<PoolId>(picked?.pool ?? 'shared')
@@ -123,15 +131,20 @@ export default function ModelDeploy() {
   const [msg, setMsg] = useState<{ tone: 'good' | 'bad'; text: string } | null>(null)
 
   const pickModel = (v: string) => {
-    setModel(v)
-    const m = models.find((x) => x.short === v)
-    setVersion(m?.ver ?? '')
+    const record = admitted.find((o) => o.id === v)
+    const name = record ? String(record.spec.model) : v
+    setAdmissionId(record?.id ?? '')
+    setModel(name)
+    const m = models.find((x) => x.short === name)
+    setNodes(record ? String(record.spec.nodes) : 'AI-Infer-03 / AI-Infer-04')
+    setImage(record ? String(record.spec.image) : 'mindie:2.1.qwen3')
+    setVersion(record ? String(record.spec.version) : m?.ver ?? '')
     setPool(m?.pool ?? 'shared')
     setPerReplica(m?.perReplica ?? 2)
   }
 
   const specOf = (patch?: Record<string, number | string>): Record<string, number | string> => ({
-    pool, model, replicas, perReplica, version, gray, nodes, image, ...patch,
+    pool, model, replicas, perReplica, version, gray, nodes, image, admissionId, ...patch,
   })
   const showSubmitResult = (r: { order: Order; precheck: { ok: boolean; reason?: string; suggest?: string } }, tag: string) => {
     if (r.precheck.ok) setMsg({ tone: 'good', text: `${tag}${r.order.id} 已提交（申请方 ${applicant} · ${dept}）· 准入通过：${r.precheck.suggest ?? ''}` })
@@ -204,6 +217,8 @@ export default function ModelDeploy() {
         }
       />
 
+      <Link to="/model/admission" className="btn sm ghost">办理模型准入与评测</Link>
+      {admission ? <Callout text={`本次引用准入工单 ${admission.id}，镜像和节点须与入库预设一致。`} /> : null}
       {msg ? <div style={{ marginTop: 6 }}><Callout warn={msg.tone === 'bad'} text={msg.text} /></div> : null}
 
       <Panel
@@ -215,15 +230,15 @@ export default function ModelDeploy() {
           <div className="col gap6">
             <div className="row gap6 wrap">
               <div>
-                <div className="tiny faint">模型（简称 / 新模型）</div>
-                <select className="btn sm" style={{ marginTop: 4, width: 260 }} disabled={!perm.manage} value={model} onChange={(e) => pickModel(e.target.value)}>
-                  {models.map((m) => <option key={m.short} value={m.short}>{m.short}（{m.pool === 'hp' ? '高保集群' : m.pool === 'shared' ? '共享集群' : '训练池'} · {m.ver}）</option>)}
-                  <option value={NEW_MODEL}>{NEW_MODEL_LABEL}</option>
+                <div className="tiny faint">模型（现有资产 / 已准入版本）</div>
+                <select className="btn sm" style={{ marginTop: 4, width: 260 }} disabled={!perm.manage} value={admissionId || model} onChange={(e) => pickModel(e.target.value)}>
+                  {models.filter((m) => !admitted.some((o) => o.spec.model === m.short && o.spec.version === m.ver)).map((m) => <option key={m.short} value={m.short}>{m.short}（{m.pool === 'hp' ? '高保集群' : m.pool === 'shared' ? '共享集群' : '训练池'} · {m.ver}）</option>)}
+                  {admitted.map((o) => <option key={o.id} value={o.id}>{String(o.spec.model)} · {String(o.spec.version)}（{o.id}）</option>)}
                 </select>
               </div>
               <div>
                 <div className="tiny faint">版本（留空 = 沿用当前版本；不在版本清单会被拒）</div>
-                <input className="btn sm mono" style={{ marginTop: 4, width: 150 }} disabled={!perm.manage} value={version} onChange={(e) => setVersion(e.target.value)} placeholder="如 v2.3" />
+                <input className="btn sm mono" style={{ marginTop: 4, width: 150 }} disabled={!perm.manage || !!admission} value={version} onChange={(e) => setVersion(e.target.value)} placeholder="如 v2.3" />
               </div>
               <div>
                 <div className="tiny faint">资源池</div>
@@ -262,11 +277,11 @@ export default function ModelDeploy() {
             <div className="row gap6 wrap">
               <div style={{ flex: 1, minWidth: 220 }}>
                 <div className="tiny faint">目标节点（不能空 · 容器平台在这些节点执行）</div>
-                <input className="btn sm mono" style={{ marginTop: 4, width: '100%' }} disabled={!perm.manage} value={nodes} onChange={(e) => setNodes(e.target.value)} placeholder="AI-Infer-03 / AI-Infer-04" />
+                <input className="btn sm mono" style={{ marginTop: 4, width: '100%' }} disabled={!perm.manage || !!admission} value={nodes} onChange={(e) => setNodes(e.target.value)} placeholder="AI-Infer-03 / AI-Infer-04" />
               </div>
               <div style={{ flex: 1, minWidth: 200 }}>
                 <div className="tiny faint">镜像与版本（不能空 · 回执要能对上镜像）</div>
-                <input className="btn sm mono" style={{ marginTop: 4, width: '100%' }} disabled={!perm.manage} value={image} onChange={(e) => setImage(e.target.value)} placeholder="mindie:2.1.qwen3" />
+                <input className="btn sm mono" style={{ marginTop: 4, width: '100%' }} disabled={!perm.manage || !!admission} value={image} onChange={(e) => setImage(e.target.value)} placeholder="mindie:2.1.qwen3" />
               </div>
             </div>
             <div>
@@ -303,6 +318,7 @@ export default function ModelDeploy() {
             head={['工单', '模型 / 池', '参数', '状态', '下发与回执', '动作']}
             rows={deploys.map((o) => {
               const stale = o.status === 'external' && Date.now() - (o.decidedAt ?? o.createdAt) > TIMEOUT_MS
+              const failed = o.spec.receiptResult === '失败' || o.decidedBy === '容器平台回执'
               const inst = o.spec.instances ? String(o.spec.instances) : ''
               const note = o.spec.receiptNote ? String(o.spec.receiptNote) : ''
               return [
@@ -323,7 +339,8 @@ export default function ModelDeploy() {
                   {o.decidedAt ? <span className="tiny faint mono">{fmtTime(o.decidedAt)} · {o.decidedBy ?? ''}</span> : null}
                 </div>,
                 <div className="col gap6">
-                  {inst ? <span className="small mono">{inst}</span> : <span className="tag gray">未回执</span>}
+                  {failed ? <Badge tone="bad">失败回执</Badge> : inst ? <span className="small mono">{inst}</span> : <span className="tag gray">未回执</span>}
+                  {o.spec.gatewayTrial ? <span className="tiny faint">路由 {String(o.spec.gatewayRoute)} · 试调用 {String(o.spec.gatewayTrial)}</span> : null}
                   {note ? <span className="tiny" style={{ color: 'var(--ok-text)', maxWidth: 220 }}>{note}</span> : null}
                   {stale ? <Badge tone="bad">回执超时</Badge> : null}
                   {stale ? <span className="tiny" style={{ color: 'var(--bad-text)' }}>下发已超 {Math.round((Date.now() - (o.decidedAt ?? o.createdAt)) / 60000)} 分钟无回执，按告警口径通知容器平台归口</span> : null}
@@ -406,6 +423,7 @@ export default function ModelDeploy() {
                 rows={recs.map((r) => {
                   const o = st.orders.find((x) => x.id === r.orderId)
                   const canApply = o && o.status === 'external'
+                  const needsGatewayEvidence = canApply && o.spec.admissionId && r.result === '成功'
                   return [
                     <span className="small mono">{r.orderId}</span>,
                     <Badge tone={r.result === '成功' ? 'good' : 'bad'}>{r.result}</Badge>,
@@ -414,7 +432,7 @@ export default function ModelDeploy() {
                     <span className="tiny">{r.nodes || '—'}</span>,
                     <span className="tiny faint mono">{r.finishedAt || '—'}</span>,
                     <span className="small">{o ? <OrderBadge status={o.status} /> : <span className="tag gray">工单不存在</span>}</span>,
-                    canApply ? (
+                    needsGatewayEvidence ? <span className="tiny faint">请在工单中补录路由与试调用回执</span> : canApply ? (
                       <button
                         className="btn sm"
                         disabled={!perm.manage}

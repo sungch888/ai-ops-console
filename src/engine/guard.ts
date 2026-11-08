@@ -35,7 +35,7 @@ const SENSITIVE = ['内部', '内部编号', '住址', '身份证', '手机号',
 const OVERREACH = ['专项手段', '全库', '所有人', '越权', '导出全部']
 
 let config: GuardConfig = loadCfg()
-const runs: GuardRun[] = []
+let runs: GuardRun[] = []
 const listeners = new Set<() => void>()
 
 function loadCfg(): GuardConfig {
@@ -52,7 +52,7 @@ export const guardStore = {
   config: () => config,
   subscribe(l: () => void) { listeners.add(l); return () => { listeners.delete(l) } },
   set(patch: Partial<GuardConfig>) { config = { ...config, ...patch }; persist(); emit() },
-  runs: () => runs.slice(0, 8),
+  runs: () => runs,
 
   /** 跑一遍检测流程：mode=平台内模拟时本地按契约出结果；切到真实引擎后同一份契约发给检测服务 */
   run(input: string, scenario: GuardScenario): GuardRun {
@@ -116,7 +116,7 @@ export const guardStore = {
     ]
     const verdict: GuardRun['verdict'] = (hitWords.length || outBroken) ? '拦截' : overreach ? '放行并告警' : '放行'
     const run: GuardRun = { id: `GF-${4000 + seq}`, input: text, scenario, at: nowTime(), total: Date.now() - t0 + steps.reduce((s, x) => s + x.ms, 0), steps, verdict }
-    runs.unshift(run)
+    runs = [run, ...runs].slice(0, 8)
     emit()
     return run
   },

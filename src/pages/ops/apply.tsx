@@ -19,7 +19,7 @@ import {
 } from '../../engine/engine'
 
 /** 本页受理的三类申请 */
-const APPLY_TYPES: OrderType[] = ['credential_issue', 'train_reserve', 'model_deploy']
+const APPLY_TYPES: OrderType[] = ['credential_issue', 'train_reserve', 'train_extend', 'model_deploy']
 const PURPOSES = ['个人调试', '业务系统集成', '批处理任务']
 const EXTRA_MODELS = ['DeepSeek-V3', 'GLM-4', 'Qwen3-32B 微调', 'BGE-M3']
 const FRAMEWORKS = ['MindForm', 'MindForm + MindIE', '其它（PyTorch / Megatron）']
@@ -118,13 +118,18 @@ export default function OpsApply() {
   const [framework, setFramework] = useState(FRAMEWORKS[0])
   const [cards, setCards] = useState(4)
   const [hours, setHours] = useState(12)
-  const [dataLevel, setDataLevel] = useState(DATA_LEVELS[0])
+  const [datasetId, setDatasetId] = useState('')
+  const [baseId, setBaseId] = useState('')
+  const datasets = st.orders.filter((order) => order.type === 'training_dataset' && order.status === 'closed' && order.applicant === applicant)
+  const bases = st.orders.filter((order) => order.type === 'model_admission' && order.status === 'closed')
+  const dataset = datasets.find((order) => order.id === datasetId)
+  const dataLevel = String(dataset?.spec.dataLevel ?? '')
   const [jobReason, setJobReason] = useState('示例业务三部领域模型微调，需要训练卡位与训练数据密级核验，到期后按工单归还卡位')
 
   const submitJob = () => {
     const r = engine.submit({
       type: 'train_reserve', applicant, dept, level: '共享', reason: jobReason,
-      spec: { name: jobName, cards, hours, framework, dataLevel },
+      spec: { name: jobName, cards, hours, framework, dataLevel, datasetId, baseId, trainingWorkflow: true },
     })
     if (r.precheck.ok) setMsg({ tone: 'good', text: `${r.order.id} 训练算例申请已提交 · 准入通过：${r.precheck.suggest ?? ''} · 待管理员审批` })
     else setMsg({ tone: 'bad', text: `${r.order.id} 训练算例申请被准入校验拒绝：${r.precheck.reason ?? ''}` })
@@ -135,7 +140,7 @@ export default function OpsApply() {
     const r = engine.submit({
       type: 'train_reserve', applicant, dept, level: '共享',
       reason: '演示：一次申请 12 卡（超单申请上限）',
-      spec: { name: `${jobName}（演示超上限）`, cards: 12, hours, framework, dataLevel },
+      spec: { name: `${jobName}（演示超上限）`, cards: 12, hours, framework, dataLevel: DATA_LEVELS[0] },
     })
     setMsg({
       tone: 'bad',
@@ -290,10 +295,18 @@ export default function OpsApply() {
                 <input className="btn sm" style={{ marginTop: 4, width: 110 }} type="number" min={1} max={72} disabled={!perm.manage} value={hours} onChange={(e) => setHours(Number(e.target.value))} />
               </div>
               <div>
-                <div className="tiny faint">训练数据密级</div>
-                <select className="btn sm" style={{ marginTop: 4, width: 200 }} disabled={!perm.manage} value={dataLevel} onChange={(e) => setDataLevel(e.target.value)}>
-                  {DATA_LEVELS.map((d) => <option key={d} value={d}>{d}</option>)}
-                </select>
+                <label className="tiny faint">已通过的数据集版本
+                  <select className="btn sm" value={datasetId} onChange={(event) => setDatasetId(event.target.value)}>
+                    <option value="">选择本人已通过的数据集</option>
+                    {datasets.map((item) => <option key={item.id} value={item.id}>{item.target} · {String(item.spec.dataLevel)}</option>)}
+                  </select>
+                </label>
+                <label className="tiny faint">已入库的基座模型
+                  <select className="btn sm" value={baseId} onChange={(event) => setBaseId(event.target.value)}>
+                    <option value="">选择基座模型版本</option>
+                    {bases.map((item) => <option key={item.id} value={item.id}>{item.target} · {String(item.spec.version)}</option>)}
+                  </select>
+                </label>
               </div>
             </div>
             <div>
@@ -301,7 +314,7 @@ export default function OpsApply() {
               <textarea className="btn sm" style={{ width: '100%', minHeight: 56 }} disabled={!perm.manage} value={jobReason} onChange={(e) => setJobReason(e.target.value)} />
             </div>
             <div className="row gap6 wrap">
-              <button className="btn primary" disabled={!perm.manage} onClick={submitJob}>提交训练算例申请</button>
+              <button className="btn primary" disabled={!perm.manage || !dataset || !baseId} onClick={submitJob}>提交训练算例申请</button>
               <button className="btn ghost" disabled={!perm.manage} onClick={demoJobOverLimit}>演示：申请 12 卡（超单申请上限）</button>
               {!perm.manage ? <span className="tiny faint">只读</span> : null}
             </div>
