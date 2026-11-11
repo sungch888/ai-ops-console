@@ -4,11 +4,17 @@
  * 切换视图后，可见模型 / 渠道 / 应用 / 工具 / 凭证类型与用量成本随之变化
  * ===================================================================== */
 import { useState } from 'react'
-import { Kpi, Panel, PageHead, Badge, State, Table, Callout } from '../components/ui'
+import { Kpi, Panel, PageHead, Badge, AlertBadge, State, Table, Callout } from '../components/ui'
 import { useEngine, poolUtil } from '../engine/engine'
 import { ledgerOf } from '../engine/ledger'
 import { apps as mockApps, tools as mockTools } from '../data/mock'
 import { useMatrix, useSession } from '../engine/auth'
+import { Jump, useAlertPick, usePickFlash, type AlertJump } from '../engine/alertJump'
+
+/** 模型侧告警口径：落到模型资产里这个模型的那一行 */
+const modelJump = (short: string, label: string): AlertJump => ({ page: '/model/assets', pick: short, label })
+/** 选型待确认口径：落到本页「两种部署形态对比」表的那一项 */
+const decisionJump = (pick: string, label: string): AlertJump => ({ page: '/network', pick, label })
 
 type NetView = {
   key: string
@@ -83,13 +89,17 @@ export default function Network() {
   const liveModels = visibleModels.filter((m) => m.replicas > 0 && m.state === '运行中')
   const cards = liveModels.reduce((s, m) => s + m.replicas * m.perReplica, 0)
   const otherViews = VIEWS.filter((x) => x.key !== 'all')
+  /** 形态对比表的主键（与下面 rows 同序）：待确认口径的告警就落到某一行 */
+  const COMPARE_KEYS = ['平台实例与运维', '资产可见范围', '卡位与渠道', '跨网数据交换', '凭证与配额', '厂商渠道（外部模型）', '上线周期与投资']
+  const pick = useAlertPick()          // 从红 / 黄待确认提示跳进来：?pick=<对比项>
+  usePickFlash(pick)
 
   return (
     <div>
       <PageHead
         title="部署形态与网络分区视图"
         desc="一套平台跨网（逻辑分区） 与 三套网各自部署（物理分区） 的可见范围对比 · 选型阶段需客户方确认"
-        extra={<><Badge tone="info">当前角色可见密级 {acc ? matrix[acc.role].cls.join('/') : '—'}</Badge><Badge tone="warn">待客户方确认口径</Badge></>}
+        extra={<><Badge tone="info">当前角色可见密级 {acc ? matrix[acc.role].cls.join('/') : '—'}</Badge><AlertBadge tone="warn" jump={decisionJump('平台实例与运维', '去本页「两种部署形态对比」看要客户方确认的那几项')}>待客户方确认口径</AlertBadge></>}
       />
 
       <div className="row wrap gap6" style={{ marginBottom: 14 }}>
@@ -121,7 +131,7 @@ export default function Network() {
               <span className="num small">{m.replicas} × {m.perReplica} 卡</span>,
               <span className="num small">{poolUtil(st, m.pool)}%</span>,
               <span className="small">{visibleChannels.map((c) => c.name.split('（')[0]).join(' / ') || '无可用渠道'}</span>,
-              m.replicas > 0 ? <Badge tone="good">可在该视图部署</Badge> : <Badge tone={m.state === '已下线' ? 'bad' : 'warn'}>{m.state === '已下线' ? '已下线' : '无存活副本'}</Badge>,
+              m.replicas > 0 ? <Badge tone="good">可在该视图部署</Badge> : <AlertBadge tone={m.state === '已下线' ? 'bad' : 'warn'} jump={modelJump(m.short, `去模型资产看「${m.short}」的副本与下线记录（该视图 ${m.state === '已下线' ? '已下线' : '无存活副本'}）`)}>{m.state === '已下线' ? '已下线' : '无存活副本'}</AlertBadge>,
             ])}
           />
         </div>
@@ -140,7 +150,7 @@ export default function Network() {
                   <span className="tag gray">{a.dept}</span>,
                   <span className="num small">{((r?.calls ?? 0) / 10000).toFixed(2)} 万</span>,
                   <span className="num small">{(r?.tokens ?? 0).toLocaleString('zh-CN')}</span>,
-                  r && (r?.calls ?? 0) === 0 ? <Badge tone="bad">未承接（{r?.note ?? '受限'}）</Badge> : <State s={a.status} />,
+                  r && (r?.calls ?? 0) === 0 ? <AlertBadge tone="bad" jump={Jump.agent(a.name, `去智能体纳管处置「${a.name}」（${r?.note ?? '未承接调用'}）`)}>未承接（{r?.note ?? '受限'}）</AlertBadge> : <State s={a.status} />,
                 ]
               })}
             />
@@ -154,8 +164,8 @@ export default function Network() {
               rows={visibleTools.map((m) => [
                 <span className="small strong">{m.name}</span>,
                 <span className="tag gray">{m.kind}</span>,
-                m.tech ? <Badge tone="good">已注册</Badge> : <Badge tone="bad">已摘除</Badge>,
-                m.biz ? <Badge tone="good">在册</Badge> : <Badge tone="warn">待同步</Badge>,
+                m.tech ? <Badge tone="good">已注册</Badge> : <AlertBadge tone="bad" jump={Jump.tool(m.name, `去工具生态看「${m.name}」：模型侧注册目录已摘除，要双侧同步`)}>已摘除</AlertBadge>,
+                m.biz ? <Badge tone="good">在册</Badge> : <AlertBadge tone="warn" jump={Jump.tool(m.name, `去工具生态看「${m.name}」：业务使用目录待同步`)}>待同步</AlertBadge>,
                 <span className="small">{m.owner}</span>,
               ])}
             />
@@ -167,7 +177,7 @@ export default function Network() {
                 <span className={`tag ${c.kind === '个人密钥' ? '' : 'green'}`}>{c.kind}</span>,
                 <span className="small">{c.holder}</span>,
                 <span className="num small">{c.rpm} RPM</span>,
-                c.status === 'off' ? <Badge tone="bad">已吊销</Badge> : c.status === 'warn' ? <Badge tone="warn">临期</Badge> : <State s="ok" />,
+                c.status === 'off' ? <AlertBadge tone="bad" jump={Jump.credential(c.id, `${c.id} 已吊销：去凭证与配额这一行核对回收记录，要恢复得重发`)}>已吊销</AlertBadge> : c.status === 'warn' ? <AlertBadge tone="warn" jump={Jump.credential(c.id, `去凭证与配额处理 ${c.id}（${c.holder}）：临期`)}>临期</AlertBadge> : <State s="ok" />,
               ])}
             />
           </div>
@@ -179,6 +189,7 @@ export default function Network() {
           <Table
             minWidth={1000}
             head={['对比项', '一套平台跨网部署（逻辑分区）', '三套网各自部署（物理分区）']}
+            rowKeys={['平台实例与运维', '资产可见范围', '卡位与渠道', '跨网数据交换', '凭证与配额', '厂商渠道（外部模型）', '上线周期与投资']} pick={pick}
             rows={[
               ['平台实例与运维', <span className="small">1 套平台 · 1 份变更窗口排期 · 1 支值班队伍</span>, <span className="small">3 套平台 · 3 份排期与值班 · 版本需同步发布</span>],
               ['资产可见范围', <span className="small">全部 {st.models.length} 个模型 / {mockApps.length} 个应用按权限矩阵可见</span>, <span className="small">{otherViews.map((o) => `${o.name.split('（')[0]} ${o.appOK ? mockApps.filter(o.appOK).length : 0} 应用`).join(' · ')}</span>],

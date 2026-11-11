@@ -1,14 +1,15 @@
 import React from 'react'
-import { PageHead, Panel, Table, Badge, Tabs, Callout, Kpi } from '../../components/ui'
+import { PageHead, Panel, Table, Badge, Tabs, Callout, Kpi, AlertBadge } from '../../components/ui'
 import {
   queryOrders, queryEvents, queryAudit, queryTables, queryHealth, csvUrl, ORDER_STATUS_LABEL,
   type Filters, type TableRow, type HealthInfo, type QueryPage,
 } from '../../engine/query'
+import { Jump, useAlertPick, usePickFlash, type AlertJump } from '../../engine/alertJump'
 
 type Tab = '工单台账' | '运行事件' | '写入审计' | '数据库概览'
 const TABS: Tab[] = ['工单台账', '运行事件', '写入审计', '数据库概览']
 
-const STATUSES = ['', 'submitted', 'approved', 'queued', 'dispatched', 'external', 'running', 'rejected', 'closed']
+const STATUSES = ['', 'to_biz', 'submitted', 'approved', 'queued', 'dispatched', 'external', 'running', 'rejected', 'closed']
 const LEVELS = ['', '一般', '重要', '紧急']
 const ACTIONS = ['', 'state_put', 'state_bulk', 'state_delete', 'reset', 'seed']
 const LIMITS = [20, 50, 100]
@@ -31,6 +32,11 @@ export default function RecordsPage() {
   const [err, setErr] = React.useState('')
   const [lastUrl, setLastUrl] = React.useState('')
   const [stamp, setStamp] = React.useState('')
+  /** 别处点过来：?pick=<工单号> → 自动切到「工单台账」并高亮那一行 */
+  const pick = useAlertPick()
+  usePickFlash(pick)
+  React.useEffect(() => { if (/^WO-/.test(pick)) setTab('工单台账') }, [pick])
+  const orderRow = (id: string): AlertJump => ({ page: '/ops/records', pick: id, label: '去台账看这条记录：状态、决定人、驳回理由都在这一行' })
 
   const filters = React.useMemo<Filters>(() => {
     if (tab === '工单台账') return { status, type, q, limit, offset }

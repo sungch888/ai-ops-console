@@ -6,13 +6,16 @@
  *   权限拆三档：security（看事件）/ security_issue（日常下发）/ security_emergency（紧急下发，不受变更窗口限制）
  * ===================================================================== */
 import { useEffect, useState } from 'react'
-import {Badge, Callout, Kpi, Panel, PageHead, Table, Tip} from '../../components/ui'
+import {Badge, AlertBadge, Callout, Kpi, Panel, PageHead, Table, Tip} from '../../components/ui'
 import { COMMAND_ACTIONS, TARGET_CLASSES, consoleStore, useConsole } from '../../engine/console'
 import { flagsStore, usePerm } from '../../engine/auth'
+import { Jump, useAlertPick, usePickFlash } from '../../engine/alertJump'
 
 const STATUS_TONE: Record<string, 'good' | 'warn' | 'bad' | 'info' | 'muted' | 'purple'> = {
   草稿: 'muted', 预检通过: 'info', 已下发: 'warn', 设备已确认: 'good', 失败: 'bad', 已回滚: 'muted', 待人工兜底: 'bad',
 }
+/** 哪些指令状态是在喊「出问题了要人处理」：黄 / 红才做成可点徽章 */
+const STATUS_ALERT: Record<string, 'warn' | 'bad'> = { 已下发: 'warn', 失败: 'bad', 待人工兜底: 'bad' }
 
 export default function OpsCommands() {
   const cons = useConsole()
@@ -28,6 +31,16 @@ export default function OpsCommands() {
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null)
   const [busy, setBusy] = useState(false)
   const cfg = flagsStore.get().config
+
+  /* 告警直达口径：本页两张台账各用自己的主键 —— 指令 id / 兜底工单 id
+     任何红 / 黄提示点过去 = 落到那一行（模拟设备确认 / 模拟失败 / 回滚 / 人工接管都在那一行） */
+  const pick = useAlertPick()
+  usePickFlash(pick)
+  const cmdJump = (id: string, label: string) => ({ page: '/ops/commands', pick: id, label })
+  const fbJump = (id: string, label: string) => ({ page: '/ops/commands', pick: id, label })
+  const waitingAck = cons.commands.find((c) => c.status === '已下发')
+  const needFallback = cons.fallbacks.find((f) => f.status === '待接管')
+  const firstFired = cons.commands.find((c) => STATUS_ALERT[c.status])
 
   useEffect(() => { void consoleStore.refresh() }, [])
 
@@ -55,9 +68,9 @@ export default function OpsCommands() {
     <span className="tiny mono">{c.id}{c.rollback_of ? <span className="faint tiny"> ← {c.rollback_of}</span> : null}</span>,
     <span className="small">{c.target_class}<span className="tiny faint"> / {c.target || '不限'}</span></span>,
     <span className="small">{c.action}</span>,
-    <span>{c.dry_run ? <Badge tone="purple">dry-run</Badge> : null}<Badge tone={STATUS_TONE[c.status] || 'info'}>{c.status}</Badge>{c.emergency ? <Badge tone="bad">紧急</Badge> : null}</span>,
+    <span>{c.dry_run ? <Badge tone="purple">dry-run</Badge> : null}{STATUS_ALERT[c.status] ? <AlertBadge tone={STATUS_ALERT[c.status]} jump={cmdJump(c.id, `这条指令停在「${c.status}」：点过去落到这一行，模拟设备确认 / 模拟失败 / 回滚都在这一行`)}>{c.status}</AlertBadge> : <Badge tone={STATUS_TONE[c.status] || 'info'}>{c.status}</Badge>}{c.emergency ? <AlertBadge tone="bad" jump={cmdJump(c.id, `这条走紧急通道的指令（${c.action} · ${c.target || '不限'}）：点过去落到这一行看确认与回滚`)}>紧急</AlertBadge> : null}</span>,
     <span className="tiny">{c.issued_by || '—'}<br /><span className="faint tiny mono">{(c.issued_at || c.created_at || '').replace('T', ' ').replace('Z', '')}</span></span>,
-    <span className="tiny">{c.ack_at ? ('已确认 ' + (c.ack_by || '')) : (c.fail_reason ? <span style={{ color: 'var(--bad-text)' }}>{c.fail_reason}</span> : '未确认')}</span>,
+    <span className="tiny">{c.ack_at ? ('已确认 ' + (c.ack_by || '')) : c.fail_reason ? <><AlertBadge tone="bad" jump={cmdJump(c.id, `设备侧失败（${c.fail_reason}）：点过去落到这一行，回滚这一条 / 看它生成的兜底工单`)}>失败</AlertBadge><span style={{ color: 'var(--bad-text)' }}> {c.fail_reason}</span></> : <AlertBadge tone="warn" jump={cmdJump(c.id, `没等到设备确认（超时线 ${cfg['command-ack-timeout-min'] || '30'} 分钟）：点过去落到这一行，模拟确认 / 模拟失败 / 回滚都在这一行`)}>未确认</AlertBadge>}</span>,
     <span className="row gap6">
       <button className="btn sm ghost" disabled={!issuePerm.manage || c.status !== '已下发'} onClick={() => void consoleStore.ack(c.id, true).then((r) => r.ok ? say(true, c.id + ' 设备已确认') : say(false, '被拒：' + (r.error || '')))}>模拟设备确认</button>
       <button className="btn sm ghost" disabled={!issuePerm.manage || c.status !== '已下发'} onClick={() => void consoleStore.ack(c.id, false, '设备侧拒绝（演练）').then((r) => r.ok ? say(true, c.id + ' 失败，已生成人工兜底工单') : say(false, '被拒：' + (r.error || '')))}>模拟失败</button>
@@ -69,7 +82,7 @@ export default function OpsCommands() {
     <span className="tiny mono">{f.id}</span>,
     <span className="small">{f.title}</span>,
     <span className="tiny faint">{f.detail || '—'}</span>,
-    <span>{f.status === '已接管' ? <Badge tone="warn">已接管</Badge> : f.status === '已关闭' ? <Badge tone="good">已关闭</Badge> : <Badge tone="bad">待接管</Badge>}</span>,
+    <span>{f.status === '已接管' ? <AlertBadge tone="warn" jump={fbJump(f.id, `这张兜底工单已接管但还没闭环：点过去落到这一行，「关闭」按钮就在这一行`)}>已接管</AlertBadge> : f.status === '已关闭' ? <Badge tone="good">已关闭</Badge> : <AlertBadge tone="bad" jump={fbJump(f.id, `兜底工单没人接管（${f.title}）：点过去落到这一行，「人工接管」按钮就在这一行`)}>待接管</AlertBadge>}</span>,
     <span className="tiny">{f.owner || '—'}</span>,
     <span className="row gap6">
       <button className="btn sm ghost" disabled={!viewPerm.manage || f.status !== '待接管'} onClick={() => void consoleStore.claimFallback(f.id, '已接管').then((r) => r.ok ? say(true, f.id + ' 已接管（人工处置）') : say(false, '被拒：' + (r.error || '')))}>人工接管</button>
@@ -84,13 +97,13 @@ export default function OpsCommands() {
       <PageHead title="处置指令台 · 预检 / 下发 / 确认 / 回滚 / 人工兜底" desc="本期不接真实设备：同一套指令框架先把流程与留痕跑通，设备控制接口到位后按同样接口接" />
 
       <div className="grid g-4">
-        <Kpi label="指令总数" value={String(cons.commands.length)} foot="含 dry-run 与已下发" />
-        <Kpi label="等设备确认" value={String(cons.commands.filter((c) => c.status === '已下发').length)} foot={'超时线 ' + (cfg['command-ack-timeout-min'] || '30') + ' 分钟'} />
-        <Kpi label="待人工兜底" value={String(cons.fallbacks.filter((f) => f.status === '待接管').length)} foot="失败或超时自动生成" />
+        <Kpi label="指令总数" value={String(cons.commands.length)} foot="含 dry-run 与已下发" jump={firstFired ? cmdJump(firstFired.id, `有指令停在「${firstFired.status}」：点过去落到这条指令那一行`) : undefined} />
+        <Kpi label="等设备确认" value={String(cons.commands.filter((c) => c.status === '已下发').length)} foot={'超时线 ' + (cfg['command-ack-timeout-min'] || '30') + ' 分钟'} jump={waitingAck ? cmdJump(waitingAck.id, `等设备确认的第一条是 ${waitingAck.id}：点过去落到这一行，模拟确认 / 模拟失败 / 回滚都在这一行`) : undefined} />
+        <Kpi label="待人工兜底" value={String(cons.fallbacks.filter((f) => f.status === '待接管').length)} foot="失败或超时自动生成" jump={needFallback ? fbJump(needFallback.id, `没人接管的第一张是 ${needFallback.id}：点过去落到这一行，「人工接管」按钮就在这一行`) : undefined} />
         <Kpi label="你的处置权" value={emgPerm.manage ? '可紧急下发' : issuePerm.manage ? '可日常下发' : viewPerm.view ? '只能看' : '无'} foot="判定在服务端，改前端没用" />
       </div>
 
-      {msg ? <div className="mt14"><Callout warn={!msg.ok} text={msg.text} /></div> : null}
+      {msg ? <div className="mt14"><Callout warn={!msg.ok} text={msg.text} jump={!msg.ok ? cmdJump(preId || (cons.commands[0]?.id ?? ''), '这次操作没成：点过去落到对应那条指令那一行（看状态 / 回滚 / 找它生成的兜底工单）') : undefined} /></div> : null}
 
       <Panel title="下一条指令（先预检，再确认下发）" className="mt14">
         <div className="row gap6 wrap">
@@ -111,7 +124,7 @@ export default function OpsCommands() {
               <span className="tiny">{a.kind}</span>, <span className="tiny mono">{a.id}</span>, <span className="small">{a.name || '—'}</span>,
             ])} />
             <div className="row gap6 wrap" style={{ marginTop: 10 }}>
-              {pre.map(([k, v]) => <Badge key={k} tone={v ? 'good' : 'bad'}>{k}：{v ? '通过' : '不通过'}</Badge>)}
+              {pre.map(([k, v]) => v ? <Badge key={k} tone="good">{k}：通过</Badge> : <AlertBadge key={k} tone="bad" jump={cmdJump(preId || (cons.commands[0]?.id ?? ''), `预检项「${k}」不通过：点过去落到这条预检记录那一行（它为什么不能下发、要不要改参数重提，都在那一行）`)}>{k}：不通过</AlertBadge>)}
               <Badge tone="muted">{impact.derived_from}</Badge>
             </div>
             <div className="row gap6 wrap" style={{ marginTop: 12 }}>
@@ -132,9 +145,9 @@ export default function OpsCommands() {
 
       <Panel title="指令台账（下发前预检 / 下发后确认 / 反向指令回滚）" className="mt14" noPad>
         <div className="panel-body">
-          {cons.error ? <Callout warn text={cons.error} /> : null}
+          {cons.error ? <Callout warn text={cons.error} jump={Jump.commands('处置台账读不到数据服务：点回来这一页，指令台账与兜底工单都要人工核一遍')} /> : null}
           {cons.commands.length === 0 ? <div className="tiny faint">当前没有指令记录。</div> : (
-            <Table minWidth={1180} head={['指令号', '目标类型 / 目标', '动作', '状态', '下发人 / 时间', '设备确认', '操作']} rows={cmdRows} />
+            <Table minWidth={1180} head={['指令号', '目标类型 / 目标', '动作', '状态', '下发人 / 时间', '设备确认', '操作']} rowKeys={cons.commands.map((c) => c.id)} pick={pick} rows={cmdRows} />
           )}
           <div className="tiny faint" style={{ marginTop: 8 }}>
             状态机：草稿 → 预检通过 → 已下发 →（设备已确认 / 失败 / 待人工兜底）→ 已回滚。
@@ -146,7 +159,7 @@ export default function OpsCommands() {
       <Panel title="人工兜底工单（设备不认、接口没接、超时未确认，都先由我们接住）" className="mt14" noPad>
         <div className="panel-body">
           {cons.fallbacks.length === 0 ? <div className="tiny faint">当前没有兜底工单：一次下发失败或一次超时未确认就会自动生成。</div> : (
-            <Table minWidth={1080} head={['工单号', '标题', '说明', '状态', '接管人', '操作']} rows={fbRows} />
+            <Table minWidth={1080} head={['工单号', '标题', '说明', '状态', '接管人', '操作']} rowKeys={cons.fallbacks.map((f) => f.id)} pick={pick} rows={fbRows} />
           )}
           <div className="tiny faint" style={{ marginTop: 8 }}>
             兜底工单来源三类：指令下发失败、超时未获设备确认（{cfg['command-ack-timeout-min'] || '30'} 分钟，可在配置中心改）、审批超时未回写。

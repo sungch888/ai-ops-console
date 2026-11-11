@@ -166,7 +166,7 @@ export function evaluateRules(): { fired: number; log: string[] } {
         r.fired += 1
         r.lastFired = nowStr()
         const actText = act(r, s)
-        notifyStore.push(r.level, `告警：${r.name}`, `${h.detail}${actText ? ' · 处置：' + actText : ''}`, `${r.dim === '凭证' ? '模型中心' : r.dim === '渠道' ? '模型中心 / 推理网关' : '算力中心'}`)
+        notifyStore.push(r.level, `告警：${r.name}`, `${h.detail}${actText ? ' · 处置：' + actText : ''}`, `${r.dim === '凭证' ? '模型中心' : r.dim === '渠道' ? '模型中心 / 推理网关' : '算力中心'}`, `RULE:${r.id}:${s.obj}`)
         engine.get().events.unshift({ time: nowStr(), level: r.level, text: `告警规则「${r.name}」触发：${h.detail}${actText ? ' · ' + actText : ''}` })
         log.push(`${r.name} → ${h.detail}${actText ? ' · ' + actText : ''}`)
       })

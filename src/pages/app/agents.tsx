@@ -1,9 +1,10 @@
 import React from 'react'
-import { Kpi, Panel, PageHead, Badge, State, Table, Progress, Callout } from '../../components/ui'
+import { Kpi, Panel, PageHead, Badge, State, Table, Progress, Callout, AlertBadge } from '../../components/ui'
 import { Chart, CHART_COLORS, AXIS_COLOR, SPLIT_COLOR, TOOLTIP_STYLE, GRID } from '../../components/Chart'
 import { apps } from '../../data/mock'
 import { GapBanner } from '../../components/Gap'
 import { useEngine } from '../../engine/engine'
+import { Jump, useAlertPick, usePickFlash } from '../../engine/alertJump'
 
 const LOGS = [
   { time: '21:47:12', agent: '报告撰写助手', user: '示例××（示范市01单位）', input: '生成 11-04 常见业务事件通报初稿', tokens: 8642, result: 'ok' },
@@ -14,6 +15,9 @@ const LOGS = [
 
 export default function AppAgents() {
   const st = useEngine()
+  /** 别的页面上的红 / 黄告警点过来：?pick=<应用名> → 高亮这一行 */
+  const pick = useAlertPick()
+  usePickFlash(pick)
   const trendOpt = {
     color: CHART_COLORS,
     tooltip: { ...TOOLTIP_STYLE, trigger: 'axis' },
@@ -37,7 +41,7 @@ export default function AppAgents() {
       <PageHead
         title="智能体纳管"
         desc="上架审批 · 权限校验 · 运行监控 · 异常处置（不含编排与 Prompt 调试）"
-        extra={<><Badge tone="info">纳管 12 个应用</Badge><Badge tone="warn">1 起调用突增</Badge></>}
+        extra={<><Badge tone="info">纳管 12 个应用</Badge><AlertBadge tone="warn" jump={Jump.agent('咨询问答助手', '点过去看这个突增应用那一行（限流 / 暂停就在这里做）')}>1 起调用突增</AlertBadge></>}
       />
 
       <GapBanner name="智能体开发平台" />
@@ -64,6 +68,7 @@ export default function AppAgents() {
           <Table
             minWidth={900}
             head={['应用', '条线', '用户数', '今日调用', '成功率', '依赖模型', '业务等级', '状态', '处置状态（实时）']}
+            rowKeys={apps.map((a) => a.name)} pick={pick}
             rows={apps.map((a) => {
               const m = st.managed.find((x) => x.name === a.name)
               return [
@@ -71,11 +76,11 @@ export default function AppAgents() {
               <span className="tag gray">{a.dept}</span>,
               <span className="num">{a.users.toLocaleString('zh-CN')}</span>,
               <span className="num">{a.calls}</span>,
-              <div style={{ minWidth: 120 }}><Progress value={a.success - 90} tone={a.success < 97 ? 'warn' : 'green'} /></div>,
+              <div style={{ minWidth: 120 }}><Progress value={a.success - 90} tone={a.success < 97 ? 'warn' : 'green'} jump={a.success < 97 ? Jump.agent(a.name, '成功率低于阈值：点这条进度落到这个应用那一行做限流 / 暂停') : undefined} /></div>,
               <span className="muted small">{a.model}</span>,
               <span className={`tag ${a.level === '高保' ? 'green' : a.level === '灰度' ? '' : 'gray'}`}>{a.level}</span>,
               <State s={a.status} />,
-              m ? (m.status === '正常' ? <Badge tone="good">正常</Badge> : <Badge tone={m.status === '限流' ? 'warn' : 'bad'}>{m.status}</Badge>) : <span className="tiny faint">未纳管</span>,
+              m ? (m.status === '正常' ? <Badge tone="good">正常</Badge> : <AlertBadge tone={m.status === '限流' ? 'warn' : 'bad'} jump={Jump.agent(a.name, '这个应用的处置状态异常：点过去看这一行（可改处置 / 看轨迹）')}>{m.status}</AlertBadge>) : <span className="tiny faint">未纳管</span>,
               ]
             })}
           />
@@ -93,7 +98,7 @@ export default function AppAgents() {
                 <span className="small">{l.user}</span>,
                 <span className="muted small ellipsis" style={{ maxWidth: 220 }}>{l.input}</span>,
                 <span className="num small">{l.tokens}</span>,
-                l.result === 'block' ? <Badge tone="bad">已拦截</Badge> : l.result === 'mask' ? <Badge tone="warn">已脱敏</Badge> : <Badge tone="good">正常</Badge>,
+                l.result === 'block' ? <AlertBadge tone="bad" jump={Jump.agent(l.agent, '这次拦截的调用出自这个应用：点过去看这一行（分析后限流 / 暂停）')}>已拦截</AlertBadge> : l.result === 'mask' ? <AlertBadge tone="warn" jump={Jump.agent(l.agent, '这条输出被脱敏：点过去看这个应用那一行复核策略')}>已脱敏</AlertBadge> : <Badge tone="good">正常</Badge>,
               ])}
             />
           </div>
@@ -108,7 +113,7 @@ export default function AppAgents() {
               ['访问鉴权', 'Web / 嵌入页 / API 三方式均鉴权', <Badge tone="good">已启用</Badge>],
             ]}
           />
-          <Callout warn text="调用突增告警：咨询问答助手 21:36 每分钟调用量达阈值 6 倍，已自动分级告警并关联调用主体、来源 IP 与凭证。" />
+          <Callout warn jump={Jump.agent('咨询问答助手', '点过去看这个应用那一行：限流 / 暂停 / 回滚都在那一行做')} text="调用突增告警：咨询问答助手 21:36 每分钟调用量达阈值 6 倍，已自动分级告警并关联调用主体、来源 IP 与凭证。" />
         </Panel>
       </div>
 

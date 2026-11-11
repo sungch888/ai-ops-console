@@ -6,12 +6,21 @@
  * 本页：卡级只读展示 + 触阈值卡送例外监控；处置手段是限流来源或回收空闲卡位。
  * ===================================================================== */
 import { useEffect, useState } from 'react'
-import { Badge, Callout, Kpi, PageHead, Panel, Progress, Table } from '../../components/ui'
+import { Link } from 'react-router-dom'
+import { Badge, AlertBadge, Callout, Kpi, PageHead, Panel, Progress, Table } from '../../components/ui'
 import { npuCards, sourceHint, telemetryStatus, telemetryStore, type NpuCard } from '../../engine/telemetry'
 import { TOTAL_CARDS, poolFree, poolUtil, useEngine } from '../../engine/engine'
 import { monitorStore } from '../../engine/exceptions'
 import { monitorStore as probeStore, sampleTime, useMonitor } from '../../engine/monitor'
 import { usePerm } from '../../engine/auth'
+import { Jump, alertHref, useAlertPick, usePickFlash, type AlertJump } from '../../engine/alertJump'
+
+/* 卡位口径（与 Jump.card 同一主键）：点任一红/黄卡级提示 = 落到卡明细那一行 */
+const cardJump = (c: NpuCard): AlertJump =>
+  Jump.card(c.id, `去卡明细看这张卡（${c.id} · ${c.node} · ${c.service}）`)
+/* 资源池口径（与总览 / 算力总览 / 资源池页同一套） */
+const poolJump = (id: string, label = '去资源池看这个池并处理卡位'): AlertJump =>
+  ({ page: '/compute/schedule', pick: `pool-${id}`, label })
 
 /* 触阈值口径（与例外监控「资源异常」规则一致） */
 const UTIL_MAX = 92
@@ -23,6 +32,11 @@ const CARD_TONE: Record<'ok' | 'warn' | 'fault', 'good' | 'warn' | 'bad'> = { ok
 const CARD_TEXT: Record<'ok' | 'warn' | 'fault', string> = { ok: '正常', warn: '阈值附近', fault: '掉卡 / 隔离' }
 const NODE_TONE: Record<'ok' | 'warn' | 'fault', 'good' | 'warn' | 'bad'> = { ok: 'good', warn: 'warn', fault: 'bad' }
 const NODE_TEXT: Record<'ok' | 'warn' | 'fault', string> = { ok: '节点正常', warn: '节点阈值附近', fault: '节点隔离中' }
+/** 同一组卡里最该处理的那一张（掉卡 > 阈值附近 > 利用率最高） */
+const worstOf = (list: NpuCard[]) => {
+  const rank = (c: NpuCard) => (c.health === 'fault' ? 0 : c.health === 'warn' ? 1 : 2)
+  return list.slice().sort((a, b) => rank(a) - rank(b) || b.util - a.util)[0]
+}
 
 export default function ComputeCards() {
   const st = useEngine()
@@ -30,6 +44,8 @@ export default function ComputeCards() {
   const [nonce, setNonce] = useState(0)
   const mon = useMonitor()
   const [msg, setMsg] = useState<{ tone: 'good' | 'bad'; text: string } | null>(null)
+  const pick = useAlertPick()          // 任何红 / 黄卡级告警跳进来：?pick=<卡位主键>
+  usePickFlash(pick)
 
   /* 采集层落数后自动切「采集层」：订阅一次刷新，不改采集层代码 */
   useEffect(() => telemetryStore.subscribe(() => setNonce((n) => n + 1)), [])
@@ -76,7 +92,7 @@ export default function ComputeCards() {
         extra={
           <>
             <Badge tone="good">在线卡 {online} / {localTotal}</Badge>
-            <Badge tone={alerts.length ? 'warn' : 'muted'}>告警卡 {alerts.length}</Badge>
+            {alerts.length ? <AlertBadge tone="warn" jump={cardJump(alerts[0].c)}>告警卡 {alerts.length}</AlertBadge> : <Badge tone="muted">告警卡 0</Badge>}
             <Badge tone={tel.mode === '采集层' ? 'purple' : 'info'}>取数来源：{tel.mode}</Badge>
             <button className="btn sm ghost" onClick={() => setNonce((n) => n + 1)}>重取一次</button>
           </>
@@ -85,6 +101,7 @@ export default function ComputeCards() {
 
       <Callout
         warn
+        jump={Jump.connector('p-cmdb', '未纳管设备与账实差异：去外部对接清单启用 CMDB 台账比对这条接入')}
         text={
           <>
             <span className="strong">物理卡与池化分配是两本账：</span>
@@ -97,7 +114,7 @@ export default function ComputeCards() {
       <div className="grid g-6 mt14">
         <Kpi label="卡总数（本页卡表）" value={localTotal} unit="张" foot={`节点侧计数 · 平台登记 ${TOTAL_CARDS} 卡`} />
         <Kpi label="在线卡" value={online} unit="张" foot={`隔离 / 掉卡 ${localTotal - online} 张`} />
-        <Kpi label="告警卡" value={alerts.length} unit="张" foot={`利用率 >${UTIL_MAX}% 或 温度 ≥${TEMP_MAX}℃ 或 HBM >${HBM_MAX}% 或 fault`} />
+        <Kpi label="告警卡" value={alerts.length} unit="张" foot={`利用率 >${UTIL_MAX}% 或 温度 ≥${TEMP_MAX}℃ 或 HBM >${HBM_MAX}% 或 fault`} jump={alerts.length ? cardJump(alerts[0].c) : undefined} />
         <Kpi label="平均利用率" value={avgUtil} unit="%" foot={`高保 ${poolUtil(st, 'hp')}% · 共享 ${poolUtil(st, 'shared')}% · 训练 ${poolUtil(st, 'train')}%`} />
         <Kpi label="HBM 平均占用率" value={avgHbm} unit="%" foot="单卡显存容量按采集字段计（不可采集时留空）" />
         <Kpi label="集群总功耗" value={totalPower.toLocaleString('zh-CN')} unit="W" foot="按卡位 power 求和 · 未接采集层时为推导值" />
@@ -111,25 +128,23 @@ export default function ComputeCards() {
                 <span className="strong small">{n.name}</span>
                 <span className="tag gray">{n.model}</span>
                 <span className="tag gray">{n.poolName}</span>
-                <Badge tone={NODE_TONE[n.health]}>{NODE_TEXT[n.health]}</Badge>
+                {n.health === 'ok' ? <Badge tone="good">{NODE_TEXT[n.health]}</Badge> : <AlertBadge tone={n.health === 'fault' ? 'bad' : 'warn'} jump={cardJump(worstOf(n.list))}>{NODE_TEXT[n.health]}</AlertBadge>}
                 <span className="tiny faint">{n.list.length} 卡</span>
               </div>
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(8, 1fr)', gap: 6 }}>
                 {n.list.map((c, i) => {
                   const hbm = hbmOf(c)
-                  return (
-                    <div
-                      key={c.id}
-                      title={`${c.id} · ${c.node} · ${c.model} · ${c.poolName}\n利用率 ${c.util}% · HBM ${c.hbmUsed}/${c.hbmTotal}GB（${hbm}%）\n温度 ${c.temp}℃ · 功耗 ${c.power}W\n承载服务：${c.service} · ECC 可纠正错误 ${c.eccErrors} 条 · ${CARD_TEXT[c.health]}`}
-                      style={{
-                        minWidth: 40, background: cellBg(c), borderRadius: 7, padding: '6px 4px',
-                        textAlign: 'center', fontSize: 11, lineHeight: 1.4, color: '#e8f2ff',
-                        border: c.health === 'fault' ? '1px solid rgba(var(--red-rgb), .55)' : '1px solid rgba(160,205,255,.14)',
-                      }}
-                    >
-                      <div style={{ opacity: 0.8 }}>卡{i + 1}</div>
-                      <div className="num strong">{c.health === 'fault' ? '隔离' : `${c.util}%`}</div>
-                    </div>
+                  const hot = c.health === 'fault' || c.util > 85
+                  const tip = `${c.id} · ${c.node} · ${c.model} · ${c.poolName}\n利用率 ${c.util}% · HBM ${c.hbmUsed}/${c.hbmTotal}GB（${hbm}%）\n温度 ${c.temp}℃ · 功耗 ${c.power}W\n承载服务：${c.service} · ECC 可纠正错误 ${c.eccErrors} 条 · ${CARD_TEXT[c.health]}`
+                  const cellStyle = { minWidth: 40, background: cellBg(c), borderRadius: 7, padding: '6px 4px', textAlign: 'center' as const, fontSize: 11, lineHeight: 1.4, color: '#e8f2ff', border: c.health === 'fault' ? '1px solid rgba(var(--red-rgb), .55)' : '1px solid rgba(160,205,255,.14)' }
+                  const inner = (<>
+                    <div style={{ opacity: 0.8 }}>卡{i + 1}</div>
+                    <div className="num strong">{c.health === 'fault' ? '隔离' : `${c.util}%`}</div>
+                  </>)
+                  return hot ? (
+                    <Link key={c.id} className="alert-jump" to={alertHref(cardJump(c))} title={`${tip}\n点击直达这张卡的卡明细那一行`} style={cellStyle}>{inner}</Link>
+                  ) : (
+                    <div key={c.id} title={tip} style={cellStyle}>{inner}</div>
                   )
                 })}
               </div>
@@ -150,7 +165,7 @@ export default function ComputeCards() {
               <span className="tag gray">{c.model}</span>,
               <span className="small">{c.poolName}</span>,
               <div style={{ minWidth: 120 }}>
-                <Progress value={c.util} tone={c.util > UTIL_MAX ? 'bad' : c.util > 85 ? 'warn' : ''} />
+                <Progress value={c.util} tone={c.util > UTIL_MAX ? 'bad' : c.util > 85 ? 'warn' : ''} jump={c.util > 85 ? cardJump(c) : undefined} />
                 <span className="tiny faint num">{c.util}%</span>
               </div>,
               <div className="small num">{c.hbmUsed}/{c.hbmTotal}GB<div className="tiny faint">{hbmPct}%</div></div>,
@@ -158,8 +173,9 @@ export default function ComputeCards() {
               <span className="num">{c.power} W</span>,
               <span className={`num ${c.eccErrors >= ECC_MAX ? 'strong' : 'faint'}`}>{c.eccErrors}</span>,
               <span className="small">{c.service}</span>,
-              <Badge tone={CARD_TONE[c.health]}>{CARD_TEXT[c.health]}</Badge>,
+              c.health === 'ok' ? <Badge tone="good">{CARD_TEXT[c.health]}</Badge> : <AlertBadge tone={c.health === 'fault' ? 'bad' : 'warn'} jump={cardJump(c)}>{CARD_TEXT[c.health]}</AlertBadge>,
             ])}
+            rowKeys={rows.map((r) => r.c.id)} pick={pick}
           />
         </div>
       </Panel>
@@ -196,7 +212,7 @@ export default function ComputeCards() {
                 <div className="row gap6" style={{ flexWrap: 'wrap' }}>
                   <span className="mono small strong">{c.id}</span>
                   <span className="tag gray">{c.node}</span>
-                  <Badge tone={CARD_TONE[c.health]}>{CARD_TEXT[c.health]}</Badge>
+                  {c.health === 'ok' ? <Badge tone="good">{CARD_TEXT[c.health]}</Badge> : <AlertBadge tone={c.health === 'fault' ? 'bad' : 'warn'} jump={cardJump(c)}>{CARD_TEXT[c.health]}</AlertBadge>}
                   <span className="small">{c.service}</span>
                 </div>
                 <div className="tiny faint" style={{ marginTop: 4 }}>触阈值原因：{reasons.join(' · ')}</div>
@@ -223,7 +239,7 @@ export default function ComputeCards() {
                 <span className="num">{p.cards - free}</span>,
                 <span className="num">{free}</span>,
                 <span className="num">{util}%</span>,
-                <div style={{ minWidth: 140 }}><Progress value={util} tone={util > 92 ? 'bad' : util > 85 ? 'warn' : ''} /></div>,
+                <div style={{ minWidth: 140 }}><Progress value={util} tone={util > 92 ? 'bad' : util > 85 ? 'warn' : ''} jump={util > 85 ? poolJump(p.id, `看「${p.name}」的卡位与扩缩队列`) : undefined} /></div>,
                 <span className="num">{inCardTable}</span>,
               ]
             })}
@@ -247,8 +263,7 @@ export default function ComputeCards() {
               <span className="num">{hint.every}</span>,
               <span className="mono small">{hint.file}</span>,
               <span className="num">{tel.sources.find((s) => s.id === 'npu')?.items ?? hint.status.items}</span>,
-              <Badge tone={hint.status.ok ? 'good' : 'bad'}>{hint.status.ok ? '可用' : '取数失败'}</Badge>,
-            ]]}
+              hint.status.ok ? <Badge tone="good">{hint.status.ok ? '可用' : '取数失败'}</Badge> : <AlertBadge tone="bad" jump={Jump.settings('cards', '卡指标取数失败：去配置中心的采集源面板看「算力卡」这条采集配置')}>取数失败</AlertBadge>,            ]]}
           />
           <div className="row gap6" style={{ flexWrap: 'wrap', marginTop: 10 }}>
             <span className="small faint">采集字段：</span>
@@ -283,12 +298,12 @@ export default function ComputeCards() {
             <Table minWidth={1100} head={['卡（实连）', '所在节点', '利用率', '显存占用', '温度', '功耗', '主机侧 CPU / 内存', '健康 / 说明']} rows={mon.cards.map((c) => [
               <span className="small strong">{c.model || '未标注卡型'}<div className="tiny mono faint">{c.id}</div></span>,
               <span className="tiny">{c.node}</span>,
-              <span>{c.util_pct === null ? <span className="tiny faint">对方未开放</span> : (<><span className="num small">{c.util_pct}%</span><Progress value={Number(c.util_pct)} tone={c.util_pct > UTIL_MAX ? 'warn' : ''} /></>)}</span>,
+              <span>{c.util_pct === null ? <span className="tiny faint">对方未开放</span> : (<><span className="num small">{c.util_pct}%</span><Progress value={Number(c.util_pct)} tone={c.util_pct > UTIL_MAX ? 'warn' : ''} jump={c.util_pct > UTIL_MAX ? Jump.monitorTarget(c.target, `去推理服务监控看这条探针目标（${c.target}）的采集与阈值`) : undefined} /></>)}</span>,
               <span>{c.mem_used_mib === null || c.mem_total_mib === null ? <span className="tiny faint">对方未开放</span> : (<><span className="num small">{Math.round(c.mem_used_mib)} / {Math.round(c.mem_total_mib)} MiB</span><Progress value={(c.mem_used_mib / c.mem_total_mib) * 100} tone="green" /></>)}</span>,
-              <span className="num small">{c.temp_c === null ? <span className="tiny faint">对方未开放</span> : (<>{c.temp_c} ℃{c.temp_c > TEMP_MAX ? <Badge tone="warn">超阈值</Badge> : null}</>)}</span>,
+              <span className="num small">{c.temp_c === null ? <span className="tiny faint">对方未开放</span> : (<>{c.temp_c} ℃{c.temp_c > TEMP_MAX ? <AlertBadge tone="warn" jump={Jump.monitorTarget(c.target, `去推理服务监控看这条探针目标（${c.target}）：温度超阈`)}>超阈值</AlertBadge> : null}</>)}</span>,
               <span className="num small">{c.power_w === null ? <span className="tiny faint">对方未开放</span> : `${c.power_w} W`}</span>,
               <span className="tiny">{c.cpu_pct === null || c.ram_used_mib === null || c.ram_total_mib === null ? <span className="tiny faint">对方未开放</span> : `${c.cpu_pct}% / ${Math.round(c.ram_used_mib)} / ${Math.round(c.ram_total_mib)} MiB`}</span>,
-              <span>{c.health === 'ok' ? <Badge tone="good">正常</Badge> : c.health === 'unknown' ? <Badge tone="muted">无卡指标</Badge> : <Badge tone="warn">要注意</Badge>}<div className="tiny faint" style={{ maxWidth: 280 }}>{c.note}</div></span>,
+              <span>{c.health === 'ok' ? <Badge tone="good">正常</Badge> : c.health === 'unknown' ? <Badge tone="muted">无卡指标</Badge> : <AlertBadge tone="warn" jump={Jump.monitorTarget(c.target, `去推理服务监控看这条探针目标（${c.target}）：${c.note || '卡指标要注意'}`)}>要注意</AlertBadge>}<div className="tiny faint" style={{ maxWidth: 280 }}>{c.note}</div></span>,
             ])} />
           )}
           <div className="tiny faint" style={{ marginTop: 8 }}>

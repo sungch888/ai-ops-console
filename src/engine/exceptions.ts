@@ -5,14 +5,16 @@
  *          资源本身不停、不回收、不下线；要动资源走「资源侧缓解」并进变更窗口。
  * ===================================================================== */
 import { useSyncExternalStore } from 'react'
-import { engine, poolUtil, totalReplicas, rentInfo, DIRECTORY_KINDS, type EngineState } from './engine'
+import { engine, poolUtil, totalReplicas, rentInfo, type EngineState } from './engine'
 import { connectorStore, llmChannelConfig, LLM_CHANNEL_ID, RENT_ID } from './connectors'
 import { governViews } from './govern'
 import { containersOf } from './inference'
 import { ledgerOf } from './ledger'
 import { rectifyStore } from './rectify'
+import { notifyStore } from './ops'
 import { PROBE_IDS, PROBE_LABEL } from './connectors'
 import { dbRead, dbWrite, dbSeed } from './db'
+import { ContainKind, ContainAction, ManagedStatus, DIRECTORY_KINDS } from './types'
 
 
 export type ExcKind = '旁路接入' | '旁路调用' | '接管缺口' | '资源异常' | '配额越界' | '目录不一致'
@@ -92,6 +94,13 @@ function emit() { cache = null; cache2 = null; listeners.forEach((l) => l()) }
 const callsNum = (s: string) => (s.includes('万') ? Math.round(parseFloat(s) * 10000) : parseInt(s.replace(/[^\d]/g, ''), 10) || 0)
 const key = (kind: ExcKind, target: string) => `${kind}|${target}`
 
+/** 泛型检测器：遍历 items；fn 返回 null 表示该项不构成例外 */
+function detect<T>(items: T[], fn: (item: T) => ExceptionRec | null): ExceptionRec[] {
+  const out: ExceptionRec[] = []
+  for (const item of items) { const r = fn(item); if (r) out.push(r) }
+  return out
+}
+
 /** 消耗来源归因：要切哪里的接入，靠这几条线索定位 */
 function topConsumers(st: EngineState) {
   const L = ledgerOf(st)
@@ -135,14 +144,26 @@ function consumerSources(st: EngineState): ExcSource[] {
   return out
 }
 
-/* ---------- 规则扫描 ---------- */
-export function scan(st: EngineState = engine.get()): ExceptionRec[] {
-  const out: ExceptionRec[] = []
-  const connectors = connectorStore.get()
+/* ---------- 规则扫描：按例外类型拆成 6 个独立检测函数 ---------- */
 
-  // 1) 旁路接入
-  for (const c of connectors) {
-    if (!c.enabled) continue
+/** 流量探针检出的未登记直连（探针未接入时不产出，接上配置就有） */
+interface ProbeHit { ip: string; sev: ExcSeverity; detail: string; item: string }
+const FLOW_PROBE_HITS: ProbeHit[] = [
+  { ip: '10.42.7.18', sev: '紧急', detail: '与高保推理节点建立 6 卡会话 · 持续 41 分钟 · 不在入网白名单', item: '卡位会话 6 条 · 端口 8000 / 8010' },
+  { ip: '10.42.9.77', sev: '高', detail: '以非常规端口 8501 直连共享推理集群 · 24 小时内 187 次 · 不在入网白名单', item: '端口 8501 · 请求 187 次' },
+]
+/** 已启用且健康的探针 */
+function activeProbes() {
+  return connectorStore.get().filter((c) => PROBE_IDS.includes(c.id) && c.enabled && c.health !== 'fault')
+}
+
+/** 1) 旁路接入：通道未确认即启用 / 探针检出未登记直连 / 未纳管调用来源 */
+function detectBypassAccess(st: EngineState): ExceptionRec[] {
+  const out: ExceptionRec[] = []
+
+  // 1a) 接入通道未确认前置条件即启用
+  out.push(...detect(connectorStore.get(), (c) => {
+    if (!c.enabled) return null
     const missPrereq = c.prereq.filter((p) => !c.prereqDone.includes(p))
     const noAddr = c.endpoint === '（未填）'
     const sharedAuth = c.auth.includes('共享账号') || c.auth === '无需鉴权'
@@ -151,8 +172,8 @@ export function scan(st: EngineState = engine.get()): ExceptionRec[] {
     const depends = connectorStore.dependentsOf(c.id)
     const orphan = depends.length === 0
     const severity: ExcSeverity = unregistered || sharedAuth || (isResource && noAddr) ? '紧急' : c.mode === 'real' && noAddr ? '高' : '中'
-    if (!(unregistered || sharedAuth || (isResource && noAddr) || (c.mode === 'real' && noAddr) || (c.prereqDone.length === 0 && orphan))) continue
-    out.push({
+    if (!(unregistered || sharedAuth || (isResource && noAddr) || (c.mode === 'real' && noAddr) || (c.prereqDone.length === 0 && orphan))) return null
+    return {
       key: key('旁路接入', c.id), kind: '旁路接入', target: c.name, owner: c.owner, severity, active: true, ref: { connectorId: c.id },
       title: depends.some((d) => d.includes('未登记')) ? '疑似未登记的算力直连接入' : `接入通道未确认前置条件即启用：${c.name}`,
       evidence: [
@@ -172,14 +193,63 @@ export function scan(st: EngineState = engine.get()): ExceptionRec[] {
         { action: 'credential_revoke', label: '吊销这条接入在用的凭证', detail: '若它通过凭证调用外部资源，先吊销凭证切断调用链路', kind: '阻断接入' },
       ],
       mitigations: [{ action: 'guide', label: '补齐前置条件后再接入', detail: '在外部接入配置中心确认接口状态、填地址、勾选前置条件，就绪后重新启用这条配置', kind: '整改引导' }],
-    })
+    }
+  }))
+
+  // 1b) 流量探针检出的未登记直连
+  const node = connectorStore.find('n-node')
+  const flowProbe = activeProbes().find((p) => p.id === 'p-flow')
+  if (flowProbe && node) {
+    out.push(...detect(FLOW_PROBE_HITS, (h) => ({
+      key: key('旁路接入', `probe-flow-${h.ip}`), kind: '旁路接入', target: `流量探针检出 · ${h.ip}`, owner: '网运 + 信息化管理部', severity: h.sev, active: true, ref: { connectorId: node.id },
+      title: `未登记来源直连算力节点：${h.ip}`,
+      evidence: [`数据来源：${PROBE_LABEL[flowProbe.id]}（${flowProbe.name} · ${flowProbe.transport} · 每 ${flowProbe.intervalSec} 秒）`, h.item, h.detail, `入网通道：${node.name} · 该来源不在入网白名单`],
+      impact: '该来源在平台审批与凭证体系之外使用算力，卡位与成本无法归口，处置指令也下不去',
+      sources: [
+        { label: `来源 IP ${h.ip}`, from: '流量探针', detail: h.detail },
+        { label: `入网通道 ${node.name}`, from: '外部接入配置中心', detail: `${node.transport} · ${node.endpoint} · 可按来源 IP 部分阻断` },
+      ],
+      options: [
+        { action: 'access_block', label: `按来源 IP 部分阻断（${h.ip}）`, detail: `只切断 ${h.ip} 的入网会话；节点其余访问、采集与业务不受影响`, kind: '阻断接入' },
+        { action: 'credential_revoke', label: '吊销该来源可能借用的凭证', detail: '若该来源借用了平台代理凭证调用，从调用侧一起切断', kind: '阻断接入' },
+      ],
+      mitigations: [
+        { action: 'access_block', label: '全通道阻断入网通道（范围最大）', detail: `整条 ${node.name} 停止，节点对外访问全停：仅在探针确认大面积直连时使用`, kind: '资源侧缓解' },
+        { action: 'guide', label: '交换机 / 防火墙 ACL 由网运执行并回执', detail: '平台侧阻断之外，网络侧策略要网运下发并回执行动结果', kind: '整改引导' },
+      ],
+    })))
   }
 
-  // 2) 旁路调用
-  for (const m of st.managed) {
-    if (m.status !== '暂停' && m.status !== '隔离' && m.status !== '禁用') continue
-    if (callsNum(m.calls) <= 0) continue
-    out.push({
+  // 1c) 未纳管调用来源（台账有调用量，纳管目录里没有）
+  out.push(...detect(unmanagedConsumers(st).slice(0, 2), (a) => {
+    const cred = st.creds.find((c) => c.status !== 'off' && overlap(c.app, a.name) >= 3)
+    return {
+      key: key('旁路接入', `unmanaged-${a.name}`), kind: '旁路接入', target: `未纳管调用来源「${a.name}」`, owner: cred?.holder ?? '归口待定', severity: '高', active: true,
+      ref: cred ? { credId: cred.id } : undefined,
+      title: `调用台账有量但不在纳管目录：${a.name}`,
+      evidence: [`资源账本统计：${a.calls.toLocaleString('zh-CN')} 次/日 · 成本 ${a.cost.toLocaleString('zh-CN')} 元`, '统一纳管目录（知识库 / 智能体 / MCP / 插件 / Skill）里没有同名对象', cred ? `可疑调用凭证：${cred.id} · ${cred.holder} · ${cred.rpm} RPM · 渠道 ${cred.channel}` : '未匹配到凭证，需从网关侧核对来源'],
+      impact: '这部分调用没有归口、没有纳管状态，也不受处置动作覆盖，属于运行侧旁路',
+      sources: [
+        { label: `调用来源「${a.name}」`, from: '台账与纳管目录比对', detail: `${a.calls.toLocaleString('zh-CN')} 次/日 · 不在纳管目录` },
+        ...(cred ? [{ label: `凭证 ${cred.id}`, from: '凭证归因', detail: `${cred.holder} · ${cred.app} · ${cred.rpm} RPM` }] : []),
+      ],
+      options: cred ? [
+        { action: 'credential_revoke', label: `吊销该来源在用的凭证 ${cred.id}`, detail: '从调用侧切断这条未纳管调用；模型与卡位不受影响，须通知使用方', kind: '阻断接入' },
+        { action: 'quota_adjust', label: `限流该凭证到 ${CRED_CAP[cred.kind] ?? 400} RPM 内`, detail: '不吊销，先压住用量，给归口登记留出时间', kind: '阻断接入' },
+      ] : [],
+      mitigations: [{ action: 'guide', label: '纳入纳管目录并指定归口', detail: '在应用中心登记该应用与归口，纳管后例外监控才能对它做处置', kind: '整改引导' }],
+    }
+  }))
+
+  return out
+}
+
+/** 2) 旁路调用：已隔离对象仍在被调用 */
+function detectBypassCall(st: EngineState): ExceptionRec[] {
+  return detect(st.managed, (m) => {
+    if (m.status !== '暂停' && m.status !== '隔离' && m.status !== '禁用') return null
+    if (callsNum(m.calls) <= 0) return null
+    return {
       key: key('旁路调用', m.id), kind: '旁路调用', target: m.name, owner: m.owner, severity: '紧急', active: true, ref: { managedId: m.id },
       title: `${m.kind}「${m.name}」已置为 ${m.status} 但仍有调用量`,
       evidence: [`纳管状态：${m.status}`, `调用量：${m.calls}`, `成功率 ${m.success}% · 失败率 ${m.failRate}%`, DIRECTORY_KINDS.includes(m.kind) ? `目录状态：技术注册目录${m.tech ? '在架' : '已摘除'} / 业务使用目录${m.biz ? '在架' : '已摘除'}` : '不在双目录范围'],
@@ -193,14 +263,19 @@ export function scan(st: EngineState = engine.get()): ExceptionRec[] {
         { action: 'credential_revoke', label: '吊销仍在调用它的凭证', detail: '切断旁路调用所用的调用凭证，作为目录之外的兜底', kind: '阻断接入' },
       ],
       mitigations: [{ action: 'guide', label: '与归口核对旁路入口在哪', detail: '若旁路是应用直连或缓存路由，需归口确认后在应用侧关闭入口', kind: '整改引导' }],
-    })
-  }
+    }
+  })
+}
 
-  // 3) 接管缺口
-  for (const g of governViews()) {
-    if (g.domain !== '算力平台' && g.domain !== '算力资源') continue
-    if (g.depth >= 4) continue
-    out.push({
+/** 3) 接管缺口：算力资源未彻底接管 / 探针检出的未纳管设备与账实差异 */
+function detectTakeoverGap(st: EngineState): ExceptionRec[] {
+  const out: ExceptionRec[] = []
+
+  // 3a) 登记对象的接管深度不足
+  out.push(...detect(governViews(), (g) => {
+    if (g.domain !== '算力平台' && g.domain !== '算力资源') return null
+    if (g.depth >= 4) return null
+    return {
       key: key('接管缺口', g.id), kind: '接管缺口', target: g.name, owner: g.owner, severity: g.depth === 1 ? '高' : '中', active: true,
       title: `${g.domain}「${g.name}」未彻底接管（当前 ${g.depth} 级）`,
       evidence: [`当前深度 L${g.depth}（目标 L4 可调度）`, g.why, `接入配置：${g.connectorName} · ${g.mode}`, `规模：${g.scale}${g.cards ? ` · ${g.cards} 卡` : ''}`],
@@ -208,16 +283,56 @@ export function scan(st: EngineState = engine.get()): ExceptionRec[] {
       sources: [{ label: `接入配置 ${g.connectorName}`, from: '外部接入配置中心', detail: `${g.mode} · 就绪程度决定接管深度` }, { label: `登记对象 ${g.name}`, from: '统一接管登记册', detail: `归口 ${g.owner} · 密级 ${g.cls}` }],
       options: [{ action: 'containment', label: '先停该对象的对外调用入口', detail: '接管未到位前按最小权限先停调用（须归口确认）；资源本身继续运行', kind: '阻断接入' }],
       mitigations: [{ action: 'guide', label: '补齐接入升到 L4', detail: '在接入配置中心确认为「已定」、填地址、勾选执行回执类前置条件，深度自动升到 L4', kind: '整改引导' }],
+    }
+  }))
+
+  // 3b) Syslog 检出的机房未纳管设备
+  const node = connectorStore.find('n-node')
+  const syslogProbe = activeProbes().find((p) => p.id === 'p-syslog')
+  if (syslogProbe && node) {
+    out.push({
+      key: key('接管缺口', 'probe-syslog'), kind: '接管缺口', target: '机房未纳管 GPU 设备（Syslog 检出）', owner: '机房运维 + 厂商', severity: '高', active: true, ref: { connectorId: node.id },
+      title: '机房侧发现 2 台未纳管 GPU 设备',
+      evidence: [`数据来源：${PROBE_LABEL[syslogProbe.id]}（${syslogProbe.name}）`, '设备：昇腾 910B ×2 · 序列号 910B-2431 / 2432', '位置：B3 机柜 12 / 13 槽位 · 上电时间 10-31 21:40', '带外管理地址 10.43.9.21 / 10.43.9.22（不在入网白名单）'],
+      impact: '8 卡算力在平台账本之外运行：既不计成本也不受处置，卡位统计与例外监控都覆盖不到',
+      sources: [
+        { label: '设备 Syslog 上报', from: '机房设备', detail: '上电入网事件与设备序列号 · 每 120 秒批量' },
+        { label: `入网通道 ${node.name}`, from: '外部接入配置中心', detail: '带外地址不在白名单，可先按来源 IP 部分阻断' },
+      ],
+      options: [{ action: 'access_block', label: '按来源 IP 部分阻断（10.43.9.21）', detail: '先切断带外管理地址的访问，防止未经审批的配置变更；设备侧下电要机房执行', kind: '阻断接入' }],
+      mitigations: [{ action: 'guide', label: '补登记并纳入接管（登记 → 配接入 → 升到 L4）', detail: '在统一接管登记册新增这两台设备并绑定接入配置，走就绪门禁', kind: '整改引导' }],
     })
   }
 
-  // 4) 资源异常：切来源，不动资源
-  for (const p of st.pools) {
+  // 3c) CMDB 台账与平台账本差卡
+  const cmdbProbe = activeProbes().find((p) => p.id === 'p-cmdb')
+  if (cmdbProbe) {
+    out.push({
+      key: key('接管缺口', 'probe-cmdb'), kind: '接管缺口', target: 'CMDB 台账与平台账本差 6 卡', owner: '客户方侧 + 信息化管理部', severity: '高', active: true,
+      title: '资产台账 94 卡 · 平台账本 88 卡 · 差 6 卡（3 台设备）',
+      evidence: [`数据来源：${PROBE_LABEL[cmdbProbe.id]}（${cmdbProbe.name} · ${cmdbProbe.transport}）`, '台账有 / 平台无：910B-1102（2 卡）、910B-1147（2 卡）、T4-0310（2 卡）', '平台有 / 台账无：无', '对账口径待客户方确认（按序列号还是按机柜位）'],
+      impact: '卡位总量与成本对不上：扩容审批依据失真，退役设备可能仍在通电',
+      sources: [{ label: 'CMDB 卡位台账', from: 'CMDB 视图', detail: '94 卡 · 3 台设备无对应平台账本记录' }, { label: '平台资源账本', from: '统一资源账本', detail: '88 卡 · 全部有纳管模型或任务占用' }],
+      options: [],
+      mitigations: [{ action: 'guide', label: '逐台核对：纳管 / 退役 / 移出机房', detail: '三台设备分别确认归属：纳管的补登记与接入配置，退役的出机房并留处置记录', kind: '整改引导' }],
+    })
+  }
+
+  return out
+}
+
+/** 4) 资源异常：切来源，不动资源（池吃紧 / 渠道异常 / 超额扩租 / 容器重启） */
+function detectResourceAnomaly(st: EngineState): ExceptionRec[] {
+  const out: ExceptionRec[] = []
+  const connectors = connectorStore.get()
+
+  // 4a) 算力池利用率吃紧
+  out.push(...detect(st.pools, (p) => {
     const u = poolUtil(st, p.id)
-    if (u < 92) continue
+    if (u < 92) return null
     const { creds } = topConsumers(st)
     const managedTop = topManagedConsumer(st)
-    out.push({
+    return {
       key: key('资源异常', `pool-${p.id}`), kind: '资源异常', target: p.name, owner: '信息化管理部', severity: u >= 98 ? '紧急' : '高', active: true,
       ref: { ...(creds[0] ? { credId: creds[0].id } : {}), ...(managedTop ? { managedId: st.managed.find((m) => m.name === managedTop.name)?.id ?? '' } : {}) },
       title: `${p.name} 卡位利用率 ${u}%`,
@@ -237,12 +352,14 @@ export function scan(st: EngineState = engine.get()): ExceptionRec[] {
         { action: 'pool_release', label: '回收训练池卡位补高保', detail: '资源侧缓解：走回收工单并在变更窗口内执行，不属于阻断', kind: '资源侧缓解' },
         { action: 'preempt', label: '高保优先抢占', detail: '资源侧缓解：按等级抢占共享 / 灰度卡位，被抢占方自动通知', kind: '资源侧缓解' },
       ],
-    })
-  }
-  for (const c of st.channels) {
-    if (c.health !== 'fault' && c.err < 4) continue
+    }
+  }))
+
+  // 4b) 推理渠道异常
+  out.push(...detect(st.channels, (c) => {
+    if (c.health !== 'fault' && c.err < 4) return null
     const users = st.creds.filter((x) => x.status !== 'off' && x.channel === c.id).slice(0, 2)
-    out.push({
+    return {
       key: key('资源异常', `ch-${c.id}`), kind: '资源异常', target: c.name, owner: c.kind === '本地' ? '信息化管理部' : '外部厂商', severity: c.health === 'fault' ? '高' : '中', active: true,
       ref: c.kind === '外部' ? { connectorId: LLM_CHANNEL_ID } : (users[0] ? { credId: users[0].id } : undefined),
       title: `推理渠道异常：${c.name}`,
@@ -262,8 +379,10 @@ export function scan(st: EngineState = engine.get()): ExceptionRec[] {
         { action: 'rollback', label: '回滚最近一次路由 / 副本变更', detail: '资源侧缓解：把渠道配置恢复到变更前快照', kind: '资源侧缓解' },
         { action: 'guide', label: '下调异常渠道权重并回切本地渠道', detail: '在推理网关做权重调整（走变更窗口），不属于阻断', kind: '整改引导' },
       ],
-    })
-  }
+    }
+  }))
+
+  // 4c) 外部扩租超额
   const rent = rentInfo(st)
   if (rent.used > rent.quota) {
     const live = connectors.filter((c) => c.kind === '外部算力资源' && c.enabled)
@@ -281,6 +400,8 @@ export function scan(st: EngineState = engine.get()): ExceptionRec[] {
       ],
     })
   }
+
+  // 4d) 推理容器重启
   const restarted = containersOf(st).filter((c) => c.restarts > 0)
   if (restarted.length) {
     out.push({
@@ -301,11 +422,18 @@ export function scan(st: EngineState = engine.get()): ExceptionRec[] {
     })
   }
 
-  // 5) 配额越界
-  for (const c of st.creds) {
+  return out
+}
+
+/** 5) 配额越界：凭证 RPM 超上限 / 外部 Token 超配额 */
+function detectQuotaOverrun(st: EngineState): ExceptionRec[] {
+  const out: ExceptionRec[] = []
+
+  // 5a) 单凭证 RPM 超上限
+  out.push(...detect(st.creds, (c) => {
     const cap = CRED_CAP[c.kind] ?? 400
-    if (c.rpm <= cap) continue
-    out.push({
+    if (c.rpm <= cap) return null
+    return {
       key: key('配额越界', c.id), kind: '配额越界', target: `${c.holder} · ${c.id}`, owner: c.holder, severity: '高', active: true, ref: { credId: c.id },
       title: `凭证 ${c.id} 配额 ${c.rpm} RPM 超上限 ${cap} RPM`,
       evidence: [`凭证类型：${c.kind}`, `配额 ${c.rpm} RPM · 上限 ${cap} RPM`, `IP 白名单 ${c.ip}`, `最近使用 ${c.lastUsedDays} 天前 · 状态 ${c.status === 'off' ? '已吊销' : c.status === 'warn' ? '临期' : '正常'}`],
@@ -319,8 +447,10 @@ export function scan(st: EngineState = engine.get()): ExceptionRec[] {
         { action: 'quota_adjust', label: `限流到 ${cap} RPM 上限内`, detail: '不吊销，只把这条凭证的配额压回上限内', kind: '阻断接入' },
       ],
       mitigations: [{ action: 'guide', label: '核查配额是怎么超上去的', detail: '看发放与配额调整工单，确认是申请错误还是绕行发放', kind: '整改引导' }],
-    })
-  }
+    }
+  }))
+
+  // 5b) 外部模型渠道 Token 超配额
   const L = ledgerOf(st)
   const extTokensWan = Math.round(L.tokensToday * (L.externalShare > 1 ? L.externalShare / 100 : L.externalShare))
   const extQuota = llmChannelConfig().quotaTokensWan
@@ -343,88 +473,14 @@ export function scan(st: EngineState = engine.get()): ExceptionRec[] {
     })
   }
 
-  // 6) 外部检测数据源喂入的旁路（探针未接入时不产出，接上配置就有）
-  const probes = connectorStore.get().filter((c) => PROBE_IDS.includes(c.id) && c.enabled && c.health !== 'fault')
-  const node = connectorStore.find('n-node')
-  for (const pr of probes) {
-    if (pr.id === 'p-flow' && node) {
-      const hits = [
-        { ip: '10.42.7.18', sev: '紧急' as ExcSeverity, detail: '与高保推理节点建立 6 卡会话 · 持续 41 分钟 · 不在入网白名单', item: '卡位会话 6 条 · 端口 8000 / 8010' },
-        { ip: '10.42.9.77', sev: '高' as ExcSeverity, detail: '以非常规端口 8501 直连共享推理集群 · 24 小时内 187 次 · 不在入网白名单', item: '端口 8501 · 请求 187 次' },
-      ]
-      for (const h of hits) {
-        out.push({
-          key: key('旁路接入', `probe-flow-${h.ip}`), kind: '旁路接入', target: `流量探针检出 · ${h.ip}`, owner: '网运 + 信息化管理部', severity: h.sev, active: true, ref: { connectorId: node.id },
-          title: `未登记来源直连算力节点：${h.ip}`,
-          evidence: [`数据来源：${PROBE_LABEL[pr.id]}（${pr.name} · ${pr.transport} · 每 ${pr.intervalSec} 秒）`, h.item, h.detail, `入网通道：${node.name} · 该来源不在入网白名单`],
-          impact: '该来源在平台审批与凭证体系之外使用算力，卡位与成本无法归口，处置指令也下不去',
-          sources: [
-            { label: `来源 IP ${h.ip}`, from: '流量探针', detail: h.detail },
-            { label: `入网通道 ${node.name}`, from: '外部接入配置中心', detail: `${node.transport} · ${node.endpoint} · 可按来源 IP 部分阻断` },
-          ],
-          options: [
-            { action: 'access_block', label: `按来源 IP 部分阻断（${h.ip}）`, detail: `只切断 ${h.ip} 的入网会话；节点其余访问、采集与业务不受影响`, kind: '阻断接入' },
-            { action: 'credential_revoke', label: '吊销该来源可能借用的凭证', detail: '若该来源借用了平台代理凭证调用，从调用侧一起切断', kind: '阻断接入' },
-          ],
-          mitigations: [
-            { action: 'access_block', label: '全通道阻断入网通道（范围最大）', detail: `整条 ${node.name} 停止，节点对外访问全停：仅在探针确认大面积直连时使用`, kind: '资源侧缓解' },
-            { action: 'guide', label: '交换机 / 防火墙 ACL 由网运执行并回执', detail: '平台侧阻断之外，网络侧策略要网运下发并回执行动结果', kind: '整改引导' },
-          ],
-        })
-      }
-    }
-    if (pr.id === 'p-syslog' && node) {
-      out.push({
-        key: key('接管缺口', 'probe-syslog'), kind: '接管缺口', target: '机房未纳管 GPU 设备（Syslog 检出）', owner: '机房运维 + 厂商', severity: '高', active: true, ref: { connectorId: node.id },
-        title: '机房侧发现 2 台未纳管 GPU 设备',
-        evidence: [`数据来源：${PROBE_LABEL[pr.id]}（${pr.name}）`, '设备：昇腾 910B ×2 · 序列号 910B-2431 / 2432', '位置：B3 机柜 12 / 13 槽位 · 上电时间 10-31 21:40', '带外管理地址 10.43.9.21 / 10.43.9.22（不在入网白名单）'],
-        impact: '8 卡算力在平台账本之外运行：既不计成本也不受处置，卡位统计与例外监控都覆盖不到',
-        sources: [
-          { label: '设备 Syslog 上报', from: '机房设备', detail: '上电入网事件与设备序列号 · 每 120 秒批量' },
-          { label: `入网通道 ${node.name}`, from: '外部接入配置中心', detail: '带外地址不在白名单，可先按来源 IP 部分阻断' },
-        ],
-        options: [{ action: 'access_block', label: '按来源 IP 部分阻断（10.43.9.21）', detail: '先切断带外管理地址的访问，防止未经审批的配置变更；设备侧下电要机房执行', kind: '阻断接入' }],
-        mitigations: [{ action: 'guide', label: '补登记并纳入接管（登记 → 配接入 → 升到 L4）', detail: '在统一接管登记册新增这两台设备并绑定接入配置，走就绪门禁', kind: '整改引导' }],
-      })
-    }
-    if (pr.id === 'p-cmdb') {
-      out.push({
-        key: key('接管缺口', 'probe-cmdb'), kind: '接管缺口', target: 'CMDB 台账与平台账本差 6 卡', owner: '客户方侧 + 信息化管理部', severity: '高', active: true,
-        title: '资产台账 94 卡 · 平台账本 88 卡 · 差 6 卡（3 台设备）',
-        evidence: [`数据来源：${PROBE_LABEL[pr.id]}（${pr.name} · ${pr.transport}）`, '台账有 / 平台无：910B-1102（2 卡）、910B-1147（2 卡）、T4-0310（2 卡）', '平台有 / 台账无：无', '对账口径待客户方确认（按序列号还是按机柜位）'],
-        impact: '卡位总量与成本对不上：扩容审批依据失真，退役设备可能仍在通电',
-        sources: [{ label: 'CMDB 卡位台账', from: 'CMDB 视图', detail: '94 卡 · 3 台设备无对应平台账本记录' }, { label: '平台资源账本', from: '统一资源账本', detail: '88 卡 · 全部有纳管模型或任务占用' }],
-        options: [],
-        mitigations: [{ action: 'guide', label: '逐台核对：纳管 / 退役 / 移出机房', detail: '三台设备分别确认归属：纳管的补登记与接入配置，退役的出机房并留处置记录', kind: '整改引导' }],
-      })
-    }
-  }
+  return out
+}
 
-  // 7) 未纳管调用来源（台账有调用量，纳管目录里没有）
-  for (const a of unmanagedConsumers(st).slice(0, 2)) {
-    const cred = st.creds.find((c) => c.status !== 'off' && overlap(c.app, a.name) >= 3)
-    out.push({
-      key: key('旁路接入', `unmanaged-${a.name}`), kind: '旁路接入', target: `未纳管调用来源「${a.name}」`, owner: cred?.holder ?? '归口待定', severity: '高', active: true,
-      ref: cred ? { credId: cred.id } : undefined,
-      title: `调用台账有量但不在纳管目录：${a.name}`,
-      evidence: [`资源账本统计：${a.calls.toLocaleString('zh-CN')} 次/日 · 成本 ${a.cost.toLocaleString('zh-CN')} 元`, '统一纳管目录（知识库 / 智能体 / MCP / 插件 / Skill）里没有同名对象', cred ? `可疑调用凭证：${cred.id} · ${cred.holder} · ${cred.rpm} RPM · 渠道 ${cred.channel}` : '未匹配到凭证，需从网关侧核对来源'],
-      impact: '这部分调用没有归口、没有纳管状态，也不受处置动作覆盖，属于运行侧旁路',
-      sources: [
-        { label: `调用来源「${a.name}」`, from: '台账与纳管目录比对', detail: `${a.calls.toLocaleString('zh-CN')} 次/日 · 不在纳管目录` },
-        ...(cred ? [{ label: `凭证 ${cred.id}`, from: '凭证归因', detail: `${cred.holder} · ${cred.app} · ${cred.rpm} RPM` }] : []),
-      ],
-      options: cred ? [
-        { action: 'credential_revoke', label: `吊销该来源在用的凭证 ${cred.id}`, detail: '从调用侧切断这条未纳管调用；模型与卡位不受影响，须通知使用方', kind: '阻断接入' },
-        { action: 'quota_adjust', label: `限流该凭证到 ${CRED_CAP[cred.kind] ?? 400} RPM 内`, detail: '不吊销，先压住用量，给归口登记留出时间', kind: '阻断接入' },
-      ] : [],
-      mitigations: [{ action: 'guide', label: '纳入纳管目录并指定归口', detail: '在应用中心登记该应用与归口，纳管后例外监控才能对它做处置', kind: '整改引导' }],
-    })
-  }
-
-  // 8) 目录不一致
-  for (const m of st.managed) {
-    if (!DIRECTORY_KINDS.includes(m.kind) || m.tech === m.biz) continue
-    out.push({
+/** 6) 目录不一致：技术注册目录与业务使用目录在架状态不一致 */
+function detectDirectoryMismatch(st: EngineState): ExceptionRec[] {
+  return detect(st.managed, (m) => {
+    if (!DIRECTORY_KINDS.includes(m.kind) || m.tech === m.biz) return null
+    return {
       key: key('目录不一致', m.id), kind: '目录不一致', target: m.name, owner: m.owner, severity: '高', active: true, ref: { managedId: m.id },
       title: `${m.kind}「${m.name}」两个目录状态不一致`,
       evidence: [`技术注册目录：${m.tech ? '在架' : '已摘除'}`, `业务使用目录：${m.biz ? '在架' : '已摘除'}`, `纳管状态：${m.status}`, `调用量 ${m.calls}`],
@@ -435,8 +491,20 @@ export function scan(st: EngineState = engine.get()): ExceptionRec[] {
       ],
       options: [{ action: 'containment', label: '双侧同步摘除目录入口', detail: '两个目录同时摘除并断开调用路由；背后的服务与算力不停', kind: '阻断接入' }],
       mitigations: [{ action: 'containment', label: '整改后双侧同步重新纳入', detail: '确认整改完成后同时上架，须归口确认', kind: '资源侧缓解' }],
-    })
-  }
+    }
+  })
+}
+
+/** 汇总 6 个检测器的结果 */
+export function scan(st: EngineState = engine.get()): ExceptionRec[] {
+  const out: ExceptionRec[] = [
+    ...detectBypassAccess(st),
+    ...detectBypassCall(st),
+    ...detectTakeoverGap(st),
+    ...detectResourceAnomaly(st),
+    ...detectQuotaOverrun(st),
+    ...detectDirectoryMismatch(st),
+  ]
 
   // 已被阻断或部分阻断的接入，自动给出对应的恢复手段（同样要过整改门禁）
   for (const e of out) {
@@ -525,7 +593,7 @@ export const monitorStore = {
     fresh.forEach((e) => raised.add(e.key))
     for (const e of fresh) {
       const cuts = e.options.filter((o) => o.kind === '阻断接入').map((o) => o.label)
-      engine.announce(e.severity === '紧急' ? '紧急' : '重要', `例外监控第 ${round} 轮检出【${e.kind}】${e.title} · 可切断来源：${cuts.join(' / ') || '（无接入可切断，走资源侧缓解）'} · ${e.impact}`)
+      engine.announce(e.severity === '紧急' ? '紧急' : '重要', `例外监控第 ${round} 轮检出【${e.kind}】${e.title} · 可切断来源：${cuts.join(' / ') || '（无接入可切断，走资源侧缓解）'} · ${e.impact}`, `EXC:${e.key}`)
       if (settings.autoBlockUrgent && e.severity === '紧急' && e.options.some((o) => o.kind === '阻断接入')) {
         monitorStore.block(e.key, e.options.find((o) => o.kind === '阻断接入')!.action, '自动阻断（例外监控）')
       }
@@ -585,6 +653,7 @@ export const monitorStore = {
       if (!running) return { ok: false as const, reason: '当前没有可回滚的路由 / 副本 / 卡位变更' }
       engine.rollback(running.id)
       handled[e.key] = { key: e.key, kind: e.kind, title: e.title, target: e.target, owner: e.owner, severity: e.severity, status: '已缓解', actionLabel: `回滚工单 ${running.id}`, orderId: running.id, time: nowTime(), restore: '来源' }
+      notifyStore.closeCause(`EXC:${e.key}`, `例外已处置（回滚 ${running.id}）`)
       rectifyStore.open({ key: e.key, excKind: e.kind, excTitle: e.title, target: e.target, owner: e.owner, severity: e.severity, actionLabel: `回滚工单 ${running.id}`, orderId: running.id })
       persistHandled(); emit()
       engine.announce('重要', `例外监控已回滚 ${running.id}（${running.title}），资源配置恢复至变更前快照`)
@@ -605,6 +674,7 @@ export const monitorStore = {
     }
     const status: ExcStatus = opt.kind === '阻断接入' ? '已阻断' : '已缓解'
     handled[e.key] = { key: e.key, kind: e.kind, title: e.title, target: e.target, owner: e.owner, severity: e.severity, status, actionLabel: done.title, orderId: done.id, time: nowTime(), restore: action === 'access_block' ? '接入' : '来源' }
+    notifyStore.closeCause(`EXC:${e.key}`, `例外已处置（${done.id} · ${done.title}）`)
     if (action !== 'access_restore') rectifyStore.open({ key: e.key, excKind: e.kind, excTitle: e.title, target: e.target, owner: e.owner, severity: e.severity, actionLabel: `${opt.kind === '阻断接入' ? '切断接入' : '资源侧缓解'}：${opt.label}`, orderId: done.id })
     persistHandled(); emit()
     return { ok: true as const, orderId: done.id, status: done.status, kind: opt.kind }
@@ -615,6 +685,7 @@ export const monitorStore = {
     if (!e) return { ok: false as const, reason: '未找到该例外' }
     if (note.trim().length < 6) return { ok: false as const, reason: '放行必须写明理由（不少于 6 字），审计要能看到依据' }
     handled[e.key] = { key: e.key, kind: e.kind, title: e.title, target: e.target, owner: e.owner, severity: e.severity, status: '已放行', actionLabel: '人工放行', note, time: nowTime(), restore: '来源' }
+    notifyStore.closeCause(`EXC:${e.key}`, `例外已人工放行：${note}`)
     rectifyStore.remove(e.key)
     persistHandled(); emit()
     engine.announce('一般', `例外监控【${e.kind}】${e.title} 已人工放行：${note}`)

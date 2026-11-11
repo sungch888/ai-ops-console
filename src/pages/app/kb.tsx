@@ -1,13 +1,17 @@
 import React from 'react'
-import { Kpi, Panel, PageHead, Badge, State, Table, Progress, Callout } from '../../components/ui'
+import { Kpi, Panel, PageHead, Badge, State, Table, Progress, Callout, AlertBadge } from '../../components/ui'
 import { Chart, CHART_COLORS, AXIS_COLOR, SPLIT_COLOR, TOOLTIP_STYLE, GRID } from '../../components/Chart'
 import { kbs } from '../../data/mock'
 import { useMatrix, useSession } from '../../engine/auth'
 import { useIntegrations } from '../../engine/ops'
 import { useEngine } from '../../engine/engine'
+import { Jump, useAlertPick, usePickFlash } from '../../engine/alertJump'
 
 export default function AppKb() {
   const st = useEngine()
+  /** 别的页面的红 / 黄告警点过来：?pick=<知识库名> → 高亮这一行 */
+  const pick = useAlertPick()
+  usePickFlash(pick)
   const matrix = useMatrix()
   const acc = useSession()
   const ints = useIntegrations()
@@ -69,16 +73,17 @@ export default function AppKb() {
       <Panel title="知识库清单" extra={`文档量 / 调用量 / 密级 / 状态 · 当前角色可访问密级：${allowedCls.join('、') || '无'}`} className="mt14" noPad>
         <div className="panel-body">
           {degraded ? (
-            <div className="callout warn" style={{ marginBottom: 10 }}>
-              <svg className="ci" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M12 3l9 16H3l9-16z" /><path d="M12 10v4M12 17v.5" /></svg>
-              <div>
-                <b>数据缺口：{kbInt!.name} 通道{kbInt!.health === 'fault' ? '中断' : '异常'}</b>　检索量、召回率与文档量自 {new Date().toLocaleTimeString('zh-CN', { hour12: false })} 起停止采集，下方数值为中断前最后一次汇总。
-              </div>
-            </div>
+            <Callout
+              warn
+              jump={Jump.connector(kbInt!.id, '点过去到外部对接清单这一条接入：探活 / 恢复通道 / 改配置')}
+              icon={<svg className="ci" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M12 3l9 16H3l9-16z" /><path d="M12 10v4M12 17v.5" /></svg>}
+              text={<><b>数据缺口：{kbInt!.name} 通道{kbInt!.health === 'fault' ? '中断' : '异常'}</b>　检索量、召回率与文档量自 {new Date().toLocaleTimeString('zh-CN', { hour12: false })} 起停止采集，下方数值为中断前最后一次汇总。</>}
+            />
           ) : null}
           <Table
             minWidth={820}
             head={['知识库', '文档数', '月检索', '召回率', '密级', '状态', '处置状态（实时）']}
+            rowKeys={visible.map((k) => k.name)} pick={pick}
             rows={visible.map((k) => {
               const m = st.managed.find((x) => x.name === k.name)
               return [
@@ -88,14 +93,14 @@ export default function AppKb() {
               <div style={{ minWidth: 130 }}>
                 {k.recall ? (
                   <>
-                    <Progress value={(k.recall - 70) * (100 / 30)} tone={k.recall < 85 ? 'warn' : 'green'} />
+                    <Progress value={(k.recall - 70) * (100 / 30)} tone={k.recall < 85 ? 'warn' : 'green'} jump={k.recall < 85 ? Jump.kb(k.name, '召回率低于优化阈值：点这条进度落到这个库那一行（优化 / 复核都在这里）') : undefined} />
                     <span className="tiny faint">{k.recall}%</span>
                   </>
                 ) : <span className="faint small">—（无有效检索）</span>}
               </div>,
               <span className={`tag ${k.cls === '敏感' ? 'red' : k.cls === '公开' ? 'green' : 'gray'}`}>{k.cls}</span>,
               <State s={k.status} />,
-              m ? (m.status === '正常' ? <Badge tone="good">正常</Badge> : <Badge tone={m.status === '限流' ? 'warn' : 'bad'}>{m.status}{m.status === '暂停' ? ` · 队列滞留 ${m.queue} 项` : ''}</Badge>) : <span className="tiny faint">未纳管</span>,
+              m ? (m.status === '正常' ? <Badge tone="good">正常</Badge> : <AlertBadge tone={m.status === '限流' ? 'warn' : 'bad'} jump={Jump.kb(m.name, '这个库的处置状态异常：点过去看这一行（暂停入库 / 队列滞留都要有人处理）')}>{m.status}{m.status === '暂停' ? ` · 队列滞留 ${m.queue} 项` : ''}</AlertBadge>) : <span className="tiny faint">未纳管</span>,
               ]
             })}
           />

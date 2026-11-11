@@ -170,7 +170,7 @@ export const connectorStore = {
     const diffs: string[] = []
     const fields: (keyof Connector)[] = ['transport', 'endpoint', 'auth', 'intervalSec', 'timeoutMs', 'retries', 'fallback', 'dataItems', 'direction', 'blocking', 'owner', 'enabled', 'status', 'mode']
     fields.forEach((f) => {
-      if (patch[f] !== undefined && patch[f] !== cur[f]) diffs.push(`${LABEL[f] ?? String(f)}：${fmt(cur[f])} → ${fmt(patch[f])}`)
+      if (patch[f] !== undefined && patch[f] !== cur[f]) diffs.push(`${LABEL[f] ?? String(f)}：${fmtVal(cur[f])} → ${fmtVal(patch[f])}`)
     })
     if (patch.quota && JSON.stringify(patch.quota) !== JSON.stringify(cur.quota)) diffs.push('配额 / 计费口径已调整')
     if (!diffs.length) return { ok: true as const, id, version: cur.version, diffs: [] }
@@ -305,7 +305,8 @@ const LABEL: Record<string, string> = {
   transport: '传输协议', endpoint: '接入地址', auth: '鉴权方式', intervalSec: '采集频率（秒）', timeoutMs: '超时（ms）', retries: '重试次数',
   fallback: '降级策略', dataItems: '采集项', direction: '方向', blocking: '卡点', owner: '责任方', enabled: '通道', status: '接口状态', mode: '接入方式',
 }
-function fmt(v: unknown) { return typeof v === 'boolean' ? (v ? '启用' : '停用') : String(v) }
+/** 配置字段值 → 展示文本（布尔走「启用 / 停用」） */
+function fmtVal(v: unknown) { return typeof v === 'boolean' ? (v ? '启用' : '停用') : String(v) }
 
 export function useConnectors() {
   return useSyncExternalStore(connectorStore.subscribe, connectorStore.get, connectorStore.get)

@@ -1,6 +1,7 @@
 import React, { useMemo, useState } from 'react'
-import { Kpi, Panel, PageHead, Badge, Table, Callout } from '../../components/ui'
+import { Kpi, Panel, PageHead, Badge, AlertBadge, Table, Callout } from '../../components/ui'
 import { useAlertRules, ruleStore, evaluateRules, METRIC_BY_DIM, METRIC_UNIT, type AlertDim, type AlertMetric, type AlertMode, type AlertAction, type AlertLevel } from '../../engine/alerts'
+import { Jump, useAlertPick, usePickFlash } from '../../engine/alertJump'
 import { engine } from '../../engine/engine'
 import { usePerm } from '../../engine/auth'
 import { useNotifs } from '../../engine/ops'
@@ -25,6 +26,10 @@ export default function OpsAlertRules() {
   const [flash, setFlash] = useState<string | null>(null)
 
   const samples = ruleStore.samplesNow()
+  /* 告警直达口径：本页主键 = 告警规则 id（Jump.alertRule 同一口径）
+     任何红 / 黄提示点过去 = 落到规则清单那一行（阈值、处置动作、启停都在那一行） */
+  const pick = useAlertPick()
+  usePickFlash(pick)
   const objs = useMemo<Record<AlertDim, string[]>>(() => ({
     渠道: ['全部', ...engine.get().channels.map((c) => c.name)],
     资源池: ['全部', ...engine.get().pools.map((p) => p.name)],
@@ -36,6 +41,8 @@ export default function OpsAlertRules() {
   const enabled = rules.filter((r) => r.enabled).length
   const fired = rules.reduce((s, r) => s + r.fired, 0)
   const autoActions = notifs.filter((n) => n.text.includes('处置：')).length
+  const firedRule = rules.find((r) => r.fired > 0)
+  const ruleJump = (id: string, label: string) => Jump.alertRule(id, label)
 
   const create = () => {
     if (!name.trim()) { setFlash('规则名称不能为空'); return }
@@ -52,7 +59,7 @@ export default function OpsAlertRules() {
         extra={
           <>
             <Badge tone="info">{enabled} / {rules.length} 条启用</Badge>
-            <Badge tone={fired ? 'warn' : 'muted'}>累计触发 {fired}</Badge>
+            {firedRule ? <AlertBadge tone="warn" jump={ruleJump(firedRule.id, `已有规则触发（第一条：${firedRule.name}）：点过去落到这条规则那一行，改阈值 / 停用都在这里`)}>累计触发 {fired}</AlertBadge> : <Badge tone="muted">累计触发 {fired}</Badge>}
             <button className="btn sm primary" onClick={() => { const r = evaluateRules(); setFlash(r.fired ? `立即评估：触发 ${r.fired} 项\n${r.log.join('\n')}` : '立即评估：当前无规则命中') }}>立即评估一次</button>
             <button className="btn sm ghost" onClick={() => ruleStore.reset()}>恢复默认规则</button>
           </>
@@ -68,7 +75,7 @@ export default function OpsAlertRules() {
 
       <div className="grid g-4">
         <Kpi label="规则总数" value={rules.length} unit="条" foot={`启用 ${enabled} · 停用 ${rules.length - enabled}`} />
-        <Kpi label="累计触发" value={fired} unit="次" foot="同一规则 25 秒内不重复触发" />
+        <Kpi label="累计触发" value={fired} unit="次" foot="同一规则 25 秒内不重复触发" jump={firedRule ? ruleJump(firedRule.id, `已触发 ${fired} 次（第一条：${firedRule.name}）：点过去落到这条规则那一行`) : undefined} />
         <Kpi label="自动处置动作" value={autoActions} unit="次" foot="生成工单 / 切换渠道 / 凭证盘点" />
         <Kpi label="采样巡检" value={samples.length} unit="项指标" foot="引擎每次状态变化自动评估" />
       </div>
@@ -78,6 +85,7 @@ export default function OpsAlertRules() {
           <Table
             minWidth={1080}
             head={['规则', '维度 · 对象', '判定条件', '等级', '自动处置', '触发', '启停']}
+            rowKeys={rules.map((r) => r.id)} pick={pick}
             rows={rules.map((r) => [
               <span className="strong small">{r.id}<div className="tiny faint">{r.name}</div></span>,
               <span className="small">{r.dim} · {r.obj}<div className="tiny faint">{r.metric}</div></span>,
@@ -96,13 +104,13 @@ export default function OpsAlertRules() {
                 <select className="btn sm" style={{ padding: '3px 8px' }} value={r.level} onChange={(e) => ruleStore.setLevel(r.id, e.target.value as AlertLevel)}>
                   {LEVELS.map((l) => <option key={l} value={l}>{l}</option>)}
                 </select>
-              ) : r.level === '紧急' ? <Badge tone="bad">紧急</Badge> : r.level === '重要' ? <Badge tone="warn">重要</Badge> : <Badge tone="muted">一般</Badge>,
+              ) : r.level === '紧急' ? <AlertBadge tone="bad" jump={ruleJump(r.id, `这条规则是紧急级（${r.name}）：点过去落到这一行，阈值与处置动作就在这一行`)}>紧急</AlertBadge> : r.level === '重要' ? <AlertBadge tone="warn" jump={ruleJump(r.id, `这条规则是重要级（${r.name}）：点过去落到这一行，阈值与处置动作就在这一行`)}>重要</AlertBadge> : <Badge tone="muted">一般</Badge>,
               perm.manage ? (
                 <select className="btn sm" style={{ padding: '3px 8px', maxWidth: 150 }} value={r.action} onChange={(e) => ruleStore.setAction(r.id, e.target.value as AlertAction)}>
                   {ACTIONS.map((a) => <option key={a} value={a}>{a}</option>)}
                 </select>
               ) : <span className="small">{r.action}</span>,
-              <span className="small">{r.fired} 次<div className="tiny faint">{r.lastFired || '未触发'}</div></span>,
+              <span className="small">{r.fired} 次<div className="tiny faint">{r.lastFired || '未触发'}</div>{r.fired ? <AlertBadge tone={r.level === '紧急' ? 'bad' : 'warn'} jump={ruleJump(r.id, `这条规则已触发 ${r.fired} 次（最近 ${r.lastFired || '—'}）：点过去落到这一行，改阈值或停用这条规则`)}>已触发 {r.fired} 次</AlertBadge> : null}</span>,
               <div className="row gap6">
                 <button className={`btn sm ${r.enabled ? 'primary' : 'ghost'}`} disabled={!perm.manage} onClick={() => ruleStore.toggle(r.id)}>{r.enabled ? '启用中' : '已停用'}</button>
                 {perm.manage ? <button className="btn sm danger" style={{ padding: '3px 8px' }} onClick={() => ruleStore.remove(r.id)}>删除</button> : null}

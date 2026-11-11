@@ -1,8 +1,15 @@
 import React from 'react'
-import { Kpi, Panel, PageHead, Badge, State, Table, Progress, Callout } from '../../components/ui'
+import { Kpi, Panel, PageHead, Badge, AlertBadge, State, Table, Progress, Callout } from '../../components/ui'
 import { computeNodes } from '../../data/mock'
 import { useEngine, engine, poolUtil, freeCards, totalAllocated, TYPE_LABEL, TOTAL_CARDS } from '../../engine/engine'
 import { usePerm } from '../../engine/auth'
+import { Jump, useAlertPick, usePickFlash, type AlertJump } from '../../engine/alertJump'
+
+/** 资源池告警口径（与总览 / 算力总览 / 卡监控同一套）：落到本页这个池的卡片 */
+const poolJump = (id: string, label = '去资源池看这个池并处理卡位'): AlertJump =>
+  ({ page: '/compute/schedule', pick: `pool-${id}`, label })
+
+const POOL_BY_LABEL: Record<string, string> = { 高保集群: 'hp', 共享集群: 'shared', 训练池: 'train' }
 
 const STRATEGIES = [
   { name: '优先级抢占', desc: '高保服务集群为核心业务保留算力，共享任务可被抢占让位', tone: 'good' as const, on: true },
@@ -24,6 +31,9 @@ const AUTO_LEVELS = [
 export default function ComputeSchedule() {
   const st = useEngine()
   const canApprove = usePerm('approve').manage
+  const pick = useAlertPick()          // 资源池告警 / 工单告警跳进来：?pick=pool-hp 或 ?pick=<工单号>
+  usePickFlash(pick)
+  const queue = st.orders.filter((o) => o.type === 'pool_expand' || o.type === 'pool_release' || o.type === 'replica_scale')
   return (
     <div>
       <PageHead
@@ -43,35 +53,41 @@ export default function ComputeSchedule() {
         {st.pools.map((p) => {
           const pct = poolUtil(st, p.id)
           return (
-            <Panel key={p.id} title={p.name} extra={p.sla === '—' ? '训练池' : `SLA ${p.sla}`}>
+            <div key={p.id} className={`pool-card${pick === `pool-${p.id}` ? ' row-pick' : ''}`}
+              style={pick === `pool-${p.id}` ? { borderRadius: 12, boxShadow: 'inset 3px 0 0 var(--amber), 0 0 0 1px var(--amber)' } : undefined}>
+              <Panel title={p.name} extra={p.sla === '—' ? '训练池' : `SLA ${p.sla}`}>
               <div className="row between">
                 <span className="muted small">卡位 / 需求</span>
                 <span className="strong">{p.cards} 卡</span>
               </div>
-              <div style={{ marginTop: 8 }}><Progress value={pct} tone={pct > 90 ? 'bad' : pct > 80 ? 'warn' : 'green'} /></div>
+              <div style={{ marginTop: 8 }}><Progress value={pct} tone={pct > 90 ? 'bad' : pct > 80 ? 'warn' : 'green'} jump={pct > 80 ? poolJump(p.id, `看「${p.name}」的卡位与扩缩队列`) : undefined} /></div>
               <div className="row between small faint" style={{ marginTop: 4 }}><span>利用率 {pct}%</span><span>空闲 {Math.max(0, p.cards - Math.round((pct / 100) * p.cards))} 卡</span></div>
               <div className="divider" />
               <div className="small" style={{ color: '#9db8dd', lineHeight: 1.7 }}>{p.policy}</div>
-            </Panel>
+              </Panel>
+            </div>
           )
         })}
       </div>
 
       <Panel title="扩缩协同队列" extra="超阈值自动生成 · 审批后在变更窗口执行" className="mt14" noPad>
         <div className="panel-body">
-          {st.orders.filter((o) => (o.type === 'pool_expand' || o.type === 'pool_release' || o.type === 'replica_scale')).length === 0 ? (
+          {queue.length === 0 ? (
             <div className="empty">当前无扩缩建议 · 可在「资源调配工作台」提交申请</div>
           ) : (
             <Table
               minWidth={820}
               head={['工单', '类型', '对象', '数量', '触发条件', '状态', '操作']}
-              rows={st.orders.filter((o) => o.type === 'pool_expand' || o.type === 'pool_release' || o.type === 'replica_scale').slice(0, 8).map((o) => [
+              rows={queue.slice(0, 8).map((o) => [
                 <span className="mono small">{o.id}{o.auto ? <span className="tag gray" style={{ marginLeft: 6 }}>自动</span> : null}</span>,
                 <span className="small">{TYPE_LABEL[o.type]}</span>,
                 <span className="strong small">{o.target}</span>,
                 <span className="num small">{o.amount}</span>,
                 <span className="muted small ellipsis" style={{ maxWidth: 240 }}>{o.reason}</span>,
-                <State s={o.status === 'submitted' ? 'pending' : o.status === 'rejected' ? 'block' : o.status === 'running' ? 'run' : o.status === 'rolled_back' ? 'warn' : 'done'} />,
+                o.status === 'submitted' ? <AlertBadge tone="warn" jump={Jump.order(o.id, `去调配工作台审批这张工单 ${o.id}`)}>待审批</AlertBadge>
+                  : o.status === 'rejected' ? <AlertBadge tone="bad" jump={Jump.order(o.id, `去调配工作台看这张被驳回的工单 ${o.id}`)}>已驳回</AlertBadge>
+                  : o.status === 'rolled_back' ? <AlertBadge tone="warn" jump={Jump.order(o.id, `去调配工作台看这张已回滚的工单 ${o.id}`)}>已回滚</AlertBadge>
+                  : <State s={o.status === 'running' ? 'run' : 'done'} />,
                 o.status === 'submitted' ? (
                   canApprove ? (
                     <div className="row gap6">
@@ -81,6 +97,7 @@ export default function ComputeSchedule() {
                   ) : <span className="tiny faint">待审批（无审批权）</span>
                 ) : o.status === 'running' ? (canApprove ? <button className="btn sm ghost" onClick={() => engine.rollback(o.id)}>回滚</button> : <span className="tiny faint">执行中</span>) : <span className="tiny faint">{o.decidedBy ?? '—'}</span>,
               ])}
+              rowKeys={queue.slice(0, 8).map((o) => o.id)} pick={pick}
             />
           )}
         </div>
@@ -96,7 +113,7 @@ export default function ComputeSchedule() {
                 <span className="strong">{s.name}</span>,
                 <span className="muted small">{s.desc}</span>,
                 <span className="tag gray">全平台</span>,
-                s.on ? <Badge tone="good">已启用</Badge> : <Badge tone="warn">待审批</Badge>,
+                s.on ? <Badge tone="good">已启用</Badge> : <AlertBadge tone="warn" jump={Jump.alertRule('AR-01', `「${s.name}」待审批：去告警规则看生成建议工单的这条规则`)}>待审批</AlertBadge>,
               ])}
             />
           </div>
@@ -127,7 +144,7 @@ export default function ComputeSchedule() {
                   <span>{pool} <span className="faint">({nodes.length} 节点)</span></span>
                   <span className="muted">平均 {avg}%</span>
                 </div>
-                <div style={{ marginTop: 5 }}><Progress value={avg} tone={avg > 85 ? 'warn' : ''} /></div>
+                <div style={{ marginTop: 5 }}><Progress value={avg} tone={avg > 85 ? 'warn' : ''} jump={avg > 85 ? poolJump(POOL_BY_LABEL[pool] ?? 'hp', `看「${pool}」对应资源池的卡位与扩缩队列`) : undefined} /></div>
               </div>
             )
           })}
@@ -136,7 +153,7 @@ export default function ComputeSchedule() {
           <Table
             head={['约束项', '规则', '当前判定']}
             rows={[
-              [<span className="strong">扩容上限</span>, <span className="small">不得超过全局空闲卡位 {freeCards(st)} 卡</span>, <Badge tone={freeCards(st) < 4 ? 'warn' : 'good'}>空闲 {freeCards(st)} 卡</Badge>],
+              [<span className="strong">扩容上限</span>, <span className="small">不得超过全局空闲卡位 {freeCards(st)} 卡</span>, freeCards(st) < 4 ? <AlertBadge tone="warn" jump={Jump.alertRule('AR-05', '全局空闲卡位不足：去告警规则看这条口径（生成建议工单）')}>空闲 {freeCards(st)} 卡</AlertBadge> : <Badge tone="good">空闲 {freeCards(st)} 卡</Badge>],
               [<span className="strong">回收下限</span>, <span className="small">回收不得侵占在用资源（保留需求卡位）</span>, <Badge tone="info">按池需求核算</Badge>],
               [<span className="strong">副本安全线</span>, <span className="small">执行后池利用率不得超过 92%</span>, <Badge tone="warn">超线直接拒绝</Badge>],
               [<span className="strong">高保优先</span>, <span className="small">核心业务可申请抢占共享池资源</span>, <Badge tone="purple">需主管审批</Badge>],

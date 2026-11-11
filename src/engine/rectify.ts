@@ -8,9 +8,15 @@ import { engine } from './engine'
 import { dbRead, dbWrite, dbSeed } from './db'
 import { consoleStore, FALLBACK_DUTY, FALLBACK_ROUTES } from './console'
 
+/** 值班角色统一使用 FALLBACK_DUTY（console.ts 中的权威数据），此处只做类型转换 */
+export type DutyRole = { role: string; name: string; phone: string; lead: string; scope: string }
+
+/** 将 FALLBACK_DUTY（DutyShift）转换为 DutyRole，避免数据重复 */
+function toDutyRole(s: { id: string; role: string; name: string; phone: string; lead: string; scope: string; enabled: number; updated_at: string }): DutyRole {
+  return { role: s.role, name: s.name, phone: s.phone, lead: s.lead, scope: s.scope }
+}
 
 export type RectStatus = '待接单' | '整改中' | '待复核' | '已关闭' | '已升级'
-export interface DutyRole { role: string; name: string; phone: string; lead: string; scope: string }
 export interface RectLogItem { time: string; actor: string; text: string }
 export interface RectifyRec {
   key: string
@@ -32,17 +38,6 @@ export interface RectifyRec {
   log: RectLogItem[]
 }
 export interface DutySettings { responseMin: number; dueMin: number; autoDispatch: boolean }
-
-/** 代码默认值班表（服务读不到时兜底）。正式口径：排班来源可配 ——
- * 试运行由建设团队安排（duty-source=local，在「配置中心 → 排班与派单」里改），
- * 成熟后 duty-source=external，由客户方值班系统提供，本系统只做派单与升级跟踪。 */
-export const DUTY_ROSTER: DutyRole[] = [
-  { role: '算力资源值班', name: '当班 · 陈××（网运）', phone: '内线 8021', lead: '值班长 · 刘××', scope: '算力池 / 卡位 / 扩租通道' },
-  { role: '网络与接入值班', name: '当班 · 示例××（网运）', phone: '内线 8035', lead: '值班长 · 刘××', scope: '接入通道 / 入网白名单 / 来源 IP' },
-  { role: '应用与智能体值班', name: '当班 · 李××（应用）', phone: '内线 8048', lead: '值班长 · 刘××', scope: '智能体 / 知识库 / 模板 / 目录' },
-  { role: '安全值班', name: '当班 · 赵××（安全）', phone: '内线 8060', lead: '值班长 · 刘××', scope: '凭证 / 密级 / 检测策略' },
-  { role: '值班长', name: '刘××', phone: '内线 8000', lead: '信息化管理部值班领导', scope: '超时升级与跨专业处置' },
-]
 
 /** 派单口径：例外类型 → 当班角色 */
 export const ASSIGN_BY_KIND: Record<string, string> = {
@@ -79,8 +74,8 @@ function persistSettings() { try { dbWrite(SKEY, JSON.stringify(settings)) } cat
 function emit() { cache = null; listeners.forEach((l) => l()) }
 function dutyRosterLive(): DutyRole[] {
   const st = consoleStore.get()
-  if (!st.fromServer) return DUTY_ROSTER
-  return st.shifts.filter((x) => x.enabled).map((x) => ({ role: x.role, name: x.name, phone: x.phone, lead: x.lead, scope: x.scope }))
+  if (!st.fromServer) return FALLBACK_DUTY.map(toDutyRole)
+  return st.shifts.filter((x) => x.enabled).map(toDutyRole)
 }
 /** 当前生效的派单映射（例外类型 → 岗位 → 超时升级岗位），来自配置中心 */
 export function dutyRoutesLive(): { kind: string; duty_role: string; escalate_role: string }[] {
@@ -135,7 +130,7 @@ export const rectifyStore = {
     }
     recs[input.key] = rec
     persist(); emit()
-    engine.announce('一般', `例外整改单已开出：【${input.excKind}】${input.target} → ${role.name}（${role.phone}）· 接单时限 ${settings.responseMin} 分钟 · 整改期限 ${settings.dueMin} 分钟`)
+    engine.announce('一般', `例外整改单已开出：【${input.excKind}】${input.target} → ${role.name}（${role.phone}）· 接单时限 ${settings.responseMin} 分钟 · 整改期限 ${settings.dueMin} 分钟`, `RECT:${input.key}`)
     return rec
   },
 
@@ -169,7 +164,7 @@ export const rectifyStore = {
     r.status = '待复核'
     r.log = [{ time: now(), actor: actor ?? r.assignee, text: `提交复核：${note.trim()}` }, ...r.log]
     persist(); emit()
-    engine.announce('一般', `整改单待复核：【${r.excKind}】${r.target} → ${roleOf(escalateRoleFor(r.excKind)).name} · 复核通过后才允许提交恢复工单`)
+    engine.announce('一般', `整改单待复核：【${r.excKind}】${r.target} → ${roleOf(escalateRoleFor(r.excKind)).name} · 复核通过后才允许提交恢复工单`, `RECT:${key}`)
     return { ok: true as const }
   },
 
@@ -183,14 +178,14 @@ export const rectifyStore = {
       r.status = '已关闭'
       r.log = [{ time: now(), actor: who, text: `复核通过并关闭：${note.trim()}` }, ...r.log]
       persist(); emit()
-      engine.announce('重要', `整改复核通过：【${r.excKind}】${r.target} 已闭环，可提交恢复接入工单（引擎仍会做就绪校验）`)
+      engine.announce('重要', `整改复核通过：【${r.excKind}】${r.target} 已闭环，可提交恢复接入工单（引擎仍会做就绪校验）`, `RECT:${key}`)
       return { ok: true as const }
     }
     r.status = '整改中'
     r.dueAt = Date.now() + settings.dueMin * 60000
     r.log = [{ time: now(), actor: who, text: `复核退回：${note.trim()}` }, ...r.log]
     persist(); emit()
-    engine.announce('重要', `整改复核退回：【${r.excKind}】${r.target} → ${r.assignee}（${r.phone}），整改期限顺延 ${settings.dueMin} 分钟`)
+    engine.announce('重要', `整改复核退回：【${r.excKind}】${r.target} → ${r.assignee}（${r.phone}），整改期限顺延 ${settings.dueMin} 分钟`, `RECT:${key}`)
     return { ok: true as const }
   },
 
@@ -206,10 +201,10 @@ export const rectifyStore = {
         r.status = '已升级'
         r.log = [{ time: now(), actor: '例外监控', text: `超时 ${settings.responseMin} 分钟未接单，已升级至 ${lead.name}（${lead.phone}），上级 ${lead.lead}` }, ...r.log]
         escalated += 1
-        engine.announce('紧急', `例外整改超时未接单：【${r.excKind}】${r.target} → 已升级至 ${lead.name}（${lead.phone}）· 归口 ${r.owner}`)
+        engine.announce('紧急', `例外整改超时未接单：【${r.excKind}】${r.target} → 已升级至 ${lead.name}（${lead.phone}）· 归口 ${r.owner}`, `RECT:${r.key}`)
       } else if (r.status !== '已关闭' && t > r.dueAt && !r.log.some((l) => l.text.startsWith('已超整改期限'))) {
         r.log = [{ time: now(), actor: '例外监控', text: `已超整改期限（${settings.dueMin} 分钟），归口 ${r.owner} 须说明延期原因` }, ...r.log]
-        engine.announce('重要', `整改超期：【${r.excKind}】${r.target} · ${r.assignee} · 期限 ${settings.dueMin} 分钟已过`)
+        engine.announce('重要', `整改超期：【${r.excKind}】${r.target} · ${r.assignee} · 期限 ${settings.dueMin} 分钟已过`, `RECT:${r.key}`)
       }
     }
     if (escalated) { persist(); emit() }

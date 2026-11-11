@@ -521,3 +521,36 @@ textarea { min-height: 72px; resize: vertical; line-height: 1.55; }
 .hint-dot::after { content: "i"; }
 .kpi[title] { cursor: help; }
 .panel-head .hint-dot { margin-left: 4px; }
+
+/* ── 报警直达：红/黄提示都可点击，点哪一条就落到哪一行 ───────────── */
+.alert-jump { cursor: pointer; }
+a.alert-jump { text-decoration: none; }
+.alert-jump .go {
+  margin-left: 6px; font-size: 11px; line-height: 1; opacity: .55;
+  transition: transform .14s ease, opacity .14s ease;
+}
+.alert-jump:hover .go { opacity: 1; transform: translateX(2px); }
+
+.badge.alert-jump:hover { filter: brightness(1.12); border-color: currentColor; }
+.badge.alert-jump:hover .go { opacity: .9; }
+
+.kpi.alert-jump { transition: border-color .15s ease, transform .15s ease; }
+.kpi.alert-jump:hover { border-color: var(--line-strong); transform: translateY(-1px); }
+.kpi.alert-jump:focus-visible { outline: 2px solid var(--line-strong); outline-offset: 2px; }
+.progress.alert-jump:hover { opacity: .9; }
+.callout.alert-jump { cursor: pointer; }
+.callout.alert-jump:hover { filter: brightness(1.06); }
+/* 覆盖上面那条 .kpi[title]{cursor:help}，可跳转的卡片要显示手型 */
+.kpi.alert-jump[title] { cursor: pointer; }
+
+/* 落地高亮：目标行闪一下并留下左边框，眼睛能追到点到的那一行 */
+.tbl tbody tr.row-pick td { animation: pickflash 1.8s ease-out; }
+.tbl tbody tr.row-pick td:first-child {
+  box-shadow: inset 3px 0 0 var(--amber);
+  font-weight: 700;
+}
+@keyframes pickflash {
+  0%   { background: color-mix(in srgb, var(--amber) 34%, transparent); }
+  60%  { background: color-mix(in srgb, var(--amber) 16%, transparent); }
+  100% { background: transparent; }
+}

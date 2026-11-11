@@ -1,5 +1,5 @@
 import React from 'react'
-import { Kpi, Panel, PageHead, Badge, State, Table, Progress, Callout } from '../components/ui'
+import { Kpi, Panel, PageHead, Badge, AlertBadge, State, Table, Progress, Callout } from '../components/ui'
 import { Chart, CHART_COLORS, AXIS_COLOR, SPLIT_COLOR, TOOLTIP_STYLE, GRID } from '../components/Chart'
 import {
   overview, models, secEvents, computeCards,
@@ -7,6 +7,19 @@ import {
 import { useEngine, poolUtil, freeCards, totalAllocated, totalReplicas, activeCreds, TOTAL_CARDS } from '../engine/engine'
 import { ledgerOf } from '../engine/ledger'
 import { useNotifs } from '../engine/ops'
+import { Jump, type AlertJump } from '../engine/alertJump'
+import { npuCards, type NpuCard } from '../engine/telemetry'
+
+/** 资源类告警统一口径：落到「资源池与调度」页里的那个池 */
+const poolJump = (id: string, label = '去资源池与调度看这个池'): AlertJump =>
+  ({ page: '/compute/schedule', pick: `pool-${id}`, label })
+
+/** 厂商级告警 → 该型卡里最吃紧的那一张（与 /compute/cards 的卡位主键同一口径） */
+function cardJumpForModel(type: string): AlertJump {
+  const rank = (c: NpuCard) => (c.health === 'fault' ? 0 : c.health === 'warn' ? 1 : 2)
+  const worst = npuCards().filter((c) => type.includes(c.model)).slice().sort((a, b) => rank(a) - rank(b) || b.util - a.util)[0]
+  return worst ? Jump.card(worst.id, `去算力卡监控看这张 ${worst.model} 卡`) : Jump.card(type, '去算力卡监控看这型卡')
+}
 
 function useLive() {
   // 演示效果：数字轻微波动
@@ -27,6 +40,8 @@ export default function Overview() {
   const callsToday = ((L.callsToday / 10000) * wave).toFixed(1)
   const qpsNow = Math.max(1, Math.round((L.callsToday / 86400) * wave))
   const allocPct = Math.round((totalAllocated(st) / TOTAL_CARDS) * 100)
+  const openNotif = notifs.find((n) => !n.handled)
+  const injEvent = secEvents.find((e) => e.type.includes('提示词注入')) ?? secEvents[0]
 
   const trendOpt = {
     color: CHART_COLORS,
@@ -100,12 +115,12 @@ export default function Overview() {
         <Kpi label="NPU 算力卡" value={TOTAL_CARDS} unit="张" foot={`已分配 ${totalAllocated(st)} · 空闲 ${freeCards(st)}`} />
         <Kpi label="池化率" value={allocPct} unit="%" foot="与调配工作台同源" />
         <Kpi label="在线模型" value={st.models.length} unit="个" foot={`副本 ${totalReplicas(st)} 个 · ${st.channels.length} 条渠道`} />
-        <Kpi label="在线应用" value={12 - L.stopped.length} unit="个" foot={L.stopped.length ? <span className="down">● {L.stopped.length} 项已停止承接调用</span> : '12 个智能体应用 · 全部在承接'} />
+        <Kpi label="在线应用" value={12 - L.stopped.length} unit="个" foot={L.stopped.length ? <span className="down">● {L.stopped.length} 项已停止承接调用</span> : '12 个智能体应用 · 全部在承接'} jump={L.stopped.length ? Jump.agent(L.stopped[0], `去智能体纳管处置「${L.stopped[0]}」`) : undefined} />
         <Kpi label="今日调用量" value={callsToday} unit="万次" foot={<span className="small faint">账本同源：{L.liveCards} 卡在承载 · RPM {L.rpm}</span>} />
         <Kpi label="今日 Token" value={(L.tokensToday / 10000).toFixed(2)} unit="亿" foot={`本地 ${((L.tokensToday * (1 - L.externalShare)) / 10000).toFixed(2)} 亿 · 外部 ${(L.externalShare * 100).toFixed(0)}% 渠道`} />
         <Kpi label="今日折算成本" value={(L.costToday / 10000).toFixed(2)} unit="万元" foot={`本地卡位 ${(L.localCost / 10000).toFixed(2)} 万 · 外部 Token ${(L.externalCost / 10000).toFixed(2)} 万`} />
-        <Kpi label="活跃凭证" value={activeCreds(st)} unit="个" foot={`待审批 ${st.orders.filter((o) => o.status === 'submitted').length} · 排队 ${st.orders.filter((o) => o.status === 'queued').length}`} />
-        <Kpi label="未闭环通知" value={notifs.filter((n) => !n.handled).length} unit="条" foot={<span className="down">● 含自动建议与对接异常</span>} />
+        <Kpi label="活跃凭证" value={activeCreds(st)} unit="个" foot={`待审批 ${st.orders.filter((o) => o.status === 'submitted' || o.status === 'to_biz').length} · 排队 ${st.orders.filter((o) => o.status === 'queued').length}`} />
+        <Kpi label="未闭环通知" value={notifs.filter((n) => !n.handled).length} unit="条" foot={<span className="down">● 含自动建议与对接异常</span>} jump={openNotif ? Jump.notification(openNotif.id, `去通知中心处置 ${openNotif.id}：${openNotif.title}`) : undefined} />
       </div>
 
       <div className="grid g-21 mt14">
@@ -123,7 +138,7 @@ export default function Overview() {
                   <span>{p.name} <span className="faint">({p.cards} 卡)</span></span>
                   <span className={u > 90 ? 'strong' : 'muted'}>{u}%</span>
                 </div>
-                <div style={{ marginTop: 4 }}><Progress value={u} tone={u > 90 ? 'bad' : u > 80 ? 'warn' : 'green'} /></div>
+                <div style={{ marginTop: 4 }}><Progress value={u} tone={u > 90 ? 'bad' : u > 80 ? 'warn' : 'green'} jump={u > 80 ? poolJump(p.id, `去资源池与调度看「${p.name}」并处理卡位`) : undefined} /></div>
               </div>
             )
           })}
@@ -143,13 +158,13 @@ export default function Overview() {
               head={['时间', '等级', '类型', '处置状态']}
               rows={secEvents.slice(0, 5).map((e) => [
                 <span className="mono small">{e.time}</span>,
-                e.level === '紧急' ? <Badge tone="bad">紧急</Badge> : e.level === '重要' ? <Badge tone="warn">重要</Badge> : <Badge tone="muted">一般</Badge>,
+                e.level === '紧急' ? <AlertBadge tone="bad" jump={Jump.securityEvent(e.id, `去安全事件处置 ${e.id}（${e.type}）`)}>紧急</AlertBadge> : e.level === '重要' ? <AlertBadge tone="warn" jump={Jump.securityEvent(e.id, `去安全事件看 ${e.id}（${e.type}）`)}>重要</AlertBadge> : <Badge tone="muted">一般</Badge>,
                 e.type,
-                e.status === '处置中' ? <Badge tone="warn">处置中</Badge> : <Badge tone="good">已闭环</Badge>,
+                e.status === '处置中' ? <AlertBadge tone="warn" jump={Jump.securityEvent(e.id, `去安全事件闭环 ${e.id} 的处置`)}>处置中</AlertBadge> : <Badge tone="good">已闭环</Badge>,
               ])}
             />
             <div className="mt14">
-              <Callout text="提示词注入攻击（示范市02）已拦截并溯源，涉事个人密钥已限流；详情见「模型中心 · 安全检测」。" warn icon={undefined} />
+              <Callout text="提示词注入攻击（示范市02）已拦截并溯源，涉事个人密钥已限流；详情见「模型中心 · 安全检测」。" warn jump={Jump.securityEvent(injEvent.id, `去安全事件看这起提示词注入（${injEvent.id}）的处置与溯源`)} />
             </div>
           </div>
         </Panel>
@@ -166,7 +181,7 @@ export default function Overview() {
                 <span className="num">{(a.calls / 10000).toFixed(1)} 万</span>,
                 <span className="num small">{a.tokens.toLocaleString('zh-CN')} 万</span>,
                 <span className="num small">¥{a.cost.toLocaleString('zh-CN')}</span>,
-                a.note ? <Badge tone={a.note.includes('限流') ? 'warn' : 'bad'}>{a.note}</Badge> : <Badge tone="good">正常承接</Badge>,
+                a.note ? <AlertBadge tone={a.note.includes('限流') ? 'warn' : 'bad'} jump={Jump.agent(a.name, `去智能体纳管处置「${a.name}」（${a.note}）`)}>{a.note}</AlertBadge> : <Badge tone="good">正常承接</Badge>,
               ])}
               minWidth={760}
             />
@@ -180,7 +195,7 @@ export default function Overview() {
                 <span className="muted small">{c.count} 张 · {c.util}% 利用率</span>
               </div>
               <div className="mt8" style={{ marginTop: 7 }}>
-                <Progress value={c.util} tone={c.util > 85 ? 'warn' : ''} />
+                <Progress value={c.util} tone={c.util > 85 ? 'warn' : ''} jump={c.util > 85 ? cardJumpForModel(c.type) : undefined} />
               </div>
             </div>
           ))}

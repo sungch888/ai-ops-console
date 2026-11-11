@@ -4,12 +4,13 @@
  * 引用即计数并通知归口；新增须审核；停用与恢复留痕；密级决定可否引用
  * ===================================================================== */
 import { useState } from 'react'
-import { Kpi, Panel, PageHead, Badge, State, Table, Callout } from '../../components/ui'
+import { Kpi, Panel, PageHead, Badge, State, Table, Callout, AlertBadge } from '../../components/ui'
 import { useEngine, KIND_ACTIONS, DIRECTORY_KINDS } from '../../engine/engine'
 import { useTemplates, templateStore, type TemplateKind } from '../../engine/templates'
 import { usePolicies } from '../../engine/policies'
 import { usePerm, useSession, clsAllowed } from '../../engine/auth'
 import { downloadCsv } from '../../engine/ops'
+import { useAlertPick, usePickFlash } from '../../engine/alertJump'
 
 const KINDS: TemplateKind[] = ['FAQ 知识库', '操作手册', '编排模板', '提示词模板', '处置预案', '培训课件']
 
@@ -33,6 +34,10 @@ export default function Templates() {
   const stopped = templates.filter((t) => t.status === '已停用')
   const owners = new Set(templates.map((t) => t.owner)).size
   const refsTotal = templates.reduce((s, t) => s + t.refs, 0)
+  /** 别处点过来：?pick=<模板编号> → 高亮这一行（审核通过 / 驳回 / 引用都在这条行上） */
+  const pick = useAlertPick()
+  usePickFlash(pick)
+  const toRow = (id: string) => ({ page: '/app/templates', pick: id, label: '点过去落到这条模板那一行：通过 / 驳回 / 引用都在这里做' })
 
   const submitTemplate = () => {
     const r = templateStore.submit({ name, kind, owner, cls, desc, related, by: acc?.name ?? '运营值班' })
@@ -69,6 +74,7 @@ export default function Templates() {
           <Table
             minWidth={1120}
             head={['模板', '类型', '归口 / 版本', '密级', '引用次数', '状态', '关联对象（实时）', '操作']}
+            rowKeys={templates.map((t) => t.id)} pick={pick}
             rows={templates.map((t) => {
               const locked = !clsAllowed(t.cls)
               return [
@@ -77,7 +83,7 @@ export default function Templates() {
                 <span className="small">{t.owner}<div className="tiny faint mono">{t.version} · 更新 {t.updatedAt}</div></span>,
                 <span className={`tag ${t.cls === '敏感' ? 'red' : t.cls === '内部' ? '' : 'green'}`}>{t.cls}</span>,
                 <span className="num">{t.refs}</span>,
-                t.status === '已发布' ? <State s="ok" /> : t.status === '待审核' ? <Badge tone="warn">待审核</Badge> : <Badge tone="muted">已停用</Badge>,
+                t.status === '已发布' ? <State s="ok" /> : t.status === '待审核' ? <AlertBadge tone="warn" jump={toRow(t.id)}>{`待审核 ${t.id}`}</AlertBadge> : <Badge tone="muted">已停用</Badge>,
                 <span className="tiny faint" style={{ maxWidth: 260 }}>{t.related}</span>,
                 <div className="row gap6">
                   {t.status === '待审核' ? (

@@ -6,7 +6,7 @@
  * 权限：改配置需要「权限矩阵」操作权；排班与派单需要「资源调配」操作权
  * ===================================================================== */
 import { useEffect, useState } from 'react'
-import {Badge, Callout, Kpi, Panel, PageHead, Table, Tip} from '../../components/ui'
+import {Badge, AlertBadge, Callout, Kpi, Panel, PageHead, Table, Tip} from '../../components/ui'
 import { NAV, NAV_ITEMS } from '../../navCatalog'
 import { DEMO_NAV, FOCUS_PANELS, keptPanels, setView, useView } from '../../engine/view'
 import { PANEL_CATALOG } from '../../panelCatalog'
@@ -14,6 +14,7 @@ import { listLinks, loadConfig, saveConfig, syncLinks, useFlags, usePerm } from 
 import { COLLECT_KINDS, buildSourceConfig, collectStore, useCollect } from '../../engine/collect'
 import { apiSend } from '../../engine/db'
 import { consoleStore, useConsole } from '../../engine/console'
+import { Jump, useAlertPick, usePickFlash } from '../../engine/alertJump'
 
 const SOURCE_KEYS = ['auth-provider', 'approval-source', 'notify-channels', 'duty-source'] as const
 const CHOICES: Record<string, { v: string; label: string }[]> = {
@@ -55,6 +56,15 @@ export default function OpsSettings() {
   const [draft, setDraft] = useState<Record<string, string>>({})
   const [shiftDraft, setShiftDraft] = useState<Record<string, Partial<any>>>({})
   const [routeDraft, setRouteDraft] = useState<Record<string, Partial<any>>>({})
+
+  /* 告警直达口径：本页可点的行主键有三类 —— 配置项 key（来源配置 / 适配器）、
+     采集源 id（资源接入与采集）、采集类型（COLLECT_KINDS，Jump.settings('cards') 同一口径）；
+     账号映射表用外部账号 id。跳进来落到哪一类，就高亮哪一类的那一行 */
+  const pick = useAlertPick()
+  usePickFlash(pick)
+  const settingJump = (key: string, label: string) => Jump.settings(key, label)
+  const srcJump = (id: string, label: string) => ({ page: '/ops/settings', pick: id, label })
+  const srcOfKind = (kind: string) => col.sources.find((s) => s.kind === kind)?.id ?? ''
 
   useEffect(() => {
     void loadConfig()
@@ -161,7 +171,7 @@ export default function OpsSettings() {
       </Panel>
 
       <Panel title="来源配置（配置项，不是代码分支）" className="mt14">
-        <Table minWidth={860} head={['配置项', '取值', '口径与影响', '保存']} rows={SOURCE_KEYS.map((k) => [
+        <Table minWidth={860} head={['配置项', '取值', '口径与影响', '保存']} rowKeys={[...SOURCE_KEYS]} pick={pick} rows={SOURCE_KEYS.map((k) => [
           <span className="small strong">{flags.labels[k] || k}<span className="faint tiny mono"> {k}</span></span>,
           <select className="btn sm" style={{ minWidth: 260 }} disabled={!matrixPerm.manage} value={draft[k] ?? cfg[k] ?? ''}
             onChange={(e) => setDraft({ ...draft, [k]: e.target.value })}>
@@ -211,12 +221,12 @@ export default function OpsSettings() {
             <span className="tiny faint">当前身份来源：{cfg['auth-provider'] || 'local'}</span>
             {syncMsg ? <span className="tiny" style={{ color: 'var(--ok-text)' }}>{syncMsg}</span> : null}
           </div>
-          <Table minWidth={820} head={['外部账号', '外部姓名', '外部角色', '对应本地账号', '比对结果', '最近同步']} rows={links.map((r) => [
+          <Table minWidth={820} head={['外部账号', '外部姓名', '外部角色', '对应本地账号', '比对结果', '最近同步']} rowKeys={links.map((r) => String(r.external_id))} pick={pick} rows={links.map((r) => [
             <span className="small mono">{r.external_id}</span>,
             <span className="small">{r.name || '—'}</span>,
             <span className="tiny">{r.role || '—'}</span>,
             <span className="tiny mono">{r.user_id || '—'}</span>,
-            <span>{r.matched ? <Badge tone="good">可对应</Badge> : <Badge tone="warn">待绑定</Badge>}</span>,
+            <span>{r.matched ? <Badge tone="good">可对应</Badge> : <AlertBadge tone="warn" jump={srcJump(String(r.external_id), `外部账号 ${r.external_id} 还没绑定本地账号：点过去落到这一行，重新跑一轮影子同步 / 人工绑定`)}>{`待绑定 ${r.external_id}`}</AlertBadge>}</span>,
             <span className="tiny mono">{(r.last_seen || '').replace('T', ' ').replace('Z', '')}</span>,
           ])} />
           {links.length === 0 ? <div className="tiny faint" style={{ marginTop: 8 }}>映射表现在是空的：正式切换前这张表必须先跑满一轮影子同步，把差异条数降到 0。</div> : null}
@@ -225,7 +235,7 @@ export default function OpsSettings() {
 
       <Panel title="排班与派单（试运行由建设团队安排，全部可配）" className="mt14" noPad>
         <div className="panel-body">
-          {cons.error ? <Callout warn text={cons.error} /> : null}
+          {cons.error ? <Callout warn text={cons.error} jump={settingJump('duty-source', '排班 / 派单数据读不到：点过去落到「排班来源」这一行，先确认现在的来源口径再人工核班')} /> : null}
           <div className="tiny faint">派单映射：例外类型 → 当班岗位 → 超时升级岗位。改完立即影响「算力中心 · 例外监控与阻断」的自动派单与升级。</div>
           <Table minWidth={900} head={['例外类型', '派给岗位', '超时升级到', '保存']} rows={cons.routes.map((r) => {
             const d = routeDraft[r.kind] || {}
@@ -265,9 +275,9 @@ export default function OpsSettings() {
       </Panel>
 
       <Panel title="这些开关现在的真实状态（不装成已完成）" className="mt14">
-        <Table minWidth={760} head={['适配器', '现在的状态', '等材料 / 等什么']} rows={Object.entries(flags.providers).map(([k, p]) => [
+        <Table minWidth={760} head={['适配器', '现在的状态', '等材料 / 等什么']} rowKeys={Object.keys(flags.providers)} pick={pick} rows={Object.entries(flags.providers).map(([k, p]) => [
           <span className="small strong">{k}<span className="faint tiny mono"> {p.label}</span></span>,
-          <span>{p.ready ? <Badge tone="good">可用（内建）</Badge> : <Badge tone="warn">占位 · 未配置</Badge>}</span>,
+          <span>{p.ready ? <Badge tone="good">可用（内建）</Badge> : <AlertBadge tone="warn" jump={settingJump(k, `来源「${p.label}」还是占位（${p.note}）：选它之前先把材料配齐；点过去落到这一行看还缺什么`)}>占位 · 未配置</AlertBadge>}</span>,
           <span className="tiny faint">{p.note}</span>,
         ])} />
         <div className="tiny faint" style={{ marginTop: 8 }}>
@@ -282,15 +292,15 @@ export default function OpsSettings() {
             + ' · 改这些只动配置，不用改代码'} />
         </span>}>
         <div className="panel-body">
-          {col.error ? <Callout warn text={'资源接入读不到：' + col.error} /> : null}
-          <Table minWidth={1120} head={['资源 / 类型', '关键配置（密钥只写环境变量名）', '间隔', '最近一轮', '接入状态', '操作']} rows={col.sources.map((d) => [
-            <span className="small strong">{d.name}<div className="tiny faint">{d.kind} · {d.id} · {d.enabled ? '启用' : '已停用'}{d.alert_state === '已告警' ? ' · 已告警（连续 ' + d.fail_streak + ' 轮）' : ''}</div></span>,
+          {col.error ? <Callout warn text={'资源接入读不到：' + col.error} jump={srcJump(col.sources[0]?.id ?? '', '资源接入读不到：点过去落到这条采集源那一行，「立即采」与最近错误都在那一行')} /> : null}
+          <Table minWidth={1120} head={['资源 / 类型', '关键配置（密钥只写环境变量名）', '间隔', '最近一轮', '接入状态', '操作']} rowKeys={col.sources.map((d) => d.id)} pick={pick} rows={col.sources.map((d) => [
+            <span className="small strong">{d.name}<div className="tiny faint">{d.kind} · {d.id} · {d.enabled ? '启用' : '已停用'}</div>{d.alert_state === '已告警' ? <AlertBadge tone="bad" jump={srcJump(d.id, `这条采集源连续 ${d.fail_streak} 轮采不到并已告警（最近错误：${d.last_error || '—'}）：点过去落到这一行，立即采一轮 / 看最近错误 / 停用它都在这一行`)}>已告警 · 连续 {d.fail_streak} 轮</AlertBadge> : null}</span>,
             <span className="tiny mono" style={{ maxWidth: 340 }}>{(JSON.stringify(JSON.parse(d.config_json || '{}')) || '').slice(0, 190)}</span>,
             <span className="tiny">{d.interval_seconds} 秒</span>,
-            <span className="tiny">{d.last_status === '已采集' ? <Badge tone="good">已采集</Badge> : d.last_status ? <Badge tone="bad">{d.last_status}</Badge> : <Badge tone="muted">还没采过</Badge>}
+            <span className="tiny">{d.last_status === '已采集' ? <Badge tone="good">已采集</Badge> : d.last_status ? <AlertBadge tone="bad" jump={srcJump(d.id, `这一轮「${d.last_status}」（${d.last_error || '无错误说明'}）：点过去落到这一行，立即采一轮 / 看最近错误 / 停用它都在这一行`)}>{d.last_status}</AlertBadge> : <Badge tone="muted">还没采过</Badge>}
               {d.last_error ? <div className="tiny" style={{ color: 'var(--bad-text)', maxWidth: 260 }}>{d.last_error}</div> : null}
               <div className="tiny faint">{(d.last_run_at || '').replace('T', ' ').replace('Z', '')}</div></span>,
-            <span>{d.approval_state === '已生效' ? <Badge tone="good">已生效</Badge> : d.approval_state === '待审批' ? <Badge tone="warn">待审批 {d.order_id}</Badge> : <Badge tone="bad">已驳回</Badge>}</span>,
+            <span>{d.approval_state === '已生效' ? <Badge tone="good">已生效</Badge> : d.approval_state === '待审批' ? <AlertBadge tone="warn" jump={d.order_id ? Jump.approval(d.order_id, `这条采集源 ${d.id} 在等审批：点过去落到审批台那一行，通过 / 驳回都在那一行`) : srcJump(d.id, `这条采集源 ${d.id} 在等审批：点过去落到这一行看它的工单号`)}>待审批 {d.order_id}</AlertBadge> : <AlertBadge tone="bad" jump={d.order_id ? Jump.approval(d.order_id, `这条采集源被驳回（工单 ${d.order_id}）：点过去落到审批台那一行看驳回理由`) : srcJump(d.id, '这条采集源被驳回：点过去落到这一行，改配置后重新登记')}>已驳回</AlertBadge>}</span>,
             <div className="row gap6" style={{ flexWrap: 'wrap' }}>
               <button className="btn sm ghost" disabled={!matrixPerm.manage} onClick={() => void collectStore.run(d.kind).then((r) => setColMsg({ ok: !!r.ok, text: r.ok ? d.name + ' 已采一轮' : d.name + ' 采集失败：' + JSON.stringify(r.result?.errors || r.error || '') }))}>立即采</button>
               <button className="btn sm ghost" disabled={!matrixPerm.manage} onClick={() => void collectStore.saveSource({ id: d.id, kind: d.kind, name: d.name, config: JSON.parse(d.config_json || '{}'), interval_seconds: d.interval_seconds, enabled: !d.enabled }).then((r) => setColMsg({ ok: !!r.ok, text: r.ok ? (d.enabled ? d.name + ' 已停用' : d.name + ' 已启用') : '被拒：' + (r.error || '') }))}>{d.enabled ? '停用' : '启用'}</button>
@@ -349,13 +359,13 @@ export default function OpsSettings() {
           {colMsg ? <div className="tiny" style={{ marginTop: 8, color: colMsg.ok ? 'var(--ok-text)' : 'var(--bad-text)' }}>{colMsg.text}</div> : null}
 
           <div className="divider" />
-          <Table minWidth={900} head={['采集类型', '本轮条数', '最近采集时间', '状态 / 错误']} rows={COLLECT_KINDS.map((k) => {
+          <Table minWidth={900} head={['采集类型', '本轮条数', '最近采集时间', '状态 / 错误']} rowKeys={COLLECT_KINDS.map((k) => k.v)} pick={pick} rows={COLLECT_KINDS.map((k) => {
             const one = col.status[k.v] || col.status[k.v + '.json']
             return [
               <span className="tiny strong">{k.label}</span>,
               <span className="num small">{one ? one.items : 0}</span>,
               <span className="tiny faint">{one ? (one.at || '').replace('T', ' ').replace('Z', '') : '未采'}</span>,
-              <span className="tiny">{one ? (one.error ? <span style={{ color: 'var(--bad-text)' }}>{one.error}</span> : <Badge tone="good">正常</Badge>) : <Badge tone="muted">未配置</Badge>}{one && one.sources > 1 ? <span className="tiny faint"> 由 {one.sources} 个源合并</span> : null}</span>,
+              <span className="tiny">{one ? (one.error ? <><AlertBadge tone="bad" jump={Jump.settings(srcOfKind(k.v), `「${k.label}」这一类本轮采不到（${one.error}）：点过去落到那条采集源那一行，立即采一轮 / 看最近错误都在那一行`)}>本轮采不到</AlertBadge><span style={{ color: 'var(--bad-text)' }}> {one.error}</span></> : <Badge tone="good">正常</Badge>) : <Badge tone="muted">未配置</Badge>}{one && one.sources > 1 ? <span className="tiny faint"> 由 {one.sources} 个源合并</span> : null}</span>,
             ]
           })} />
           <div className="tiny faint" style={{ marginTop: 8 }}>

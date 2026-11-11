@@ -1,9 +1,10 @@
-import { useState } from 'react'
-import { Kpi, Panel, PageHead, Badge, State, Table, Callout } from '../../components/ui'
+import { useEffect, useState } from 'react'
+import { AlertBadge, Kpi, Panel, PageHead, Badge, State, Table, Callout } from '../../components/ui'
 import { gatewayEndpoints, tools as gatewayTools } from '../../data/mock'
 import { useEngine, engine, DIRECTORY_KINDS } from '../../engine/engine'
 import { ledgerOf } from '../../engine/ledger'
 import { usePerm } from '../../engine/auth'
+import { Jump, useAlertPick, usePickFlash, type AlertJump } from '../../engine/alertJump'
 
 const STRATEGIES = [
   { name: '固定优先级', desc: '高保服务集群优先放行，核心业务（报告撰写、咨询问答）独立队列保障' },
@@ -28,6 +29,16 @@ export default function Gateway() {
   const gatewayChannels = st.channels
   const [target, setTarget] = useState(gatewayChannels[0]?.id ?? 'ascend')
   const [flash, setFlash] = useState<string | null>(null)
+  /* 告警直达口径（一处写死，别处同一口径）
+     渠道级告警（错误率超阈 / 健康异常）→ pick = 渠道 id：这一行看错误率与健康，上面就是「模拟渠道劣化 / 触发自动切换 / 执行回切」控件
+     目录不一致 → pick = 纳管对象 id：这一行就是「隔离出目录 / 重新纳入」按钮
+     切换工单待处理 / 排队 → Jump.order(工单 id)；受影响业务方 → Jump.agent(应用名) */
+  const pick = useAlertPick()
+  usePickFlash(pick)
+  const chanJump = (id: string): AlertJump => ({ page: '/model/gateway', pick: id, label: '到这个渠道这一行：降权 / 触发自动切换 / 回切' })
+  const dirJump = (id: string): AlertJump => ({ page: '/model/gateway', pick: id, label: '到这一行：隔离出目录或重新纳入（须归口确认）' })
+  const hotChan = gatewayChannels.find((c) => c.health !== 'ok' || c.err > 1)
+  useEffect(() => { if (pick && gatewayChannels.some((c) => c.id === pick)) setTarget(pick) }, [pick])
   const fo = st.failover ?? null
   const drills = st.orders.filter((o) => o.applicant === '运行监测 · 自动处置')
   const gate = usePerm('gateway')
@@ -46,7 +57,10 @@ export default function Gateway() {
       />
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', gap: 14 }}>
-        <Kpi label="在线渠道" value={st.channels.length} unit="个" foot={`本地 ${st.channels.filter((c) => c.kind === '本地').length} · 外部 ${st.channels.filter((c) => c.kind === '外部').length} · 异常 ${st.channels.filter((c) => c.health !== 'ok').length}`} />
+        <Kpi label="在线渠道" value={st.channels.length} unit="个" foot={st.channels.filter((c) => c.health !== 'ok').length
+          ? <span className="down">{`● 异常渠道 ${st.channels.filter((c) => c.health !== 'ok').length} 条 · 连续 3 次探测失败即自动切换`}</span>
+          : `本地 ${st.channels.filter((c) => c.kind === '本地').length} · 外部 ${st.channels.filter((c) => c.kind === '外部').length} · 异常 ${st.channels.filter((c) => c.health !== 'ok').length}`}
+          jump={hotChan ? chanJump(hotChan.id) : undefined} />
         <Kpi label="能力 API 端点" value={gatewayEndpoints.length} unit="个" foot="Chat / Embed / Rerank / ASR / Batch" />
         <Kpi label="当前 QPS" value={Math.max(1, Math.round(L.callsToday / 86400))} foot={`今日 ${(L.callsToday / 10000).toFixed(1)} 万次 · 与总览同源`} />
         <Kpi label="故障切换" value={fo ? '生效中' : '空闲'} foot={`自动切换演练 ${drills.length} 次 · 均可回切`} />
@@ -85,7 +99,7 @@ export default function Gateway() {
           {fo && fo.affectedApps.length ? (
             <div className="row wrap gap6" style={{ marginTop: 12 }}>
               <span className="small faint">受影响业务方（已推送变更通知）</span>
-              {fo.affectedApps.map((a) => <span key={a} className="tag amber">{a}</span>)}
+              {fo.affectedApps.map((a) => <AlertBadge key={a} tone="warn" jump={Jump.agent(a, '去智能体纳管看这个受影响应用，通知与恢复都在那里跟')}>{a}</AlertBadge>)}
             </div>
           ) : null}
 
@@ -97,10 +111,16 @@ export default function Gateway() {
                   <span className="mono small">{o.id}</span>,
                   <span className="tiny faint" style={{ maxWidth: 320 }}>{o.reason}</span>,
                   <span className="mono small">{o.target} {o.amount}</span>,
-                  <State s={o.status === 'submitted' ? 'pending' : o.status === 'queued' ? 'queued' : o.status === 'running' ? 'run' : o.status === 'rejected' ? 'block' : o.status === 'rolled_back' ? 'rollback' : 'closed'} />,
+                  (() => {
+                    const s = o.status === 'submitted' ? 'pending' : o.status === 'queued' ? 'queued' : o.status === 'running' ? 'run' : o.status === 'rejected' ? 'block' : o.status === 'rolled_back' ? 'rollback' : 'closed'
+                    return (s === 'pending' || s === 'queued' || s === 'block')
+                      ? <AlertBadge tone={s === 'block' ? 'bad' : 'warn'} jump={Jump.order(o.id, '去工作台看这张切换工单：排队 / 审批 / 回滚')}>{s === 'pending' ? '待处理' : s === 'queued' ? '排队中' : '已拦截'}</AlertBadge>
+                      : <State s={s} />
+                  })(),
                   <span className="tiny faint">{o.trace.map((t) => t.action).join(' → ')}</span>,
                 ])}
                 minWidth={900}
+                rowKeys={drills.map((o) => o.id)} pick={pick}
               />
             </div>
           ) : null}
@@ -119,12 +139,13 @@ export default function Gateway() {
                 <Badge tone={c.kind === '本地' ? 'muted' : 'info'}>{c.kind}</Badge>,
                 <span className="num">{c.replicas || '—'}</span>,
                 <span className="num">{c.latency}ms</span>,
-                c.err > 1 ? <Badge tone="warn">{c.err}%</Badge> : <span className="num">{c.err}%</span>,
+                c.err > 1 ? <AlertBadge tone={c.err >= 4 ? 'bad' : 'warn'} jump={chanJump(c.id)}>{`${c.err}% 错误率`}</AlertBadge> : <span className="num">{c.err}%</span>,
                 <span className="num small">{c.allocatedRpm} / {c.capacityRpm} RPM</span>,
                 <span className="num strong">{c.weight}%</span>,
-                <State s={c.health} />,
+                c.health === 'ok' ? <State s={c.health} /> : <AlertBadge tone={c.health === 'fault' ? 'bad' : 'warn'} jump={chanJump(c.id)}>{c.health === 'fault' ? '故障' : '异常'}</AlertBadge>,
               ])}
               minWidth={820}
+              rowKeys={gatewayChannels.map((c) => c.id)} pick={pick}
             />
           </div>
         </Panel>
@@ -154,6 +175,7 @@ export default function Gateway() {
           ) : null}
           <Table
             minWidth={960}
+            rowKeys={st.managed.filter((m) => DIRECTORY_KINDS.includes(m.kind)).map((m) => m.id)} pick={pick}
             head={['工具 / 插件', '类型与版本', '归口', '技术注册目录（模型侧）', '业务使用目录（应用侧）', '运行质量（实时）', '目录一致性', '模型侧操作']}
             rows={st.managed.filter((m) => DIRECTORY_KINDS.includes(m.kind)).map((m) => {
               const meta = gatewayTools.find((t) => t.name === m.name)
@@ -162,10 +184,10 @@ export default function Gateway() {
                 <span className="strong small">{m.name}<div className="tiny faint">{m.id} · {m.level}队列</div></span>,
                 <span className="tag gray">{m.kind}</span>,
                 <span className="small">{meta?.version ?? '—'}<div className="tiny faint">{m.owner}</div></span>,
-                m.tech ? <Badge tone="good">已注册 · 可调用</Badge> : <Badge tone="bad">已摘除 · 路由已断开</Badge>,
-                m.biz ? <Badge tone="good">已上架 · 业务可见</Badge> : <Badge tone="warn">未上架 / 待同步</Badge>,
+                m.tech ? <Badge tone="good">已注册 · 可调用</Badge> : <AlertBadge tone="bad" jump={dirJump(m.id)}>已摘除 · 路由已断开</AlertBadge>,
+                m.biz ? <Badge tone="good">已上架 · 业务可见</Badge> : <AlertBadge tone="warn" jump={dirJump(m.id)}>未上架 / 待同步</AlertBadge>,
                 <span className="num small">成功率 {m.success.toFixed(1)}%<div className="tiny faint">失败率 {m.failRate.toFixed(1)}% · 队列 {m.queue}</div></span>,
-                m.tech === m.biz && m.status === '正常' ? <Badge tone="good">一致</Badge> : <Badge tone="warn">不一致 · 需双方确认</Badge>,
+                m.tech === m.biz && m.status === '正常' ? <Badge tone="good">一致</Badge> : <AlertBadge tone="warn" jump={dirJump(m.id)}>不一致 · 需双方确认</AlertBadge>,
                 <div className="row gap6">
                   <span className="tiny faint">{m.status === '正常' ? '' : m.status}</span>
                   {gate.manage ? (
@@ -207,10 +229,16 @@ export default function Gateway() {
             <div className="mt14" style={{ marginTop: 14 }}>
               <Table
                 head={['工单', '权重方案', '状态', '结论 / 驳回原因']}
+                  rowKeys={st.orders.filter((o) => o.type === 'weight_adjust').slice(0, 5).map((o) => o.id)} pick={pick}
                 rows={st.orders.filter((o) => o.type === 'weight_adjust').slice(0, 5).map((o) => [
                   <span className="mono small">{o.id}</span>,
                   <span className="mono small">{String(o.spec.weights).replace(/,/g, ' / ')}</span>,
-                  <State s={o.status === 'submitted' ? 'pending' : o.status === 'rejected' ? 'block' : o.status === 'running' ? 'run' : 'done'} />,
+                  (() => {
+                    const s = o.status === 'submitted' ? 'pending' : o.status === 'rejected' ? 'block' : o.status === 'running' ? 'run' : 'done'
+                    return (s === 'pending' || s === 'block')
+                      ? <AlertBadge tone={s === 'block' ? 'bad' : 'warn'} jump={Jump.order(o.id, '去工作台看这张权重工单：审批 / 排队 / 回滚')}>{s === 'pending' ? '待处理' : '已拦截'}</AlertBadge>
+                      : <State s={s} />
+                  })(),
                   <span className="small" style={{ color: o.rejectReason ? 'var(--bad-text)' : 'var(--text-dim)' }}>{o.rejectReason ?? (o.trace[o.trace.length - 1]?.detail ?? '')}</span>,
                 ])}
               />

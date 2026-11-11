@@ -2,16 +2,23 @@
  * 统一接管范围（算力平台 / 算力资源 / 智能体 / Skill / MCP）
  * 接管深度不是声明出来的：由「接入配置就绪程度」实时推导，改配置立刻变绿或变黄
  * ===================================================================== */
-import { useState } from 'react'
-import { Kpi, Panel, PageHead, Badge, State, Table, Callout, Tabs, Progress } from '../components/ui'
+import { useEffect, useState } from 'react'
+import { Kpi, Panel, PageHead, Badge, AlertBadge, State, Table, Callout, Tabs, Progress } from '../components/ui'
 import { Chart, CHART_COLORS, AXIS_COLOR, SPLIT_COLOR, TOOLTIP_STYLE, GRID } from '../components/Chart'
 import { Link } from 'react-router-dom'
-import { useGovernViews, useGovern, governStore, governSummary, governViews, DOMAINS, DEPTH_LABEL, DEPTH_WHY, type Domain } from '../engine/govern'
+import { useGovernViews, useGovern, governStore, governSummary, governViews, DOMAINS, DEPTH_LABEL, DEPTH_WHY, type Domain, type GovernedView } from '../engine/govern'
 import { useConnectors, connectorStore } from '../engine/ops'
 import { TOTAL_CARDS, useEngine } from '../engine/engine'
 import { usePerm } from '../engine/auth'
+import { Jump, useAlertPick, usePickFlash, type AlertJump } from '../engine/alertJump'
 
 const TABS: (Domain | '全部')[] = ['全部', ...DOMAINS]
+
+/** 接管深度缺口口径：能动手的是那条接入配置；没绑接入的回到登记册这一行（本页绑定控件） */
+const gapJump = (v: GovernedView): AlertJump =>
+  v.connectorId
+    ? Jump.connector(v.connectorId, `去外部对接清单改「${v.connectorName}」这条接入（${v.why}）`)
+    : { page: '/govern', pick: v.id, label: `去接管登记册给「${v.name}」绑定接入配置（${v.why}）` }
 
 export default function GovernScope() {
   const views = useGovernViews()
@@ -37,6 +44,12 @@ export default function GovernScope() {
   const perm = usePerm('overview')
   const [tab, setTab] = useState<(typeof TABS)[number]>('全部')
   const list = tab === '全部' ? views : views.filter((v) => v.domain === tab)
+  const pick = useAlertPick()          // 从红 / 黄缺口提示跳进来：?pick=<登记对象 id>
+  usePickFlash(pick)
+  useEffect(() => { if (pick && rows.some((g) => g.id === pick)) setBindId(pick) }, [pick])
+  /** 一组对象里第一个「目标深度还没达到」的对象：聚合告警就落到它 */
+  const gapOf = (vs: GovernedView[]) => vs.find((v) => v.wantDepth > v.depth) ?? vs.find((v) => v.depth < 4)
+  const firstGap = gapOf(views)
 
   const schedulableTotal = TOTAL_CARDS + sum.externalCards
   const localAlloc = st.pools.reduce((s, p) => s + p.cards, 0)
@@ -64,7 +77,7 @@ export default function GovernScope() {
           <>
             <Badge tone="good">可处置 {sum.manageable} / {sum.total}</Badge>
             <Badge tone="info">可调度 {sum.schedulable} / {sum.total}</Badge>
-            <Badge tone="warn">{sum.registeredOnly} 项目前只能登记</Badge>
+            {firstGap ? <AlertBadge tone="warn" jump={gapJump(firstGap)}>{sum.registeredOnly} 项目前只能登记</AlertBadge> : <Badge tone="warn">{sum.registeredOnly} 项目前只能登记</Badge>}
             <button className="btn sm ghost" onClick={() => governStore.reset()}>恢复默认登记册</button>
           </>
         }
@@ -118,7 +131,7 @@ export default function GovernScope() {
                 <span className="small">{v.source}<div className="tiny faint">{v.vendor}</div></span>,
                 <span className="small">{v.scale}{v.cards ? <div className="tiny faint">{v.cards} 卡</div> : null}</span>,
                 <span className="small">{v.connectorName}<div className="tiny faint">{v.mode}</div></span>,
-                <Badge tone={v.depth === 4 ? 'good' : v.depth === 3 ? 'info' : v.depth === 2 ? 'warn' : 'muted'}>{DEPTH_LABEL[v.depth]}</Badge>,
+                v.depth === 2 ? <AlertBadge tone="warn" jump={gapJump(v)}>{DEPTH_LABEL[v.depth]}</AlertBadge> : <Badge tone={v.depth === 4 ? 'good' : v.depth === 3 ? 'info' : 'muted'}>{DEPTH_LABEL[v.depth]}</Badge>,
                 perm.manage ? (
                   <select className="btn sm" value={v.wantDepth} onChange={(e) => governStore.setWantDepth(v.id, Number(e.target.value) as 1 | 2 | 3 | 4)}>
                     {[1, 2, 3, 4].map((d) => <option key={d} value={d}>{DEPTH_LABEL[d]}</option>)}
@@ -127,6 +140,7 @@ export default function GovernScope() {
                 v.demo ? <Badge tone="good">可演示处置</Badge> : <Badge tone="muted">仅登记 / 展示</Badge>,
                 <span className="tiny" style={{ maxWidth: 300 }}>{v.why}<div className="tiny faint" style={{ marginTop: 3 }}>{v.demoWhy}</div></span>,
               ])}
+              rowKeys={list.map((v) => v.id)} pick={pick}
             />
             {list.some((v) => v.wantDepth > v.depth) ? (
               <div className="row gap6" style={{ marginTop: 12 }}>
@@ -146,13 +160,19 @@ export default function GovernScope() {
               <Table
                 minWidth={620}
                 head={['类别', '登记数', '可处置', '可调度', '可处置覆盖率']}
-                rows={sum.byDomain.map((d) => [
-                  <span className="small strong">{d.domain}</span>,
-                  <span className="num">{d.total}</span>,
-                  <span className="num">{d.l3}</span>,
-                  <span className="num">{d.l4}</span>,
-                  <div style={{ minWidth: 130 }}><span className="num small">{d.rate}%</span><Progress value={d.rate} tone={d.rate >= 80 ? 'green' : d.rate >= 50 ? 'warn' : 'bad'} /></div>,
-                ])}
+                rows={sum.byDomain.map((d) => {
+                  const gap = gapOf(views.filter((v) => v.domain === d.domain))
+                  return [
+                    <span className="small strong">{d.domain}</span>,
+                    <span className="num">{d.total}</span>,
+                    <span className="num">{d.l3}</span>,
+                    <span className="num">{d.l4}</span>,
+                    <div style={{ minWidth: 130 }}>
+                      <span className="num small">{d.rate}%</span>
+                      <Progress value={d.rate} tone={d.rate >= 80 ? 'green' : d.rate >= 50 ? 'warn' : 'bad'} jump={d.rate < 80 && gap ? gapJump(gap) : undefined} />
+                    </div>,
+                  ]
+                })}
               />
             </div>
           </Panel>
@@ -284,7 +304,7 @@ export default function GovernScope() {
               [<span className="small strong">MCP</span>, <span className="small">MCP 服务双侧目录（技术注册 ↔ 业务使用）、健康探针、调用统计、隔离出目录</span>, <span className="small">隔离 / 重新纳入即双侧同步并断开调用路由，一致性核查计数实时</span>, <span className="small">MCP 平台的探针字段、目录同步方向与冲突处理规则</span>],
             ]}
           />
-          <Callout warn text={<>两个口径要分清：<b>真实接管深度</b>看接入配置就绪程度（下表「当前深度」），<b>演示内可操作</b>看平台纳管表里有没有这个对象（演示页面上的处置动作作用在平台侧影子状态）。接管范围覆盖这五类没有缺口，<b>缺口在接管深度</b>：外部与第三方对象要下到 L3 / L4，必须由接口方提供接口并确认「执行回执」类前置条件；否则平台只能做到「看得见、算得清」，做不到「下得去、调得动」。这是选型阶段需要客户方推动外部方确认的事。</>} />
+          <Callout warn jump={firstGap ? gapJump(firstGap) : undefined} text={<>两个口径要分清：<b>真实接管深度</b>看接入配置就绪程度（下表「当前深度」），<b>演示内可操作</b>看平台纳管表里有没有这个对象（演示页面上的处置动作作用在平台侧影子状态）。接管范围覆盖这五类没有缺口，<b>缺口在接管深度</b>：外部与第三方对象要下到 L3 / L4，必须由接口方提供接口并确认「执行回执」类前置条件；否则平台只能做到「看得见、算得清」，做不到「下得去、调得动」。这是选型阶段需要客户方推动外部方确认的事。</>} />
         </div>
       </Panel>
     </div>

@@ -1,15 +1,16 @@
 import React from 'react'
-import { Kpi, Panel, PageHead, Badge, Table, Callout } from '../../components/ui'
+import { Kpi, Panel, PageHead, Badge, Table, Callout, AlertBadge } from '../../components/ui'
 import { accounts } from '../../data/mock'
 import { useMatrix, matrixStore, usePerm, useSession, ROLE_LABEL, PERM_LABEL, CLS_LEVELS, type Role, type PermKey } from '../../engine/auth'
+import { Jump, useAlertPick, usePickFlash, type AlertJump } from '../../engine/alertJump'
 
 const PERM_KEYS: PermKey[] = ['approve', 'overview', 'compute', 'gateway', 'cred', 'workflow', 'app', 'agent', 'kb', 'tool', 'security', 'security_issue', 'security_emergency', 'audit', 'matrix', 'export', 'integration', 'analytics']
 
-const AUDITS = [
+const AUDITS: { time: string; obj: string; act: string; res: 'ok' | 'block' | 'warn'; jump?: AlertJump }[] = [
   { time: '11-04 16:20', obj: 'SA-0074 平台代理密钥', act: '配额调整 TPM 60万→90万', res: 'ok' },
   { time: '11-04 14:05', obj: '管理员 罗××', act: '导出调用日志（近 30 日 · 128 万条）', res: 'ok' },
-  { time: '11-03 19:40', obj: '开发者 示例××', act: '尝试访问未授权知识库 → 已拦截', res: 'block' },
-  { time: '11-03 10:12', obj: '账号 PK-2210', act: '疑似泄露吊销并重发', res: 'warn' },
+  { time: '11-03 19:40', obj: '开发者 示例××', act: '尝试访问未授权知识库 → 已拦截', res: 'block', jump: { page: '/app/accounts', pick: '业务开发者（各部门）', label: '点过去落到这个角色那一行：知识库权限要不要给，就在下面权限矩阵这一行改' } },
+  { time: '11-03 10:12', obj: '账号 PK-2210', act: '疑似泄露吊销并重发', res: 'warn', jump: Jump.credential('PK-2210', '点过去落到这条凭证那一行：重发 / 配额 / 回收都在那一行处理') },
 ]
 
 export default function AppAccounts() {
@@ -17,6 +18,10 @@ export default function AppAccounts() {
   const matrixPerm = usePerm('matrix')
   const session = useSession()
   const matrixPermRole: Role = session?.role ?? 'user'
+  /** 别处点过来：?pick=<角色行主键（本页用账号名）> → 高亮这一行 */
+  const pick = useAlertPick()
+  usePickFlash(pick)
+  const toRoleRow = (name: string) => ({ page: '/app/accounts', pick: name, label: '点过去落到这个角色那一行：授权 / 收回就在下面「权限矩阵」这一行改' })
   return (
     <div>
       <PageHead
@@ -38,11 +43,12 @@ export default function AppAccounts() {
           <Table
             minWidth={760}
             head={['角色', '定位', '账号数', '高权限', '最近复核']}
+            rowKeys={accounts.map((a) => a.name)} pick={pick}
             rows={accounts.map((a) => [
               <span className="strong">{a.name}</span>,
               <span className="tag gray">{a.role}</span>,
               <span className="num">{a.count.toLocaleString('zh-CN')}</span>,
-              a.high > 0 ? <Badge tone="warn">{a.high} 个</Badge> : <Badge tone="good">0</Badge>,
+              a.high > 0 ? <AlertBadge tone="warn" jump={toRoleRow(a.name)}>{a.high} 个待复核</AlertBadge> : <Badge tone="good">0</Badge>,
               <span className="mono small">{a.last}</span>,
             ])}
           />
@@ -66,7 +72,7 @@ export default function AppAccounts() {
                 <span className="mono small">{a.time}</span>,
                 <span className="small">{a.obj}</span>,
                 <span className="muted small">{a.act}</span>,
-                a.res === 'block' ? <Badge tone="bad">已拦截</Badge> : a.res === 'warn' ? <Badge tone="warn">已处置</Badge> : <Badge tone="good">留痕</Badge>,
+                a.res === 'block' ? <AlertBadge tone="bad" jump={a.jump ?? toRoleRow(a.obj)}>{`已拦截 · ${a.obj}`}</AlertBadge> : a.res === 'warn' ? <AlertBadge tone="warn" jump={a.jump ?? toRoleRow(a.obj)}>{`已处置 · ${a.obj}`}</AlertBadge> : <Badge tone="good">留痕</Badge>,
               ])}
             />
             <div className="row wrap gap6" style={{ marginTop: 12 }}>

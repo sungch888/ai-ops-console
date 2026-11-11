@@ -6,12 +6,13 @@
  *           网关侧真正生效需要厂商开放写接口与执行回执（待厂商开放）。
  * ===================================================================== */
 import { useState } from 'react'
-import { Kpi, Panel, PageHead, Badge, Table, Callout, Progress, fmt } from '../../components/ui'
+import { AlertBadge, Kpi, Panel, PageHead, Badge, Table, Callout, Progress, fmtCN } from '../../components/ui'
 import { Chart, CHART_COLORS, AXIS_COLOR, SPLIT_COLOR, TOOLTIP_STYLE, GRID } from '../../components/Chart'
 import { gatewayKeys, gatewayRoutes, sourceHint, useTelemetry } from '../../engine/telemetry'
 import { engine, useEngine } from '../../engine/engine'
 import { monitorStore, monitorSummary } from '../../engine/exceptions'
 import { usePerm } from '../../engine/auth'
+import { Jump, useAlertPick, usePickFlash, type AlertJump } from '../../engine/alertJump'
 
 /** 平台口径的凭证配额上限（与引擎准入、例外监控同一套口径） */
 const CAP: Record<string, number> = { 个人密钥: 120, 平台代理: 400 }
@@ -19,7 +20,7 @@ const capOf = (kind: string) => CAP[kind] ?? 400
 const STATUS_TONE: Record<string, 'good' | 'warn' | 'muted'> = { ok: 'good', warn: 'warn', off: 'muted' }
 const STATUS_LABEL: Record<string, string> = { ok: '正常', warn: '异常', off: '已停用' }
 
-type Msg = { tone: 'good' | 'bad' | 'info'; text: string }
+type Msg = { tone: 'good' | 'bad' | 'info'; text: string; jump?: AlertJump }
 
 export default function LiteLlmGateway() {
   const st = useEngine()
@@ -30,6 +31,14 @@ export default function LiteLlmGateway() {
   const hint = sourceHint('litellm')
   const [msg, setMsg] = useState<Msg | null>(null)
   const [confirmId, setConfirmId] = useState<string | null>(null)
+  /* 告警直达口径：key 级告警（触限 / 超上限 / 异常状态 / 错误 / 回退）→ pick = keyId = 凭证 id，
+     落在本页 Key 明细那一行（这一行就有「限流回上限 / 吊销」按钮，二次确认也在这一行）；
+     渠道健康告警 → 推理网关的渠道状态那一行；台账差异 → 本页 / 凭证与配额 */
+  const pick = useAlertPick()
+  usePickFlash(pick)
+  const keyJump = (keyId: string, label = '到这条 key 那一行：限流回上限或吊销（发工单，不在网关侧直接写）'): AlertJump =>
+    ({ page: '/model/litellm', pick: keyId, label })
+  const llmConnJump = Jump.connector('r-llm', '去外部对接清单看「外部大模型 API 渠道」这条接入：写接口与执行回执都在这儿跟催')
 
   const activeKeys = keys.filter((k) => k.status !== 'off')
   const offKeys = keys.filter((k) => k.status === 'off')
@@ -41,6 +50,11 @@ export default function LiteLlmGateway() {
   const tokensWan = Math.round(routes.reduce((s, r) => s + r.tokensWan, 0) * 10) / 10
   const errPct = reqToday ? Math.round((errToday / reqToday) * 1000) / 10 : 0
   const overQuota = keys.filter((k) => k.usedRpm > k.rpmLimit && k.rpmLimit > 0)
+  const hotErrKey = [...keys].sort((a, b) => b.errors - a.errors)[0]
+  const chanJumpByName = (name: string): AlertJump => {
+    const ch = st.channels.find((c) => c.name === name)
+    return { page: '/model/gateway', pick: ch?.id ?? name, label: '到推理网关这个渠道那一行：降权 / 触发自动切换 / 回切' }
+  }
 
   /* -------- 网关 key ↔ 平台凭证台账 一致性 -------- */
   const keyIds = keys.map((k) => k.keyId)
@@ -54,7 +68,7 @@ export default function LiteLlmGateway() {
     const k = keys.find((x) => x.keyId === keyId)
     const cred = st.creds.find((c) => c.id === keyId)
     if (!cred) {
-      setMsg({ tone: 'bad', text: `限流工单未提交：网关侧 key ${keyId} 在平台凭证台账里没有对应记录（属「网关有 · 平台无」差异）。准入会回「未找到凭证 ${keyId}」——先在「模型中心 · 凭证与配额」补登记，或把它送例外监控做目录对齐。` })
+      setMsg({ tone: 'bad', text: `限流工单未提交：网关侧 key ${keyId} 在平台凭证台账里没有对应记录（属「网关有 · 平台无」差异）。准入会回「未找到凭证 ${keyId}」——先在「模型中心 · 凭证与配额」补登记，或把它送例外监控做目录对齐。`, jump: { page: '/model/credentials', pick: keyId, label: '去凭证台账看这条 key 有没有登记（没有就先补登记）' } })
       return
     }
     const cap = capOf(cred.kind)
@@ -66,8 +80,8 @@ export default function LiteLlmGateway() {
       reason: `【LiteLLM 网关观测】${keyId}（${cred.holder} · ${cred.kind}）当前 ${k?.usedRpm ?? 0}/${k?.rpmLimit ?? cred.rpm} RPM${k && k.rpmLimit > 0 && k.usedRpm / k.rpmLimit > 0.85 ? '，配额占用已超过 85%' : ''}：把该 key 的 RPM 配额压回平台口径上限 ${cap} RPM（个人密钥 120 / 平台代理 400）。平台只发单，审批通过后才生效，不在网关侧直接写值。`,
       spec: { credId: cred.id, rpm: cap },
     })
-    if (!r.precheck.ok) { setMsg({ tone: 'bad', text: `「限流回上限」被准入拒绝（理由原样回执）：${r.precheck.reason ?? '未给出理由'}` }); return }
-    setMsg({ tone: 'good', text: `限流工单 ${r.order.id} 已提交（待运营审批 · 双人复核后生效）：${r.precheck.suggest ?? ''}。本页不写 LiteLLM：网关侧改配额要厂商开放写接口并回执行结果（待厂商开放）。` })
+    if (!r.precheck.ok) { setMsg({ tone: 'bad', text: `「限流回上限」被准入拒绝（理由原样回执）：${r.precheck.reason ?? '未给出理由'}`, jump: Jump.order(r.order.id, '去看这张被驳回的限流工单，按理由重提') }); return }
+    setMsg({ tone: 'good', text: `限流工单 ${r.order.id} 已提交（待运营审批 · 双人复核后生效）：${r.precheck.suggest ?? ''}。本页不写 LiteLLM：网关侧改配额要厂商开放写接口并回执行结果（待厂商开放）。`, jump: Jump.order(r.order.id, '去工作台看这张限流工单') })
   }
 
   const doRevoke = (keyId: string) => {
@@ -87,8 +101,8 @@ export default function LiteLlmGateway() {
       reason: `【LiteLLM 网关观测】吊销 ${keyId}${k ? `（${k.holder} · ${k.app} · ${k.model}）` : ''}：网关侧观测到 ${k?.usedRpm ?? 0}/${k?.rpmLimit ?? 0} RPM${k && k.status === 'warn' ? ' · 该 key 当前处于异常状态' : ''}，切断调用入口并清理关联授权；须通知持有人，业务侧改走新凭证。`,
       spec: { credId: keyId },
     })
-    if (!r.precheck.ok) { setMsg({ tone: 'bad', text: `「吊销」被准入拒绝（理由原样回执）：${r.precheck.reason ?? '未给出理由'}` }); return }
-    setMsg({ tone: 'good', text: `吊销工单 ${r.order.id} 已提交（待审批）：${r.precheck.suggest ?? ''}。平台侧记为已吊销；LiteLLM 侧撤 key 需网关写接口与执行回执（待厂商开放），回执到位前页面上仍会看到该 key 在跑。` })
+    if (!r.precheck.ok) { setMsg({ tone: 'bad', text: `「吊销」被准入拒绝（理由原样回执）：${r.precheck.reason ?? '未给出理由'}`, jump: Jump.order(r.order.id, '去看这张被驳回的吊销工单') }); return }
+    setMsg({ tone: 'good', text: `吊销工单 ${r.order.id} 已提交（待审批）：${r.precheck.suggest ?? ''}。平台侧记为已吊销；LiteLLM 侧撤 key 需网关写接口与执行回执（待厂商开放），回执到位前页面上仍会看到该 key 在跑。`, jump: Jump.order(r.order.id, '去工作台看这张吊销工单') })
   }
 
   const doScan = () => {
@@ -130,22 +144,28 @@ export default function LiteLlmGateway() {
         extra={
           <>
             <Badge tone="good">活跃 key {activeKeys.length} / {keys.length}</Badge>
-            <Badge tone={hotKeys.length ? 'warn' : 'muted'}>触限 key {hotKeys.length}</Badge>
+            {hotKeys.length ? <AlertBadge tone="warn" jump={keyJump(hotKeys[0].keyId, '到第一条触限 key 那一行限流回上限')}>触限 key {hotKeys.length}</AlertBadge> : <Badge tone="muted">触限 key 0</Badge>}
             <Badge tone="info">超额 {overQuota.length}</Badge>
             <Badge tone={tele.mode === '采集层' ? 'good' : 'muted'}>取数来源：{tele.mode}</Badge>
           </>
         }
       />
 
-      {msg ? <div style={{ marginTop: 6 }}><Callout warn={msg.tone === 'bad'} text={msg.text} /></div> : null}
+      {msg ? <div style={{ marginTop: 6 }}><Callout warn={msg.tone === 'bad'} text={msg.text} jump={msg.jump} /></div> : null}
 
       <div className="grid g-6" style={{ marginTop: 14 }}>
         <Kpi label="key 总数" value={keys.length} unit="个" foot={`活跃 ${activeKeys.length} · 停用 ${offKeys.length} · 异常 ${keys.filter((k) => k.status === 'warn').length}`} />
-        <Kpi label="今日请求合计" value={fmt(reqToday)} unit="次" foot={`错误 ${fmt(errToday)} 次 · 错误率 ${errPct}%`} />
+        <Kpi label="今日请求合计" value={fmtCN(reqToday)} unit="次" foot={`错误 ${fmtCN(errToday)} 次 · 错误率 ${errPct}%`} />
         <Kpi label="今日 Token" value={tokensWan} unit="万" foot="与渠道路由同源 · 含外部渠道" />
         <Kpi label="今日网关侧成本" value={costToday.toLocaleString('zh-CN')} unit="元" foot="spendDay 求和 · 计费口径待厂商对账" />
-        <Kpi label="错误与回退" value={`${errToday + fallToday}`} unit="次" foot={`错误 ${errToday} · 回退 ${fallToday}（异常渠道降级）`} />
-        <Kpi label="触限 key" value={hotKeys.length} unit="个" foot={`配额占用 > 85% · 超额 ${overQuota.length} 个`} />
+        <Kpi label="错误与回退" value={`${errToday + fallToday}`} unit="次" foot={errToday + fallToday
+          ? <span className="down">{`● 错误 ${errToday} · 回退 ${fallToday}（异常渠道降级）`}</span>
+          : `错误 ${errToday} · 回退 ${fallToday}（异常渠道降级）`}
+          jump={errToday && hotErrKey ? keyJump(hotErrKey.keyId, '到错误最多的那条 key 那一行：看是配额触限还是渠道回退') : undefined} />
+        <Kpi label="触限 key" value={hotKeys.length} unit="个" foot={hotKeys.length
+          ? <span className="down">{`● 配额占用 > 85% 的 key ${hotKeys.length} 条 · 已越上限 ${overQuota.length} 条`}</span>
+          : `配额占用 > 85% · 超额 ${overQuota.length} 个`}
+          jump={hotKeys.length ? keyJump(hotKeys[0].keyId, '到第一条触限 key 那一行：限流回上限（发工单）') : undefined} />
       </div>
 
       <Panel
@@ -157,6 +177,7 @@ export default function LiteLlmGateway() {
         <div className="panel-body">
           <Table
             minWidth={1350}
+            rowKeys={keys.map((k) => k.keyId)} pick={pick}
             head={['Key', '持有人', '应用', '模型', '渠道', '配额 RPM', '当前 RPM', '配额占用', '日请求', '错误', '回退', '日成本', '状态', '动作']}
             rows={keys.map((k) => {
               const pct = k.rpmLimit > 0 ? Math.round((k.usedRpm / k.rpmLimit) * 100) : 0
@@ -168,17 +189,20 @@ export default function LiteLlmGateway() {
                 <span className="small">{k.app}</span>,
                 <span className="small">{k.model}</span>,
                 <span className="small">{k.channel}<div className="tiny faint">{k.kind}</div></span>,
-                <span className="num">{k.rpmLimit}{k.rpmLimit > cap ? <span className="tiny" style={{ color: 'var(--bad-text)' }}> 超上限 {cap}</span> : null}</span>,
+                <span className="num">{k.rpmLimit}{k.rpmLimit > cap ? <AlertBadge tone="bad" jump={keyJump(k.keyId, `这条 key 的 RPM 已超平台口径上限 ${cap}：限流回上限`)}>超上限 {cap}</AlertBadge> : null}</span>,
                 <span className="num">{k.usedRpm}</span>,
                 <div style={{ minWidth: 110 }}>
-                  <Progress value={pct} tone={pct >= 100 ? 'bad' : pct > 85 ? 'warn' : ''} />
+                  <Progress value={pct} tone={pct >= 100 ? 'bad' : pct > 85 ? 'warn' : ''}
+                    jump={pct > 85 ? keyJump(k.keyId, '到这条 key 那一行：限流回上限 / 吊销') : undefined} />
                   <span className="tiny faint">{pct}%{pct > 85 ? ' 触限' : ''}</span>
                 </div>,
-                <span className="num">{fmt(k.requests)}</span>,
-                <span className="num" style={{ color: k.errors ? 'var(--bad-text)' : undefined }}>{k.errors}</span>,
-                <span className="num" style={{ color: k.fallbacks ? 'var(--warn-text)' : undefined }}>{k.fallbacks}</span>,
+                <span className="num">{fmtCN(k.requests)}</span>,
+                k.errors ? <AlertBadge tone="bad" jump={keyJump(k.keyId, '到这条 key 那一行：看错误来自配额触限还是渠道回退')}>{`错误 ${k.errors}`}</AlertBadge> : <span className="num faint">0</span>,
+                k.fallbacks ? <AlertBadge tone="warn" jump={keyJump(k.keyId, '到这条 key 那一行：有渠道在降级回退，先看渠道健康与权重')}>{`回退 ${k.fallbacks}`}</AlertBadge> : <span className="num faint">0</span>,
                 <span className="num">¥{k.spendDay.toLocaleString('zh-CN')}</span>,
-                <Badge tone={STATUS_TONE[k.status] ?? 'muted'}>{STATUS_LABEL[k.status] ?? k.status}</Badge>,
+                STATUS_TONE[k.status] === 'warn'
+                  ? <AlertBadge tone="warn" jump={keyJump(k.keyId, '到这条异常 key 那一行：限流回上限或吊销（发工单）')}>{STATUS_LABEL[k.status] ?? k.status}</AlertBadge>
+                  : <Badge tone={STATUS_TONE[k.status] ?? 'muted'}>{STATUS_LABEL[k.status] ?? k.status}</Badge>,
                 onPlatform ? (
                   <span className="row gap6">
                     <button className="btn sm" disabled={!perm.manage} onClick={() => doThrottle(k.keyId)}>限流回上限</button>
@@ -206,6 +230,7 @@ export default function LiteLlmGateway() {
         <div style={{ marginTop: 6 }}>
           <Table
             minWidth={900}
+              rowKeys={routes.map((r) => (st.channels.find((c) => c.name === r.model)?.id ?? r.model))} pick={pick}
             head={['渠道/模型', '类别', '权重', 'RPM', 'Token(万)', '错误率', '健康']}
             rows={routes.map((r) => [
               <span className="small strong">{r.model}</span>,

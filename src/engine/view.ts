@@ -28,6 +28,7 @@ export const DEMO_NAV: string[] = [
   '/model/monitor', '/model/gateway', '/model/credentials', '/model/security',
   '/app/market', '/app/agents', '/app/security',
   '/ops/workflow', '/ops/notifications', '/ops/settings', '/ops/commands',
+  '/ops/opctl', '/ops/opctl-queue', '/ops/opctl-audit', '/ops/opctl-perm',
 ]
 
 /**
@@ -51,6 +52,10 @@ export const FOCUS_PANELS: Record<string, string[]> = {
   '/ops/notifications': ['真实告警通知'],
   '/ops/settings': ['资源接入与采集', '来源配置', '排班与派单'],
   '/ops/commands': ['下一条指令', '人工兜底工单'],
+  '/ops/opctl': ['发起操作', '操作目录', '在途操作速览'],
+  '/ops/opctl-queue': ['变更窗口', '执行队列与操作台账', '自动执行三态判定', '人工兜底待办'],
+  '/ops/opctl-audit': ['操作台账', '分段成功判定与审计轨迹', '平台拦下了什么'],
+  '/ops/opctl-perm': ['逐账号操作权限矩阵', '权限变更留痕'],
 }
 
 const KEY = 'dsh-demo-view-v1'

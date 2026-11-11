@@ -9,7 +9,13 @@ import { apiGet, apiSend } from './db'
 export interface ServerAlert {
   id: string; time: string; level: string; title: string; body: string; source: string
   read_flag: number; handled: number; handled_by?: string | null
+  /** 同一原因的归并键（MON:<监控目标 id>）；同因旧告警由数据服务自动完成处置 */
+  cause?: string | null
 }
+
+/** 数据服务并同因旧告警时写在这个字段里 */
+export const SERVER_MERGE_BY = '系统自动并入（同因重复报警）'
+export const isAutoMerged = (a: ServerAlert) => String(a.handled_by || '') === SERVER_MERGE_BY
 
 const REAL_ID = /^N-(MON|ESCL)/
 const LEVEL_ORDER: Record<string, number> = { 紧急: 0, 重要: 1, 一般: 2 }
@@ -52,6 +58,11 @@ export const liveAlertStore = {
   loadedAt: () => loadedAt,
   unhandled: () => alerts.filter((a) => !a.handled).length,
   urgentUnhandled: () => alerts.filter((a) => !a.handled && a.level === '紧急').length,
+  /** 未处置的「原因」有几个：同一原因重复报警只算一个（只留最新一条要处置） */
+  unhandledCauses: () => new Set(alerts.filter((a) => !a.handled).map((a) => a.cause || a.id)).size,
+  autoMerged: () => alerts.filter((a) => isAutoMerged(a)).length,
+  /** 同因重复报警：把某一条同因的旧告警一起算作已处置（点最新一条的「我处置了」时服务端会一并闭环） */
+  sameCauseOpen: (a: ServerAlert) => a.cause ? alerts.filter((x) => !x.handled && x.cause === a.cause && x.id !== a.id).length : 0,
   latest: () => alerts[0] || null,
   subscribe: (l: () => void) => { listeners.add(l); return () => { listeners.delete(l) } },
 }

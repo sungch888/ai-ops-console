@@ -11,14 +11,14 @@ import { API_BASE, dbRead, dbWrite, dbSeed, setAuditAccount, setCsrfToken, apiGe
 
 
 export type Role = 'admin' | 'ops' | 'dev' | 'user'
-export type PermKey = 'app' | 'agent' | 'kb' | 'tool' | 'cred' | 'compute' | 'workflow' | 'gateway' | 'security' | 'security_issue' | 'security_emergency' | 'audit' | 'matrix' | 'export' | 'integration' | 'analytics' | 'overview' | 'approve'
+export type PermKey = 'app' | 'agent' | 'kb' | 'tool' | 'cred' | 'compute' | 'workflow' | 'gateway' | 'security' | 'security_issue' | 'security_emergency' | 'audit' | 'matrix' | 'export' | 'integration' | 'analytics' | 'overview' | 'approve' | 'opctl' | 'opctl_exec' | 'opctl_review'
 
 export const PERM_LABEL: Record<PermKey, string> = {
   overview: '运营总览', compute: '算力中心', gateway: '推理网关', cred: '凭证与配额', workflow: '资源调配',
   app: '应用广场', agent: '智能体纳管', kb: '知识库纳管', tool: '工具生态', security: '安全事件',
   security_issue: '处置下发', security_emergency: '紧急处置',
   audit: '审计日志', matrix: '权限矩阵', export: '报表导出', integration: '外部对接', analytics: '运营分析',
-  approve: '工单审批权',
+  approve: '工单审批权', opctl: '操作控制', opctl_exec: '操作执行', opctl_review: '操作复核',
 }
 
 /** 安全处置拆成三档：看事件 / 日常下发（要先预检 + 二次确认）/ 紧急下发（不受变更窗口限制） */
@@ -49,9 +49,9 @@ export type Matrix = Record<Role, MatrixRow>
 export const CLS_LEVELS = ['公开', '内部', '敏感']
 
 const DEFAULT_MATRIX: Matrix = {
-  admin: { view: ['overview', 'compute', 'gateway', 'cred', 'workflow', 'app', 'agent', 'kb', 'tool', 'security', 'security_issue', 'security_emergency', 'audit', 'matrix', 'export', 'integration', 'analytics', 'approve'], manage: ['overview', 'compute', 'gateway', 'cred', 'workflow', 'app', 'agent', 'kb', 'tool', 'security', 'security_issue', 'security_emergency', 'audit', 'matrix', 'export', 'integration', 'analytics', 'approve'], cls: ['公开', '内部', '敏感'] },
-  ops: { view: ['overview', 'compute', 'gateway', 'cred', 'workflow', 'app', 'agent', 'kb', 'tool', 'security', 'security_issue', 'audit', 'export', 'integration', 'analytics', 'approve'], manage: ['compute', 'gateway', 'cred', 'workflow', 'security', 'security_issue', 'export', 'analytics', 'approve'], cls: ['公开', '内部', '敏感'] },
-  dev: { view: ['overview', 'app', 'agent', 'kb', 'tool', 'workflow', 'cred', 'analytics'], manage: ['workflow', 'agent'], cls: ['公开', '内部'] },
+  admin: { view: ['overview', 'compute', 'gateway', 'cred', 'workflow', 'app', 'agent', 'kb', 'tool', 'security', 'security_issue', 'security_emergency', 'audit', 'matrix', 'export', 'integration', 'analytics', 'approve', 'opctl', 'opctl_exec', 'opctl_review'], manage: ['overview', 'compute', 'gateway', 'cred', 'workflow', 'app', 'agent', 'kb', 'tool', 'security', 'security_issue', 'security_emergency', 'audit', 'matrix', 'export', 'integration', 'analytics', 'approve', 'opctl', 'opctl_exec', 'opctl_review'], cls: ['公开', '内部', '敏感'] },
+  ops: { view: ['overview', 'compute', 'gateway', 'cred', 'workflow', 'app', 'agent', 'kb', 'tool', 'security', 'security_issue', 'audit', 'export', 'integration', 'analytics', 'approve', 'opctl', 'opctl_exec', 'opctl_review'], manage: ['compute', 'gateway', 'cred', 'workflow', 'security', 'security_issue', 'export', 'analytics', 'approve', 'opctl', 'opctl_exec', 'opctl_review'], cls: ['公开', '内部', '敏感'] },
+  dev: { view: ['overview', 'app', 'agent', 'kb', 'tool', 'workflow', 'cred', 'analytics', 'opctl'], manage: ['workflow', 'agent'], cls: ['公开', '内部'] },
   user: { view: ['app', 'cred'], manage: [], cls: ['公开'] },
 }
 

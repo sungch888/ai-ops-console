@@ -1,16 +1,25 @@
 import React, { useState } from 'react'
-import { Kpi, Panel, PageHead, Badge, Table, Callout } from '../../components/ui'
+import { Kpi, Panel, PageHead, Badge, AlertBadge, Table, Callout } from '../../components/ui'
 import { Chart, CHART_COLORS, AXIS_COLOR, SPLIT_COLOR, TOOLTIP_STYLE, GRID } from '../../components/Chart'
 import { useEngine } from '../../engine/engine'
-import { ledgerOf, getAllocMode, setAllocMode, type AllocMode } from '../../engine/ledger'
-import { useReports, reportStore, downloadCsv } from '../../engine/ops'
+import { ledgerOf, getAllocMode, setAllocMode, type AllocMode, type PersonUsage } from '../../engine/ledger'
+import { useReports, useNotifs, reportStore, downloadCsv } from '../../engine/ops'
 import { usePerm } from '../../engine/auth'
+import { Jump, useAlertPick, usePickFlash } from '../../engine/alertJump'
 
 export default function OpsAnalytics() {
   const st = useEngine()
   const reports = useReports()
+  const notifs = useNotifs()
+  const pick = useAlertPick()
+  usePickFlash(pick)
   const perm = usePerm('export')
   const L = ledgerOf(st)
+  /* 告警直达口径：报表页只负责「把红 / 黄提示指到能动手的那个地方」——
+     应用运行态 → 智能体纳管那一行；临期 / 已吊销凭证 → 凭证与配额那一行；未闭环通知 → 通知中心那一行 */
+  const openNotif = notifs.find((n) => !n.handled)
+  const credOf = (pe: PersonUsage, kind: 'exp' | 'off') =>
+    st.creds.find((c) => c.holder === pe.name && (kind === 'off' ? c.status === 'off' : c.status !== 'off' && c.expDays <= 15))
   const [mode, setMode] = useState<AllocMode>(getAllocMode())
   const [citySel, setCitySel] = useState(L.perCity[0]?.name ?? '示范市01')
   const days = L.trend30.map((d) => d.day)
@@ -69,8 +78,8 @@ export default function OpsAnalytics() {
         <Kpi label="本月调用量" value={((L.callsToday * 30) / 10000).toFixed(0)} unit="万次" foot={<span className="small faint">由 {L.liveCards} 卡承载 · 副本变更实时影响</span>} />
         <Kpi label="本月 Token" value={((L.tokensToday * 30) / 10000).toFixed(1)} unit="亿" foot={<span className="small faint">外部渠道占 {(L.externalShare * 100).toFixed(0)}%</span>} />
         <Kpi label="本月折算成本" value={((L.costToday * 30) / 10000).toFixed(1)} unit="万元" foot={`本地卡位 ${(L.localCost * 30 / 10000).toFixed(1)} 万 + 外部 Token ${(L.externalCost * 30 / 10000).toFixed(1)} 万`} />
-        <Kpi label="活跃应用" value={12 - L.stopped.length} unit="个" foot={L.stopped.length ? <span className="down">● {L.stopped.length} 个已停止承接</span> : '另有 2 个灰度试点'} />
-        <Kpi label="告警闭环率" value="96" unit="%" foot="未闭环 4 项在跟进" />
+        <Kpi label="活跃应用" value={12 - L.stopped.length} unit="个" foot={L.stopped.length ? <span className="down">● {L.stopped.length} 个已停止承接</span> : '另有 2 个灰度试点'} jump={L.stopped.length ? Jump.agent(L.stopped[0], `已停止承接的第一项是「${L.stopped[0]}」：去智能体纳管这一行恢复 / 复核处置`) : undefined} />
+        <Kpi label="告警闭环率" value="96" unit="%" foot="未闭环 4 项在跟进" jump={openNotif ? Jump.notification(openNotif.id, `未闭环的第一条通知是「${openNotif.title}」（${openNotif.id}）：去通知中心这一行处置它`) : undefined} />
       </div>
 
       <Callout text={<>账本口径（与调配工作台、总览、网关同源）：<b>调用量 = 存活副本承载（每卡 22 RPM）× 应用承接系数</b>（限流 0.4、暂停 / 隔离 / 下线 0）；<b>Token = 调用量 × 平均 820 token/次</b>；<b>成本 = 已分配推理卡位 {L.allocCards} 卡 × 210 元/卡/日 + 外部渠道 Token × 0.9 元/万 token</b>。当前承载 {L.liveCards} 卡 / 已分配 {L.allocCards} 卡：扩容只增加可分配卡位（计入成本），副本增加才提升调用量。副本扩缩、渠道权重调整、应用限流与暂停、模型下线都会即时改变本页数字，因此总览、网关、报表三处看到的是同一套数字。</>} />
@@ -103,12 +112,13 @@ export default function OpsAnalytics() {
             <Table
               minWidth={760}
               head={['报表', '类型', '编制时间', '行数', '状态', '操作']}
+              rowKeys={reports.map((r) => r.id)} pick={pick}
               rows={reports.map((r) => [
                 <span className="strong small">{r.name}<div className="tiny faint">{r.note}</div></span>,
                 <span className="tag gray">{r.type}</span>,
                 <span className="mono small">{r.time}</span>,
                 <span className="num small">{r.rows}</span>,
-                r.state === '已报送' ? <Badge tone="good">已报送</Badge> : r.state === '已生成' ? <Badge tone="info">已生成</Badge> : <Badge tone="warn">编制中</Badge>,
+                r.state === '已报送' ? <Badge tone="good">已报送</Badge> : r.state === '已生成' ? <Badge tone="info">已生成</Badge> : <AlertBadge tone="warn" jump={{ page: '/ops/analytics', pick: r.id, label: `报表「${r.name}」还在编制中：点过去落到这一行，生成与报送的按钮就在这一行` }}>编制中</AlertBadge>,
                 <div className="row gap6">
                   <button
                     className="btn sm"
@@ -118,7 +128,7 @@ export default function OpsAnalytics() {
                       ['今日调用量', L.callsToday, '实时账本 · 次'],
                       ['今日折算成本（元）', L.costToday, `本地 ${L.localCost} + 外部 ${L.externalCost}`],
                       ['活跃凭证数', st.creds.filter((c) => c.status !== 'off').length, '凭证台账'],
-                      ['在途调配工单数', st.orders.filter((o) => o.status === 'submitted' || o.status === 'running').length, '工单台账'],
+                      ['在途调配工单数', st.orders.filter((o) => o.status === 'to_biz' || o.status === 'submitted' || o.status === 'running').length, '工单台账'],
                       ['资源池卡位分配', st.pools.map((p) => `${p.name}=${p.cards}`).join(' | '), '资源账本'],
                       ['模型副本总数', st.models.reduce((s, m) => s + m.replicas, 0), '模型资产'],
                       ['渠道权重', st.channels.map((c) => `${c.name}=${c.weight}%`).join(' | '), '推理网关'],
@@ -162,7 +172,7 @@ export default function OpsAnalytics() {
               <span className="num">{(a.calls / 10000).toFixed(1)} 万</span>,
               <span className="num small">{a.tokens.toLocaleString('zh-CN')}</span>,
               <span className="num small">¥{a.cost.toLocaleString('zh-CN')}</span>,
-              a.note ? <Badge tone={a.note.includes('限流') ? 'warn' : 'bad'}>{a.note}</Badge> : <span className="tiny faint">正常承接</span>,
+              a.note ? <AlertBadge tone={a.note.includes('限流') ? 'warn' : 'bad'} jump={Jump.agent(a.name, `这个应用的运行态是「${a.note}」：去智能体纳管这一行改处置（限流 / 暂停 / 恢复都在那一行）`)}>{a.note}</AlertBadge> : <span className="tiny faint">正常承接</span>,
             ])}
           />
           <div className="row gap6" style={{ marginTop: 12 }}>
@@ -215,7 +225,7 @@ export default function OpsAnalytics() {
               <span className="num">{pe.calls.toLocaleString('zh-CN')}</span>,
               <span className="num">{pe.tokens.toLocaleString('zh-CN')}</span>,
               <span className="num small">¥{pe.cost.toLocaleString('zh-CN')}</span>,
-              <span className="tiny faint">{pe.points.toLocaleString('zh-CN')} 分{pe.expSoon ? ` · 临期 ${pe.expSoon}` : ''}{pe.revoked ? ` · 已吊销 ${pe.revoked}` : ''}</span>,
+              <span className="tiny faint">{pe.points.toLocaleString('zh-CN')} 分{pe.expSoon ? <AlertBadge tone="warn" jump={Jump.credential(credOf(pe, 'exp')?.id ?? '', `这个使用方有 ${pe.expSoon} 条临期凭证：去凭证与配额那一行轮换或提额`)}>临期 {pe.expSoon}</AlertBadge> : null}{pe.revoked ? <AlertBadge tone="bad" jump={Jump.credential(credOf(pe, 'off')?.id ?? '', `这个使用方有 ${pe.revoked} 条已吊销凭证：去凭证与配额那一行核对回收与重发`)}>已吊销 {pe.revoked}</AlertBadge> : null}</span>,
             ])}
           />
           <div className="row gap6" style={{ marginTop: 12 }}>

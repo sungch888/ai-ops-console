@@ -1,9 +1,16 @@
 import React from 'react'
-import { Kpi, Panel, PageHead, Badge, Table, Progress, Callout } from '../../components/ui'
+import { Kpi, Panel, PageHead, Badge, AlertBadge, Table, Progress, Callout } from '../../components/ui'
 import { Chart, CHART_COLORS, AXIS_COLOR, SPLIT_COLOR, TOOLTIP_STYLE } from '../../components/Chart'
 import { storageInfo, netPlanes } from '../../data/mock'
+import { useAlertPick, usePickFlash, type AlertJump } from '../../engine/alertJump'
+
+/** 容量 / 带宽告警口径：落到本页那一行（分类容量项或网络平面行）——本页就是容量台账，处置建议与用量在同一行 */
+const capJump = (name: string, label: string): AlertJump => ({ page: '/compute/storage', pick: name, label })
 
 export default function ComputeStorage() {
+  const pick = useAlertPick()          // ?pick=<容量项名 / 平面名>
+  usePickFlash(pick)
+  const cacheItem = storageInfo.items.find((it) => it.tone !== 'green') ?? storageInfo.items.find((it) => it.name.includes('推理缓存'))
   const days = Array.from({ length: 30 }, (_, i) => `10-${6 + i}`.replace('10-32', '11-01'))
   const trendOpt = {
     color: CHART_COLORS,
@@ -36,7 +43,7 @@ export default function ComputeStorage() {
       <PageHead
         title="存储与网络"
         desc="AI 训推服务存储 · 四张网络平面 · 容量与性能监测"
-        extra={<><Badge tone="good">存储健康</Badge><Badge tone="warn">推理缓存 70%</Badge></>}
+        extra={<><Badge tone="good">存储健康</Badge>{cacheItem ? <AlertBadge tone="warn" jump={capJump(cacheItem.name, `去分类容量看「${cacheItem.name}」这一档：清理或扩容`)}>推理缓存 70%</AlertBadge> : <Badge tone="warn">推理缓存 70%</Badge>}</>}
       />
 
       <div className="grid g-5">
@@ -55,16 +62,17 @@ export default function ComputeStorage() {
           {storageInfo.items.map((it) => {
             const pct = Math.round((it.used / it.total) * 100)
             return (
-              <div key={it.name} style={{ marginBottom: 12 }}>
+              <div key={it.name} className={pick === it.name ? 'row-pick' : undefined}
+                style={{ marginBottom: 12, ...(pick === it.name ? { padding: '4px 6px', borderRadius: 8, boxShadow: 'inset 3px 0 0 var(--amber), 0 0 0 1px var(--amber)' } : {}) }}>
                 <div className="row between small">
-                  <span>{it.name}</span>
+                  <span className={pick === it.name ? 'strong' : undefined}>{it.name}</span>
                   <span className="muted">{it.used} / {it.total} PB</span>
                 </div>
-                <div style={{ marginTop: 5 }}><Progress value={pct} tone={it.tone as '' | 'warn' | 'bad' | 'green'} /></div>
+                <div style={{ marginTop: 5 }}><Progress value={pct} tone={it.tone as '' | 'warn' | 'bad' | 'green'} jump={it.tone !== 'green' ? capJump(it.name, `看「${it.name}」这一档的用量：清理过期缓存或提扩容工单`) : undefined} /></div>
               </div>
             )
           })}
-          <Callout warn text="推理缓存 / KV 已达 70%，建议清理过期会话缓存或扩容 4 PB，避免训推任务写入受阻。" />
+          <Callout warn text="推理缓存 / KV 已达 70%，建议清理过期会话缓存或扩容 4 PB，避免训推任务写入受阻。" jump={cacheItem ? capJump(cacheItem.name, `去「${cacheItem.name}」这一档：清理过期会话缓存或提扩容工单`) : undefined} />
         </Panel>
       </div>
 
@@ -79,9 +87,10 @@ export default function ComputeStorage() {
               rows={netPlanes.map((p) => [
                 <span className="strong">{p.name}</span>,
                 <span className="tag gray">{p.spec}</span>,
-                <div style={{ minWidth: 110 }}><Progress value={p.traffic} tone={p.traffic > 70 ? 'warn' : 'green'} /></div>,
+                <div style={{ minWidth: 110 }}><Progress value={p.traffic} tone={p.traffic > 70 ? 'warn' : 'green'} jump={p.traffic > 70 ? capJump(p.name, `看「${p.name}」这条平面的负载与降载口径`) : undefined} /></div>,
                 <span className="muted small">{p.desc}</span>,
               ])}
+              rowKeys={netPlanes.map((p) => p.name)} pick={pick}
             />
             <Callout text="参数面采用 400G RoCEv2 无损网络，支撑多机多卡梯度同步；样本面保障训练数据高吞吐读取。" />
           </div>

@@ -76,6 +76,21 @@ def db() -> sqlite3.Connection:
     return conn
 
 
+if __name__ == '__main__':
+    # 以脚本方式运行时，让 `from server import ...` 拿到的就是本模块，
+    # 避免出现「第二份 server 模块」（那份的 DB_PATH 仍是默认值，权限判定会读错库）
+    sys.modules.setdefault('server', sys.modules['__main__'])
+
+
+def _opctl_mod():
+    """懒加载操作控制内核（server/opctl.py）。按脚本运行与按模块导入两种方式都能找到。"""
+    import importlib
+    try:
+        return importlib.import_module('opctl')
+    except ImportError:
+        return importlib.import_module('server.opctl')
+
+
 def init_db() -> None:
     conn = db()
     with open(SCHEMA, encoding='utf-8') as f:
@@ -125,6 +140,10 @@ DEMO_USERS = [
     {'id': 'U-0004', 'username': 'user', 'name': '用户 D（示范市02单位）', 'role': 'user',
      'dept': '示范市02单位基层所队', 'org': '示范市02', 'domain': '数据域', 'note': '仅应用广场与个人用量，低权限个人密钥',
      'password': 'user123'},
+    # 复核岗：与运营 B同为运营人员，但只有复核权没有执行权——用来演示「双人复核必须是两个账号」
+    {'id': 'U-9002', 'username': 'ops2', 'name': '韦东（运营服务团队）', 'role': 'ops',
+     'dept': '运营服务', 'org': '省级单位', 'domain': '用户域',
+     'note': '运营复核岗 · 只有复核权，没有执行权（双人复核演示用）', 'password': 'ops123'},
 ]
 
 PERM_LABEL_CN = {
@@ -133,6 +152,7 @@ PERM_LABEL_CN = {
     'tool': '工具生态', 'security': '安全事件', 'audit': '审计日志', 'matrix': '权限矩阵',
     'export': '报表导出', 'integration': '外部对接', 'analytics': '运营分析', 'approve': '工单审批权',
     'security_issue': '处置下发', 'security_emergency': '紧急处置',
+    'opctl': '操作控制', 'opctl_exec': '操作执行', 'opctl_review': '操作复核',
 }
 
 # 写某个状态键需要哪个权限点（服务端判定，前端伪造角色无效）
@@ -153,6 +173,7 @@ KEY_PERM = {
     'dsh-demo-notif-v1': 'overview',
     'dsh-demo-route-v1': 'overview',
     'dsh-demo-reports-v1': 'export',
+    'dsh-demo-opctl-perm-v1': 'matrix',
     'dsh-demo-alert-rules-v1': 'analytics',
     'dsh-demo-alert-baseline-v1': 'analytics',
     'dsh-demo-allocation-v1': 'analytics',
@@ -172,18 +193,19 @@ DEFAULT_MATRIX = {
     'admin': {
         'view': ['overview', 'compute', 'gateway', 'cred', 'workflow', 'app', 'agent', 'kb', 'tool',
                  'security', 'security_issue', 'security_emergency', 'audit', 'matrix', 'export',
-                 'integration', 'analytics', 'approve'],
+                 'integration', 'analytics', 'approve', 'opctl', 'opctl_exec', 'opctl_review'],
         'manage': ['overview', 'compute', 'gateway', 'cred', 'workflow', 'app', 'agent', 'kb', 'tool',
                    'security', 'security_issue', 'security_emergency', 'audit', 'matrix', 'export',
-                   'integration', 'analytics', 'approve'],
+                   'integration', 'analytics', 'approve', 'opctl', 'opctl_exec', 'opctl_review'],
         'cls': ['公开', '内部', '敏感']},
     'ops': {
         'view': ['overview', 'compute', 'gateway', 'cred', 'workflow', 'app', 'agent', 'kb', 'tool',
-                 'security', 'security_issue', 'audit', 'export', 'integration', 'analytics', 'approve'],
+                 'security', 'security_issue', 'audit', 'export', 'integration', 'analytics', 'approve',
+                 'opctl', 'opctl_exec', 'opctl_review'],
         'manage': ['compute', 'gateway', 'cred', 'workflow', 'security', 'security_issue', 'export',
-                   'analytics', 'approve'],
+                   'analytics', 'approve', 'opctl', 'opctl_exec', 'opctl_review'],
         'cls': ['公开', '内部', '敏感']},
-    'dev': {'view': ['overview', 'app', 'agent', 'kb', 'tool', 'workflow', 'cred', 'analytics'],
+    'dev': {'view': ['overview', 'app', 'agent', 'kb', 'tool', 'workflow', 'cred', 'analytics', 'opctl'],
             'manage': ['workflow', 'agent'], 'cls': ['公开', '内部']},
     'user': {'view': ['app', 'cred'], 'manage': [], 'cls': ['公开']},
 }
@@ -194,11 +216,14 @@ def hash_password(pw: str, salt: str) -> str:
 
 
 def seed_users() -> int:
+    """写入演示账号：只补缺失的（老库升级时也能补上新增的复核岗账号，不覆盖已有口令）。"""
     conn = db()
-    if conn.execute('SELECT COUNT(*) c FROM users').fetchone()['c']:
-        return 0
     ts = now_iso()
+    have = {r['id'] for r in conn.execute('SELECT id FROM users').fetchall()}
+    n = 0
     for u in DEMO_USERS:
+        if u['id'] in have:
+            continue
         salt = secrets.token_hex(16)
         # pw_changed_at 故意留空：首次登录即要求改口令（演示口令是弱口令，不能带进正式环境）
         conn.execute('INSERT INTO users(id, username, name, role, dept, org, domain, note, pw_salt, pw_hash,'
@@ -206,7 +231,8 @@ def seed_users() -> int:
                      ' VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,?,NULL)',
                      (u['id'], u['username'], u['name'], u['role'], u['dept'], u['org'], u['domain'], u['note'],
                       salt, hash_password(u['password'], salt), 'pbkdf2_sha256', 'active', 1, ts, ts, 'local'))
-    return len(DEMO_USERS)
+        n += 1
+    return n
 
 
 def seed_default_matrix() -> int:
@@ -304,6 +330,7 @@ CONFIG_DEFAULTS = {
     'monitor-alert-fail-count': '2',
     'fallback-escalate-min': '15',
     'login-fail-limit': '5',
+    'alert-merge-same-cause': 'on',
 }
 CONFIG_CHOICES = {
     'auth-provider': list(PROVIDERS.keys()),
@@ -315,12 +342,14 @@ CONFIG_CHOICES = {
     'monitor-alert-fail-count': ['1', '2', '3', '5'],
     'fallback-escalate-min': ['0', '10', '15', '30', '60'],
     'login-fail-limit': ['5', '10', '20', '0'],
+    'alert-merge-same-cause': ['on', 'off'],
 }
 CONFIG_LABEL_CN = {'auth-provider': '身份来源', 'approval-source': '审批来源',
                    'data-source-approval': '资源接入要先审批',
                    'monitor-alert-enabled': '断连要告警', 'monitor-alert-fail-count': '连续几轮取数失败就告警',
                    'fallback-escalate-min': '兜底工单多久没人接管就升级', 'notify-channels': '通知渠道',
                    'login-fail-limit': '登录连错几次暂时拒绝（0 = 不限）',
+                   'alert-merge-same-cause': '同一原因重复报警只留最新一条要处置',
                    'duty-source': '排班来源', 'command-ack-timeout-min': '指令确认超时（分钟）'}
 
 DUTY_DEFAULT = [
@@ -380,6 +409,76 @@ def migrate_matrix() -> int:
     return 1
 
 
+# ── 同一原因重复报警：只留最新一条要处置，旧的自动完成处置 ───────────────
+AUTO_MERGE_BY = '系统自动并入（同因重复报警）'
+_ALERT_TAIL = re.compile(r'-[0-9A-F]{4}$')
+
+
+def _notif_cause(nid: str) -> str:
+    """没有 cause 列的旧通知，按编号反推归并键（尾部 4 位随机码不属于「原因」）。"""
+    s = str(nid or '')
+    if s.startswith('N-ESCL-'):
+        return 'MON:' + _ALERT_TAIL.sub('', s[len('N-ESCL-'):]).removeprefix('FB-MON-')
+    for p in ('N-MONOK-', 'N-MON-'):
+        if s.startswith(p):
+            return 'MON:' + _ALERT_TAIL.sub('', s[len(p):])
+    return ''
+
+
+def alert_merge_enabled() -> bool:
+    """配置项 alert-merge-same-cause = off 时，每条重复报警都单独留着要人处置。"""
+    return str(cfg('alert-merge-same-cause', 'on')).strip().lower() in ('on', '1', 'true', 'yes')
+
+
+def _notif_cause_sig(title: str, body: str) -> str:
+    """没显式给 cause 时，从标题+正文推「原因指纹」：抹掉轮次 / 百分比 / 时间点这类会变的读数。
+
+    目标编号保留，所以 A100-01 与 A100-02 不会被并成同一条。前后端只有这一处实现。
+    """
+    s = '%s|%s' % (str(title or ''), str(body or ''))
+    s = re.sub(r'\d+:\d{2}(:\d{2})?', '#', s)
+    s = re.sub(r'第\s*\d+\s*轮', '第#轮', s)
+    s = re.sub(r'\d+(\.\d+)?\s*%', '#%', s)
+    s = re.sub(r'\s+', ' ', s).strip()
+    return 'sig:' + s[:160]
+
+
+def merged_ids_same_cause(conn, cause: str, ts: str, reason: str, keep_id: str = '') -> list:
+    """同因归并的服务端唯一实现：先挑出要被并入的旧告警，再一次性置为已处置，返回被并的编号。"""
+    if not cause or not alert_merge_enabled():
+        return []
+    sql = "SELECT id FROM notifications WHERE COALESCE(cause,'')=? AND handled=0"
+    args = [cause]
+    if keep_id:
+        sql += ' AND id<>?'
+        args.append(keep_id)
+    ids = [r['id'] for r in conn.execute(sql, args).fetchall()]
+    if not ids:
+        return []
+    conn.execute("UPDATE notifications SET read_flag=1, handled=1, handled_by=?, updated_at=?, body=body||?"
+                 " WHERE id IN (%s)" % ','.join('?' * len(ids)),
+                 [AUTO_MERGE_BY, ts, '（同因重复报警：%s · 自动完成处置，不必逐条点）' % reason] + ids)
+    return ids
+
+
+def merge_same_cause(conn, cause: str, ts: str, reason: str, keep_id: str = '') -> int:
+    """同一原因又报了一次 → 之前未处置的同因通知自动记为已处置（审计里看得见是谁并的）。
+
+    处置者只需要处理最新一条；`keep_id` 用来保住刚写进去（或刚被人处置）的那一条。
+    """
+    return len(merged_ids_same_cause(conn, cause, ts, reason, keep_id))
+
+
+def backfill_alert_cause(conn) -> int:
+    n = 0
+    for r in conn.execute('SELECT id FROM notifications WHERE cause IS NULL').fetchall():
+        c = _notif_cause(r['id'])
+        if c:
+            conn.execute('UPDATE notifications SET cause=? WHERE id=?', (c, r['id']))
+            n += 1
+    return n
+
+
 def upgrade_schema(conn) -> None:
     ensure_columns(conn, 'users', [('enabled', "INTEGER NOT NULL DEFAULT 1"),
                                    ('provider', "TEXT NOT NULL DEFAULT 'local'"),
@@ -393,9 +492,11 @@ def upgrade_schema(conn) -> None:
                                          ('order_id', 'TEXT'),
                                          ('fail_streak', 'INTEGER NOT NULL DEFAULT 0'),
                                          ('alert_state', "TEXT NOT NULL DEFAULT '正常'")])
-    ensure_columns(conn, 'notifications', [('handled_by', 'TEXT')])
+    ensure_columns(conn, 'notifications', [('handled_by', 'TEXT'), ('cause', 'TEXT'),
+                                           ('merged', 'INTEGER NOT NULL DEFAULT 0')])
     ensure_columns(conn, 'monitor_targets', [('fail_streak', 'INTEGER NOT NULL DEFAULT 0'),
                                             ('alert_state', "TEXT NOT NULL DEFAULT '正常'")])
+    backfill_alert_cause(conn)
 
 
 def cfg(key: str, default: str = '') -> str:
@@ -691,7 +792,8 @@ def probe_prom_target(t: dict, base: str, headers: dict, prev=None):
     """
     raw = _get_json(base + '/metrics', headers, timeout=12)
     if isinstance(raw, dict):
-        return probe_json_target(t, base, headers)
+        # 这个服务实际吐的是 JSON 指标，不是 Prometheus 文本 —— 走 JSON 解析
+        return probe_json_target(t, base, headers, raw)
     m = _prom_parse(raw)
     if not m:
         raise ValueError('/metrics 没解析出指标（不是 Prometheus 文本？）')
@@ -771,25 +873,14 @@ def probe_prom_target(t: dict, base: str, headers: dict, prev=None):
     return sample, card
 
 
-def probe_model_target(t: dict, prev=None):
-    """拉一台推理服务的 /metrics 与 /health，算出监控样本与卡指标。
+def probe_json_target(t: dict, base: str, headers: dict, metrics=None):
+    """JSON 指标型服务：/metrics 返回结构化对象（engine / live / hardware / totals …）。
 
-    兼容「JSON 指标」型服务（engine / live / requests / hardware / totals 这种结构）。
-    取不到就抛异常，由 record_probe 写一条『取数失败』样本 —— 断连也要看得见。
+    Prometheus 文本型服务的 /metrics 若实际返回 JSON，也落到这里。
+    metrics 已取到时直接复用，避免重复请求。
     """
-    base = (t['base'] or '').rstrip('/')
-    if not base.startswith('http'):
-        raise ValueError('监控地址要是 http:// 或 https:// 开头')
-    headers = {}
-    key = os.environ.get(t['api_key_env'] or '', '')
-    if key:
-        headers['Authorization'] = 'Bearer %s' % key
-    fmt = str(t.get('metric_format') or 'json').lower()
-    if fmt == 'openai':
-        return probe_openai_target(t, base, headers)
-    if fmt == 'prometheus':
-        return probe_prom_target(t, base, headers, prev)
-    metrics = _get_json(base + '/metrics', headers, timeout=12)
+    if metrics is None:
+        metrics = _get_json(base + '/metrics', headers, timeout=12)
     if not isinstance(metrics, dict):
         raise ValueError('指标接口返回的不是 JSON 对象（这类服务要按 Prometheus 文本解析）')
     try:
@@ -848,6 +939,27 @@ def probe_model_target(t: dict, prev=None):
         'note': '实连探针（不是平台推导）；服务状态 %s / 队列 %d' % (live.get('state') or '?', sample['queue_depth']),
     }
     return sample, card
+
+
+def probe_model_target(t: dict, prev=None):
+    """拉一台推理服务的 /metrics 与 /health，算出监控样本与卡指标。
+
+    兼容「JSON 指标」型服务（engine / live / requests / hardware / totals 这种结构）。
+    取不到就抛异常，由 record_probe 写一条『取数失败』样本 —— 断连也要看得见。
+    """
+    base = (t['base'] or '').rstrip('/')
+    if not base.startswith('http'):
+        raise ValueError('监控地址要是 http:// 或 https:// 开头')
+    headers = {}
+    key = os.environ.get(t['api_key_env'] or '', '')
+    if key:
+        headers['Authorization'] = 'Bearer %s' % key
+    fmt = str(t.get('metric_format') or 'json').lower()
+    if fmt == 'openai':
+        return probe_openai_target(t, base, headers)
+    if fmt == 'prometheus':
+        return probe_prom_target(t, base, headers, prev)
+    return probe_json_target(t, base, headers)
 
 
 def trim_samples(conn) -> None:
@@ -1137,6 +1249,22 @@ def _alert_threshold() -> int:
         return 2
 
 
+def write_notification(conn, nid: str, level: str, title: str, body: str, source: str,
+                       cause: str = '', merged: int = 0, handled: int = 0,
+                       handled_by: str = '', channels: str = '') -> str:
+    """写一条通知的唯一入口：等级 / 归并键 / 并了几条，都在这里定，三个告警口子和接口都用它。"""
+    ts = now_iso()
+    conn.execute('INSERT INTO notifications(id, time, level, title, body, channels, read_flag, handled, source,'
+                 ' handled_by, cause, merged, updated_at) VALUES(?,?,?,?,?,?,?,?,'
+                 ' COALESCE(?,?),?,?,?) ON CONFLICT(id) DO UPDATE SET body=excluded.body,'
+                 ' handled=excluded.handled, handled_by=excluded.handled_by, cause=excluded.cause,'
+                 ' merged=excluded.merged, updated_at=excluded.updated_at',
+                 (nid, datetime.now().astimezone().strftime('%m-%d %H:%M:%S'), level, title[:200], body[:1000],
+                  channels or cfg('notify-channels', 'site'), 1 if handled else 0, handled,
+                  (source or '')[:120], handled_by or '', cause or '', merged, ts))
+    return ts
+
+
 def raise_probe_alert(conn, source: str, sid: str, name: str, msg: str, streak: int,
                       actor: str = 'monitor') -> dict:
     """连续取数失败（例如网络断了）→ 事件台账 + 通知中心 + 兜底工单（按派单映射给值班岗位）+ 审计。
@@ -1152,10 +1280,9 @@ def raise_probe_alert(conn, source: str, sid: str, name: str, msg: str, streak: 
     conn.execute('INSERT INTO events(time, level, text, source, created_at) VALUES(?,?,?,?,?)',
                  (clock, level, '【监控断连】%s（%s / %s）' % (title, source, sid), source, ts))
     nid = 'N-MON-%s-%s' % (sid, secrets.token_hex(2).upper())
-    conn.execute('INSERT INTO notifications(id, time, level, title, body, channels, read_flag, handled, source,'
-                 ' updated_at) VALUES(?,?,?,?,?,?,0,0,?,?)',
-                 (nid, datetime.now().astimezone().strftime('%m-%d %H:%M:%S'), level, title, body,
-                  cfg('notify-channels', 'site'), source, ts))
+    cause = 'MON:' + sid
+    merged = merge_same_cause(conn, cause, ts, '同一个目标又报了一次（第 %d 轮）' % streak)
+    write_notification(conn, nid, level, title, body, source, cause, merged)
     fid = 'FB-MON-%s' % sid
     owner = _duty_owner(conn)
     conn.execute('INSERT INTO fallback_tasks(id, kind, ref, title, detail, status, owner, created_at, updated_at)'
@@ -1164,9 +1291,10 @@ def raise_probe_alert(conn, source: str, sid: str, name: str, msg: str, streak: 
                  ' ELSE fallback_tasks.status END, owner=excluded.owner, updated_at=excluded.updated_at',
                  (fid, 'monitor_unreachable', sid, title, body, '待接管', owner, ts, ts))
     audit(conn, actor, 'monitor_alert', sid, '%s / %s 连续 %d 轮取数失败 → 通知 %s + 兜底工单 %s（派 %s）'
-          % (source, name, streak, nid, fid, owner))
+          ' · 同因旧告警自动完成处置 %d 条' % (source, name, streak, nid, fid, owner, merged))
     conn.commit()
-    return {'notification_id': nid, 'fallback_id': fid, 'owner': owner, 'level': level, 'streak': streak}
+    return {'notification_id': nid, 'fallback_id': fid, 'owner': owner, 'level': level, 'streak': streak,
+            'cause': cause, 'merged': merged}
 
 
 def clear_probe_alert(conn, source: str, sid: str, name: str, actor: str = 'monitor') -> dict:
@@ -1176,17 +1304,17 @@ def clear_probe_alert(conn, source: str, sid: str, name: str, actor: str = 'moni
                  (datetime.now().astimezone().strftime('%H:%M:%S'), '一般',
                   '【监控恢复】%s（%s / %s）取数已恢复' % (name, source, sid), source, ts))
     nid = 'N-MONOK-%s-%s' % (sid, secrets.token_hex(2).upper())
-    conn.execute('INSERT INTO notifications(id, time, level, title, body, channels, read_flag, handled, source, handled_by,'
-                 ' updated_at) VALUES(?,?,?,?,?,?,1,1,?,?,?)',
-                 (nid, datetime.now().astimezone().strftime('%m-%d %H:%M:%S'), '一般', '%s 取数已恢复' % name,
-                  '监控目标 %s（%s / %s）重新采到数据，兜底工单已自动关闭' % (name, source, sid),
-                  cfg('notify-channels', 'site'), source, ts, '系统自动闭环'))
+    cause = 'MON:' + sid
+    merged = merge_same_cause(conn, cause, ts, '取数已恢复，旧告警不再需要处置')
+    write_notification(conn, nid, '一般', '%s 取数已恢复' % name,
+                       '监控目标 %s（%s / %s）重新采到数据，兜底工单已自动关闭' % (name, source, sid),
+                       source, cause, merged, handled=1, handled_by='系统自动闭环')
     cur = conn.execute("UPDATE fallback_tasks SET status='已关闭', updated_at=?, detail=detail||'（已自动关闭：取数恢复）'"
                        " WHERE ref=? AND kind='monitor_unreachable' AND status<>'已关闭'", (ts, sid))
     audit(conn, actor, 'monitor_recover', sid, '%s / %s 取数恢复 → 通知 %s，兜底工单关闭 %d 张'
-          % (source, name, nid, cur.rowcount))
+          ' · 同因未处置告警自动完成处置 %d 条' % (source, name, nid, cur.rowcount, merged))
     conn.commit()
-    return {'notification_id': nid, 'closed': cur.rowcount}
+    return {'notification_id': nid, 'closed': cur.rowcount, 'cause': cause, 'merged': merged}
 
 
 def sweep_fallback(conn, actor: str = 'system') -> int:
@@ -1219,16 +1347,16 @@ def sweep_fallback(conn, actor: str = 'system') -> int:
         conn.execute('INSERT INTO events(time, level, text, source, created_at) VALUES(?,?,?,?,?)',
                      (datetime.now().astimezone().strftime('%H:%M:%S'), '紧急',
                       '【兜底升级】%s 挂 %d 分钟无人接管 → 升级给 %s' % (r['title'], minutes, to), '兜底值守', ts))
-        conn.execute('INSERT INTO notifications(id, time, level, title, body, channels, read_flag, handled, source,'
-                     ' updated_at) VALUES(?,?,?,?,?,?,0,0,?,?)',
-                     ('N-ESCL-%s-%s' % (r['id'], secrets.token_hex(2).upper()),
-                      datetime.now().astimezone().strftime('%m-%d %H:%M:%S'), '紧急',
-                      '%s 无人接管，已升级' % r['title'],
-                      '这张兜底工单挂了 %d 分钟没人接管（原来派给 %s）。现在升级给 %s：请带班确认谁去处理；'
-                      '处理动作仍在工单里走，系统不替你去改外部系统。' % (minutes, r['owner'], to),
-                      cfg('notify-channels', 'site'), '兜底值守', ts))
+        cause = 'MON:' + str(r['ref'])
+        merged = merge_same_cause(conn, cause, ts, '同一目标已升级为兜底工单')
+        write_notification(conn, 'N-ESCL-%s-%s' % (r['id'], secrets.token_hex(2).upper()), '紧急',
+                           '%s 无人接管，已升级' % r['title'],
+                           '这张兜底工单挂了 %d 分钟没人接管（原来派给 %s）。现在升级给 %s：请带班确认谁去处理；'
+                           '处理动作仍在工单里走，系统不替你去改外部系统。' % (minutes, r['owner'], to),
+                           '兜底值守', cause, merged)
         audit(conn, actor, 'monitor_escalate', r['id'],
-              '兜底工单 %s（%s）挂 %d 分钟无人接管 → 升级给 %s' % (r['id'], r['ref'], minutes, to))
+              '兜底工单 %s（%s）挂 %d 分钟无人接管 → 升级给 %s · 同因旧告警自动完成处置 %d 条'
+              % (r['id'], r['ref'], minutes, to, merged))
         up += 1
     if up:
         conn.commit()
@@ -1526,7 +1654,7 @@ CSV_COLUMNS = {
                'decided_by', 'reject_reason', 'created_at', 'updated_at'],
     'events': ['id', 'time', 'level', 'text', 'source'],
     'audit_log': ['id', 'at', 'actor', 'action', 'target', 'detail'],
-    'notifications': ['id', 'time', 'level', 'title', 'body', 'channels', 'read_flag', 'handled', 'source'],
+    'notifications': ['id', 'time', 'level', 'title', 'body', 'channels', 'read_flag', 'handled', 'source', 'handled_by', 'cause'],
     'entities': ['kind', 'id', 'name', 'updated_at'],
     'role_permissions': ['role', 'perm_kind', 'perm', 'updated_at'],
     'settings': ['key', 'value', 'updated_at'],
@@ -1736,12 +1864,44 @@ class Handler(BaseHTTPRequestHandler):
                 return False
         return True
 
+    # ---- 操作控制（v3.11）：权限在这里判，前端怎么改都没用
+    OPCTL_PERM = {
+        'precheck': 'opctl', 'submit': 'opctl',
+        'approve': 'approve', 'reject': 'approve',
+        'execute': 'opctl_exec', 'review': 'opctl_review', 'receipt': 'opctl_exec', 'stage': 'opctl_exec',
+        'verify': 'opctl_exec', 'close': 'opctl_exec', 'rollback': 'opctl_exec',
+        'takeover': 'opctl_exec', 'window': 'opctl_exec', 'autoscale': 'opctl_exec',
+        'sweep': 'opctl_exec', 'emergency': 'opctl_exec', 'complement': 'opctl_exec',
+        'perm/toggle': 'matrix', 'perm/scope': 'matrix',
+    }
+
+    def _opctl(self, key, conn):
+        action = key[len('opctl/'):].strip('/')
+        mod = _opctl_mod()
+        if action == 'state':
+            if not self._need('opctl', kind='view', action='denied_get'):
+                return
+            return self._json(HTTPStatus.OK, mod.state(conn, dict(self.user)))
+        need = self.OPCTL_PERM.get(action)
+        if not need:
+            return self._json(HTTPStatus.NOT_FOUND, {'ok': False, 'error': '未知操作控制动作 ' + action})
+        if not self._need(need):
+            return
+        payload, err = self._body()
+        if err:
+            return self._json(HTTPStatus.BAD_REQUEST, {'ok': False, 'error': err})
+        fn = mod.ACTIONS.get(action)
+        if not fn:
+            return self._json(HTTPStatus.NOT_FOUND, {'ok': False, 'error': '未知操作控制动作 ' + action})
+        out = fn(conn, dict(self.user), payload or {})
+        return self._json(HTTPStatus.OK if out.get('ok') else HTTPStatus.BAD_REQUEST, out)
+
     def do_GET(self):
         path = urlparse(self.path).path
         if path.startswith(API_PREFIX):
             if not self._guard(path[len(API_PREFIX):].strip('/')):
                 return
-            return self._api_get(path, parse_qs(urlparse(self.path).query))
+            return self.router.dispatch_get(path[len(API_PREFIX):].strip('/'), parse_qs(urlparse(self.path).query))
         return self._static(path)
 
     def do_HEAD(self):
@@ -1751,7 +1911,7 @@ class Handler(BaseHTTPRequestHandler):
         if urlparse(self.path).path.startswith(API_PREFIX):
             if not self._guard(urlparse(self.path).path[len(API_PREFIX):].strip('/')):
                 return
-            return self._api_put(urlparse(self.path).path)
+            return self.router.dispatch_put(urlparse(self.path).path[len(API_PREFIX):].strip('/'))
         self._json(HTTPStatus.NOT_FOUND, {'ok': False, 'error': '未知接口'})
 
     def do_POST(self):
@@ -1765,7 +1925,7 @@ class Handler(BaseHTTPRequestHandler):
         if urlparse(self.path).path.startswith(API_PREFIX):
             if not self._guard(urlparse(self.path).path[len(API_PREFIX):].strip('/')):
                 return
-            return self._api_delete(urlparse(self.path).path)
+            return self.router.dispatch_delete(urlparse(self.path).path[len(API_PREFIX):].strip('/'))
         self._json(HTTPStatus.NOT_FOUND, {'ok': False, 'error': '未知接口'})
 
     # ---- 静态
@@ -1788,237 +1948,6 @@ class Handler(BaseHTTPRequestHandler):
             self._send(HTTPStatus.OK, f.read(), CONTENT_TYPES.get(ext, 'application/octet-stream'))
 
     # ---- API
-    def _api_get(self, path: str, qs) -> None:
-        conn = db()
-        key = path[len(API_PREFIX):].strip('/')
-
-        def num(name, default, cap):
-            try:
-                return max(0, min(cap, int((qs.get(name) or [default])[0])))
-            except Exception:
-                return default
-
-        if key in ('', 'health'):
-            return self._json(HTTPStatus.OK, {
-                'ok': True, 'service': 'ai-ops-console data service', 'version': SERVER_VERSION,
-                'schema_version': SCHEMA_VERSION, 'db': os.path.relpath(DB_PATH, ROOT),
-                'uptime_s': int(time.time() - _START_TS), 'counts': counts(),
-            })
-        if key == 'state':
-            rows = conn.execute('SELECT key, payload, updated_at FROM kv_store ORDER BY key').fetchall()
-            out = {}
-            for r in rows:
-                try:
-                    out[r['key']] = json.loads(r['payload'])
-                except Exception:
-                    out[r['key']] = None
-            return self._json(HTTPStatus.OK, {'ok': True, 'state': out,
-                                             'updated_at': {r['key']: r['updated_at'] for r in rows}})
-        if key.startswith('state/'):
-            name = key[len('state/'):]
-            row = conn.execute('SELECT payload, updated_at FROM kv_store WHERE key=?', (name,)).fetchone()
-            if not row:
-                return self._json(HTTPStatus.NOT_FOUND, {'ok': False, 'error': '该状态尚未写入数据库', 'key': name})
-            return self._json(HTTPStatus.OK, {'ok': True, 'key': name, 'updated_at': row['updated_at'],
-                                             'payload': json.loads(row['payload'])})
-        if key == 'export':
-            out = {}
-            for r in conn.execute('SELECT key, payload, updated_at FROM kv_store ORDER BY key'):
-                out[r['key']] = {'payload': json.loads(r['payload']), 'updated_at': r['updated_at']}
-            return self._json(HTTPStatus.OK, {'ok': True, 'generated_at': now_iso(), 'kv': out})
-        need = QUERY_PERM.get(key)
-        if need and not has_perm(self.user, need, 'view'):
-            return self._json(HTTPStatus.FORBIDDEN, {'ok': False,
-                'error': '角色「%s」没有「%s」的查看权限（权限点 %s）' % (self.user['role'], PERM_LABEL_CN.get(need, need), need)})
-        if key == 'users':
-            rows = [{k: v for k, v in dict(r).items() if k not in ('pw_salt', 'pw_hash', 'algo')}
-                    for r in conn.execute('SELECT * FROM users ORDER BY id')]
-            return self._json(HTTPStatus.OK, {'ok': True, 'rows': rows})
-        if key == 'login-accounts':
-            # 只回答「这个账号还在用初始演示口令吗」：不返回口令、不返回哈希、不返回盐。
-            out = []
-            for r in conn.execute('SELECT id, username, name, role, pw_salt, pw_hash FROM users ORDER BY id').fetchall():
-                seed = next((x for x in DEMO_USERS if x['username'] == r['username']), None)
-                out.append({'id': r['id'], 'username': r['username'], 'name': r['name'], 'role': r['role'],
-                            'seed_active': bool(seed) and hmac.compare_digest(hash_password(seed['password'], r['pw_salt']), r['pw_hash'])})
-            return self._json(HTTPStatus.OK, {'ok': True, 'rows': out,
-                'note': 'seed_active=false 表示该账号已改过口令，初始演示口令对它无效'})
-        if key == 'session':
-            if not self.user:
-                return self._json(HTTPStatus.OK, {'ok': True, 'signed_in': False})
-            return self._json(HTTPStatus.OK, {'ok': True, 'signed_in': True, 'user': public_user(self.user),
-                                             'perms': perms_of(self.user['role']),
-                                             'csrf': getattr(self, 'csrf', '') or '',
-                                             'session_ref': getattr(self, 'session_ref', '') or '',
-                                             'session_idle_minutes': round(SESSION_TTL / 60),
-                                             'config': public_config(),
-                                             'password_policy': {'min_len': PASSWORD_MIN_LEN,
-                                                                 'max_age_days': PASSWORD_MAX_AGE_DAYS,
-                                                                 'reuse_check': PASSWORD_REUSE_CHECK}})
-        if key == 'config':
-            return self._json(HTTPStatus.OK, {'ok': True, 'config': public_config(),
-                                             'providers': PROVIDERS,
-                                             'labels': CONFIG_LABEL_CN,
-                                             'perm_map': {k: v for k, v in KEY_PERM.items() if k in MATRIX_KEYS},
-                                             'note': '口径：先内建独立运行，外部来源做成适配器 + 配置开关；'
-                                                     '切换不改业务代码，未配置的来源会明确拒绝'})
-        if key == 'sessions':
-            mine_only = not has_perm(self.user, 'matrix', 'view')
-            sql = ('SELECT s.ref, s.user_id, s.created_at, s.last_seen, s.expires_at, s.ip, s.revoked,'
-                   ' u.username, u.name, u.role FROM sessions s JOIN users u ON u.id=s.user_id ')
-            params = []
-            if mine_only:
-                sql += 'WHERE s.user_id=? '
-                params.append(self.user['id'])
-            sql += 'ORDER BY s.created_at DESC'
-            rows = []
-            for r in query_rows(sql, params, 100, 0):
-                rows.append({**dict(r), 'expired': time.time() > r['expires_at'],
-                             'current': r['ref'] == getattr(self, 'session_ref', ''),
-                             'expires_left_min': max(0, round((r['expires_at'] - time.time()) / 60))})
-            return self._json(HTTPStatus.OK, {'ok': True, 'rows': rows, 'total': len(rows),
-                                             'mine_only': mine_only, 'ttl_minutes': round(SESSION_TTL / 60)})
-        if key == 'collect':
-            rows = [dict(r) for r in conn.execute('SELECT * FROM data_sources ORDER BY kind, id')]
-            payloads = {}
-            for r in conn.execute('SELECT kind, items, error, sources, at FROM collect_payloads'):
-                payloads[r['kind']] = {'items': r['items'], 'error': r['error'] or '', 'sources': r['sources'],
-                                       'at': r['at']}
-            return self._json(HTTPStatus.OK, {
-                'ok': True, 'sources': rows, 'status': payloads, 'state': COLLECT_STATE,
-                'kinds': list(COLLECT_KINDS), 'approval_mode': cfg('data-source-approval', 'off'),
-                'rows': {r['kind']: json.loads(r['rows_json']) for r in
-                         conn.execute('SELECT kind, rows_json FROM collect_payloads')},
-                'fallback': [dict(r) for r in conn.execute(
-                    "SELECT id, ref, title, status, owner, created_at, updated_at FROM fallback_tasks"
-                    " WHERE kind='monitor_unreachable' ORDER BY CASE status WHEN '待接管' THEN 0"
-                    " WHEN '已升级' THEN 1 ELSE 2 END, created_at DESC LIMIT 12")],
-                'note': '资源接入全部在系统里配（配置中心 → 资源接入与采集）；采集只读拉取，平台不向外部系统写数据；'
-                        '密钥只存 env:环境变量名 引用，值由启动环境提供'})
-        if key == 'monitor':
-            if not has_perm(self.user, 'compute', 'view'):
-                audit(conn, actor_of(self), 'denied_get', 'monitor', '没有「算力中心」查看权')
-                return self._json(HTTPStatus.FORBIDDEN, {'ok': False, 'error': '这个接口要「算力中心」查看权'})
-            targets = [dict(r) for r in conn.execute('SELECT * FROM monitor_targets ORDER BY id')]
-            latest = []
-            for t in targets:
-                r = conn.execute('SELECT * FROM metric_samples WHERE target=? ORDER BY id DESC LIMIT 1',
-                                 (t['id'],)).fetchone()
-                latest.append(dict(r) if r else None)
-            return self._json(HTTPStatus.OK, {
-                'ok': True, 'targets': targets, 'latest': latest,
-                'key_env_present': {t['id']: bool(os.environ.get(t['api_key_env'] or '')) for t in targets},
-                'state': MONITOR_STATE, 'tick_seconds': MONITOR_TICK,
-                'retention_hours': SAMPLE_RETENTION_HOURS,
-                'fallback': [dict(r) for r in conn.execute(
-                    "SELECT id, ref, title, status, owner, created_at, updated_at FROM fallback_tasks"
-                    " WHERE kind='monitor_unreachable' ORDER BY CASE status WHEN '待接管' THEN 0"
-                    " WHEN '已升级' THEN 1 ELSE 2 END, created_at DESC LIMIT 12")],
-                'total_samples': conn.execute('SELECT COUNT(*) c FROM metric_samples').fetchone()['c'],
-                'note': '探针只读拉取外部服务的 /metrics 与 /health；库里只存环境变量名，不存密钥'})
-        if key == 'commands':
-            sweep_commands(conn)
-        elif key == 'approvals':
-            sweep_approvals(conn)
-        plan = _query_plan(key, qs)
-        if plan:
-            table, where, params, order = plan
-            limit, offset = num('limit', 100, 500), num('offset', 0, 100000)
-            where_sql = (' WHERE ' + ' AND '.join(where)) if where else ''
-            if key == 'csv':
-                need_csv = CSV_PERM.get(table)
-                if need_csv and not (has_perm(self.user, need_csv, 'view') and has_perm(self.user, 'export')):
-                    return self._json(HTTPStatus.FORBIDDEN, {'ok': False,
-                        'error': '角色「%s」没有导出「%s」的权限' % (self.user['role'], table)})
-                cols = CSV_COLUMNS[table]
-                rows = query_rows('SELECT %s FROM %s%s %s' % (','.join(cols), table, where_sql, order),
-                                  params, num('limit', 5000, 20000), 0)
-                lines = [','.join(cols)]
-                for r in rows:
-                    lines.append(','.join(_csv_cell(r.get(c)) for c in cols))
-                body = ('\ufeff' + '\r\n'.join(lines) + '\r\n').encode('utf-8')
-                fname = (qs.get('name') or [table])[0]
-                fname = re.sub(r'[^0-9A-Za-z_\-]', '_', fname)[:40] or table
-                self.send_response(HTTPStatus.OK)
-                self.send_header('Content-Type', 'text/csv; charset=utf-8')
-                self.send_header('Content-Disposition', 'attachment; filename="%s.csv"' % fname)
-                self.send_header('Content-Length', str(len(body)))
-                self.end_headers()
-                self.wfile.write(body)
-                return
-            total = db().execute('SELECT COUNT(*) c FROM %s%s' % (table, where_sql), params).fetchone()['c']
-            return self._json(HTTPStatus.OK, {'ok': True, 'limit': limit, 'offset': offset, 'total': total,
-                                             'rows': query_rows('SELECT * FROM %s%s %s' % (table, where_sql, order), params, limit, offset)})
-        if key == 'tables':
-            out = []
-            for t in ('kv_store', 'entities', 'orders', 'order_trace', 'events', 'notifications',
-                      'accounts', 'role_permissions', 'settings', 'audit_log', 'users', 'sessions', 'login_log',
-                      'identity_links', 'password_history', 'approvals', 'duty_shifts', 'duty_routes',
-                      'commands', 'fallback_tasks', 'monitor_targets', 'metric_samples', 'gpu_cards'):
-                c = db().execute('SELECT COUNT(*) c FROM %s' % t).fetchone()['c']
-                col = 'updated_at' if db().execute("PRAGMA table_info(%s)" % t).fetchone() and any(
-                    r['name'] == 'updated_at' for r in db().execute('PRAGMA table_info(%s)' % t)) else None
-                last = db().execute('SELECT MAX(%s) m FROM %s' % (col, t)).fetchone()['m'] if col else ''
-                out.append({'table': t, 'rows': c, 'last_change': last or ''})
-            return self._json(HTTPStatus.OK, {'ok': True, 'tables': out})
-        audit(db(), actor_of(self), 'unknown_api', key, '接口不存在：前端路径可能多写了一层 /api')
-        hint = ('（路径多写了一层 /api，应该是 /api/' + key[4:] + '）') if key.startswith('api/') else ''
-        return self._json(HTTPStatus.NOT_FOUND, {'ok': False, 'error': '未知接口 ' + key + hint, 'key': key})
-
-    def _api_put(self, path: str) -> None:
-        name = path[len(API_PREFIX):].strip('/')
-        if name == 'config':
-            if not self._need('matrix'):
-                return
-            payload, err = self._body()
-            if err:
-                return self._json(HTTPStatus.BAD_REQUEST, {'ok': False, 'error': err})
-            k = str((payload or {}).get('key') or '')[:60]
-            if k not in CONFIG_DEFAULTS:
-                return self._json(HTTPStatus.BAD_REQUEST, {'ok': False,
-                    'error': '不能改这个配置项', 'allowed': list(CONFIG_DEFAULTS.keys())})
-            msg = set_cfg(db(), k, str((payload or {}).get('value') or ''), actor_of(self))
-            if msg:
-                return self._json(HTTPStatus.BAD_REQUEST, {'ok': False, 'error': msg,
-                    'allowed': CONFIG_CHOICES.get(k, [])})
-            return self._json(HTTPStatus.OK, {'ok': True, 'key': k, 'config': public_config(),
-                'note': '只改配置就切换来源：业务代码与 /api 契约不变，未配置好的外部来源会明确拒绝而不是静默降级'})
-        if not name.startswith('state/'):
-            return self._json(HTTPStatus.NOT_FOUND, {'ok': False, 'error': '未知接口'})
-        key = name[len('state/'):]
-        if not re.fullmatch(r'[A-Za-z0-9_-]{1,64}', key):
-            return self._json(HTTPStatus.BAD_REQUEST, {'ok': False, 'error': '状态键名不合法'})
-        if key == 'dsh-demo-session-v1':
-            return self._json(HTTPStatus.BAD_REQUEST, {'ok': False, 'error': '会话由数据服务管理，前端不再写这个键'})
-        need = KEY_PERM.get(key, 'overview')
-        if not has_perm(self.user, need):
-            audit(db(), actor_of(self), 'denied_put', key, '角色 %s 缺少权限点 %s' % (self.user['role'], need))
-            return self._json(HTTPStatus.FORBIDDEN, {'ok': False,
-                'error': '角色「%s」没有「%s」的写入权限（权限点 %s）' % (self.user['role'], PERM_LABEL_CN.get(need, need), need)})
-        payload, err = self._body()
-        if err:
-            return self._json(HTTPStatus.BAD_REQUEST, {'ok': False, 'error': err})
-        conn = db()
-        ts = now_iso()
-        rows = project_state(conn, key, payload, ts)
-        audit(conn, actor_of(self), 'state_put', key, '投影 %d 行，payload %d 字节' % (rows, len(json.dumps(payload, ensure_ascii=False))))
-        return self._json(HTTPStatus.OK, {'ok': True, 'key': key, 'updated_at': ts, 'projected_rows': rows})
-
-    def _api_delete(self, path: str) -> None:
-        name = path[len(API_PREFIX):].strip('/')
-        if not name.startswith('state/'):
-            return self._json(HTTPStatus.NOT_FOUND, {'ok': False, 'error': '未知接口'})
-        key = name[len('state/'):]
-        need = KEY_PERM.get(key, 'overview')
-        if not has_perm(self.user, need):
-            audit(db(), actor_of(self), 'denied_delete', key, '角色 %s 缺少权限点 %s' % (self.user['role'], need))
-            return self._json(HTTPStatus.FORBIDDEN, {'ok': False,
-                'error': '角色「%s」没有删除「%s」的权限' % (self.user['role'], PERM_LABEL_CN.get(need, need))})
-        conn = db()
-        conn.execute('DELETE FROM kv_store WHERE key=?', (key,))
-        conn.execute('DELETE FROM settings WHERE key=?', (key,))
-        audit(conn, actor_of(self), 'state_delete', key, '')
-        return self._json(HTTPStatus.OK, {'ok': True, 'key': key})
 
     def _api_post(self, path: str) -> None:
         key = path[len(API_PREFIX):].strip('/')
@@ -2272,6 +2201,10 @@ class Handler(BaseHTTPRequestHandler):
                           ts, '工单 %s 审批结果回写（来源 %s）：%s' % (oid, source, state), 'approval'))
             return self._json(HTTPStatus.OK, {'ok': True, 'id': aid, 'state': state, 'source': source})
 
+        # ---- v3.11 操作控制：先预检后下发 / 双人复核 / 分段成功 / 自动三态（服务端判定）
+        if key.startswith('opctl/'):
+            return self._opctl(key, conn)
+
         # ---- v3.6 控制指令：预检 / dry-run / 下发 / 确认 / 回滚 / 人工兜底
         if key == 'commands/dry-run':
             if not self._need('security_issue'):
@@ -2459,13 +2392,17 @@ class Handler(BaseHTTPRequestHandler):
             mark = '（已处置：%s 于 %s%s）' % (who, clock, ('：%s' % note) if note else '')
             conn.execute("UPDATE notifications SET read_flag=1, handled=1, handled_by=?, updated_at=?,"
                          " body=body||? WHERE id=?", (who, ts, mark, nid))
+            merged = merge_same_cause(conn, str(row['cause'] or _notif_cause(nid)), ts,
+                                      '最新一条已由 %s 处置' % who, keep_id=nid)
             conn.execute('INSERT INTO events(time, level, text, source, created_at) VALUES(?,?,?,?,?)',
                          (clock, '一般', '【通知已处置】%s（%s）%s' % (row['title'], who, mark), '通知中心', ts))
             audit(conn, actor_of(self), 'monitor_notify_ack', nid, '%s 处置通知 %s（%s）%s'
-                  % (who, nid, row['title'][:60], '：%s' % note if note else ''))
+                  % (who, nid, row['title'][:60], '：%s' % note if note else '')
+                  + (' · 同因旧告警自动完成处置 %d 条' % merged if merged else ''))
             conn.commit()
-            return self._json(HTTPStatus.OK, {'ok': True, 'id': nid, 'handled_by': who,
-                                              'note': '通知已标记为已处置并记录到人（审计 monitor_notify_ack）'})
+            return self._json(HTTPStatus.OK, {'ok': True, 'id': nid, 'handled_by': who, 'merged': merged,
+                                              'note': '通知已标记为已处置并记录到人（审计 monitor_notify_ack）'
+                                                      + ('；同因重复报警 %d 条已一并闭环，不用逐条点' % merged if merged else '')})
 
         if key == 'monitor/fallback/decide':
             if not self._need('compute', 'manage', 'denied_monitor_fallback_decide'):
@@ -2790,6 +2727,11 @@ def main() -> None:
     migrated = migrate_matrix()
     cfgs = seed_config()
     duty = seed_duty()
+    try:
+        seeded_ops = _opctl_mod().seed(db())
+    except Exception as e:      # 操作控制种子失败不该拖垮整个服务
+        seeded_ops = 0
+        print('WARNING: opctl seed failed: %s' % e, file=sys.stderr)
     if migrated:
         print('Matrix migrated: ' + ' / '.join(PERM_LABEL_CN[k] for k in NEW_PERM_KEYS))
 
@@ -2853,6 +2795,32 @@ def main() -> None:
         if conn:
             conn.close()
 
+# ── API 路由拆分（C1 修复：_api_get/_api_put/_api_delete → api_handlers.Router） ──
+# 延迟导入避免循环依赖：Handler 类定义完整后，才导入 Router。
+
+def _lazy_router(cls):
+    """为 Handler 类添加 router 属性，延迟导入 api_handlers.Router。"""
+    _router_cls = None
+
+    @property
+    def router(self):
+        nonlocal _router_cls
+        if _router_cls is None:
+            try:
+                from server import api_handlers      # server 作为包被导入时
+            except ImportError:
+                import api_handlers                  # 直接运行 server/server.py 时
+            _router_cls = api_handlers.Router
+        if not hasattr(self, '_router_instance'):
+            self._router_instance = _router_cls(self)
+        return self._router_instance
+
+    cls.router = router
+
+
+_lazy_router(Handler)
 
 if __name__ == '__main__':
     main()
+
+_lazy_router(Handler)

@@ -4,8 +4,8 @@
  *      资源本身不停、不回收、不下线；动资源走「资源侧缓解」并进变更窗口
  * 闭环：处置 → 自动开整改单派给当班角色 → 接单 / 整改 / 复核 → 复核通过才允许恢复接入
  * ===================================================================== */
-import { useEffect, useState } from 'react'
-import {Kpi, Panel, PageHead, Badge, Table, Callout, Tip} from '../../components/ui'
+import React, { useEffect, useState } from 'react'
+import {Kpi, Panel, PageHead, Badge, AlertBadge, Table, Callout, Tip} from '../../components/ui'
 import { Chart, CHART_COLORS, AXIS_COLOR, SPLIT_COLOR, TOOLTIP_STYLE, GRID } from '../../components/Chart'
 import { Link } from 'react-router-dom'
 import { monitorStore, monitorSummary, exceptions, MONITOR_RULES, type ExcView, type BlockAction } from '../../engine/exceptions'
@@ -14,11 +14,18 @@ import { consoleStore, useConsole } from '../../engine/console'
 import { connectorStore } from '../../engine/connectors'
 import { BLOCK_SCOPES, useEngine, engine, poolUtil } from '../../engine/engine'
 import { usePerm } from '../../engine/auth'
+import { useAlertPick, usePickFlash, Jump } from '../../engine/alertJump'
 
 type Tone = 'good' | 'warn' | 'bad' | 'info' | 'muted' | 'purple'
 const SEV_TONE: Record<string, 'bad' | 'warn' | 'info'> = { 紧急: 'bad', 高: 'warn', 中: 'info' }
+/** 严重度里要人立即动手的两档（紧急 / 高）才做成可点徽章；「中」是分级不是告警 */
+const SEV_ALERT: Record<string, 'warn' | 'bad'> = { 紧急: 'bad', 高: 'warn' }
 const STATUS_TONE: Record<string, Tone> = { 待分析: 'bad', 已阻断: 'warn', 已缓解: 'info', 已放行: 'muted' }
+/** 还没闭环、要人接着办的状态（待分析 / 已阻断）才做成可点徽章 */
+const STATUS_ALERT: Record<string, 'warn' | 'bad'> = { 待分析: 'bad', 已阻断: 'warn' }
 const RECT_TONE: Record<string, Tone> = { 已升级: 'bad', 待接单: 'warn', 整改中: 'info', 待复核: 'purple', 已关闭: 'good' }
+/** 整改单里在喊「要有人动手」的状态：已升级（超时没人接单）/ 待接单（还没人接） */
+const RECT_ALERT: Record<string, 'warn' | 'bad'> = { 已升级: 'bad', 待接单: 'warn' }
 
 export default function ComputeExceptions() {
   const list = exceptions()
@@ -30,12 +37,22 @@ export default function ComputeExceptions() {
   const dutyRoutes = dutyRoutesLive()
   const perm = usePerm('compute')
   const [sel, setSel] = useState('')
+  const pick = useAlertPick()          // 从任何红/黄告警点过来：?pick=<例外 key>
+  usePickFlash(pick)
+  /* 本页主键 = 例外 key（与 Jump.exceptionKey 同一口径）。
+     本页的红 / 黄徽章点了以后：既把 ?pick=<key> 写进地址（高亮 + 滚到中间），也立刻把这条载进右边「分析与处置」面板 */
+  const excJump = (key: string, label: string) => Jump.exceptionKey(key, label)
+  const openExc = list.filter((e) => e.status === '待分析')
+  const urgentExc = openExc.find((e) => e.severity === '紧急') ?? openExc[0]
+  const blockedExc = list.find((e) => e.status === '已阻断')
+  const escRect = rect.find((r) => r.status === '已升级') ?? rect.find((r) => r.status !== '已关闭' && r.dueAt < Date.now())
   const [note, setNote] = useState('')
   const [scope, setScope] = useState('来源 IP')
   const [scopeValue, setScopeValue] = useState('10.42.7.18')
   const [rectNote, setRectNote] = useState<Record<string, string>>({})
   const [msg, setMsg] = useState<{ tone: 'good' | 'bad'; text: string } | null>(null)
-  const cur = list.find((e) => e.key === sel) ?? list[0]
+  useEffect(() => { if (pick) setSel(pick) }, [pick])
+  const cur = list.find((e) => e.key === sel || e.key === pick) ?? list[0]
   const curRect = cur ? rectifyStore.for(cur.key) : undefined
   const curConn = cur?.ref?.connectorId ? connectorStore.find(cur.ref.connectorId) : undefined
   const settings = monitorStore.settings()
@@ -85,7 +102,7 @@ export default function ComputeExceptions() {
     return [
       <span className="small strong">{p.name}</span>,
       <span className="num">{p.cards} 卡</span>,
-      <div style={{ minWidth: 150 }}><span className="num small">{u}%</span>{u >= 92 ? <Badge tone={u >= 98 ? 'bad' : 'warn'}>触阈值</Badge> : <Badge tone="muted">正常</Badge>}</div>,
+      <div style={{ minWidth: 150 }}><span className="num small">{u}%</span>{u >= 92 ? <AlertBadge tone={u >= 98 ? 'bad' : 'warn'} jump={{ page: '/compute/schedule', pick: `pool-${p.id}`, label: `${p.name} 利用率 ${u}% 已触阈值：去算力排布这一行做回收 / 抢占 / 扩容（资源侧缓解走变更窗口，不在本页切接入）` }}>触阈值</AlertBadge> : <Badge tone="muted">正常</Badge>}</div>,
       <span className="tiny faint">{p.policy}</span>,
       <span className="tiny faint">{p.sla}</span>,
     ]
@@ -94,7 +111,7 @@ export default function ComputeExceptions() {
   const probeRows = sum.probes.map((p) => [
     <span className="small strong">{p.label}</span>,
     <span className="tiny" style={{ maxWidth: 240 }}>{p.name}<div className="tiny faint">归口 {p.owner} · 就绪缺 {p.miss} 项</div></span>,
-    <Badge tone={p.enabled ? (p.health === 'fault' ? 'bad' : 'good') : 'muted'}>{p.enabled ? (p.health === 'fault' ? '已断开' : '已接入喂数') : '未接入'}</Badge>,
+    p.enabled && p.health === 'fault' ? <AlertBadge tone="bad" jump={Jump.connector(p.id, `检测数据源「${p.name}」已断开：去外部对接清单这一行重新启用它（依赖它的检出项会随之回来）`)}>已断开</AlertBadge> : <Badge tone={p.enabled ? 'good' : 'muted'}>{p.enabled ? '已接入喂数' : '未接入'}</Badge>,
     <span className="tiny faint">{p.enabled ? '本轮起产出检出结果（演示为模拟喂数）' : '这三类旁路目前检不到'}</span>,
     perm.manage ? <button className={`btn sm ${p.enabled ? 'ghost' : ''}`} onClick={() => {
       connectorStore.setProbe(p.id, !p.enabled)
@@ -110,7 +127,7 @@ export default function ComputeExceptions() {
       <span className="small strong">{r.excKind}<div className="tiny faint" style={{ maxWidth: 240 }}>{r.target}</div></span>,
       <span className="tiny">{r.actionLabel}<div className="tiny faint mono">{r.orderId ?? '无工单'}</div></span>,
       <span className="tiny">{r.role}<div className="tiny faint">{r.assignee} · {r.phone}</div></span>,
-      <Badge tone={RECT_TONE[r.status] ?? 'info'}>{r.status}</Badge>,
+      RECT_ALERT[r.status] ? <AlertBadge tone={RECT_ALERT[r.status]} jump={excJump(r.key, `整改单「${r.status}」（${r.excKind} · ${r.target} → ${r.assignee}）：点过去落到这一行，接单 / 提交复核 / 复核通过都在这一行`)}>{r.status}</AlertBadge> : <Badge tone={RECT_TONE[r.status] ?? 'info'}>{r.status}</Badge>,
       <span className="tiny faint mono">{left > 0 ? `剩 ${left} 分` : `超期 ${-left} 分`}</span>,
       <div className="col gap6" style={{ minWidth: 280 }}>
         <div className="row gap6">
@@ -135,8 +152,8 @@ export default function ComputeExceptions() {
         desc="阻断切的是例外接入来源（通道 / 凭证 / 应用调用入口 / 目录入口）· 处置后自动派整改单，复核通过才允许恢复接入"
         extra={
           <>
-            <Badge tone="bad">未闭环 {sum.open}</Badge>
-            <Badge tone="warn">已阻断接入 {sum.blocked}</Badge>
+            {openExc.length ? <AlertBadge tone="bad" jump={excJump(openExc[0].key, `未闭环的第一条例外【${openExc[0].kind}】${openExc[0].target}（${openExc[0].severity}）：点过去落到这一行分析 / 阻断`)}>未闭环 {sum.open}</AlertBadge> : <Badge tone="good">未闭环 0</Badge>}
+            {blockedExc ? <AlertBadge tone="warn" jump={excJump(blockedExc.key, `已阻断接入的第一条【${blockedExc.kind}】${blockedExc.target}：点过去落到这一行看整改单与恢复接入的前提`)}>已阻断接入 {sum.blocked}</AlertBadge> : <Badge tone="muted">已阻断接入 0</Badge>}
             <Badge tone="purple">整改单未闭环 {sum.rect.open}</Badge>
             <Badge tone="info">第 {sum.round} 轮 · {sum.lastScanAt}</Badge>
             <button className="btn sm" disabled={!perm.manage} onClick={() => { const n = monitorStore.scanAndRaise(); setMsg({ tone: 'good', text: `已扫描一轮：新增报警 ${n} 项 · 超时未接单累计升级 ${rectifyStore.stats().escalated} 张` }) }}>立即扫描一轮</button>
@@ -154,10 +171,10 @@ export default function ComputeExceptions() {
       ) : null}
 
       <div className="grid g-6" style={{ marginTop: 14 }}>
-        <Kpi label="未闭环例外" value={sum.open} unit="项" foot={<>{sum.urgent ? <span className="down">● 紧急 {sum.urgent} 项需立即处置</span> : <span className="up">✔ 无紧急项</span>} · 高 {sum.high} 项</>} />
-        <Kpi label="已阻断接入" value={sum.blocked} unit="项" foot={`其中部分阻断 ${sum.partial.length} 条 · 资源侧缓解 ${sum.mitigated} 项 · 工单可回滚`} />
-        <Kpi label="整改单未闭环" value={sum.rect.open} unit="张" foot={`待接单 ${sum.rect.wait} · 整改中 ${sum.rect.doing} · 待复核 ${sum.rect.review} · 已关闭 ${sum.rect.closed}`} />
-        <Kpi label="超时升级 / 超期" value={sum.rect.escalated + sum.rect.overdue} unit="张" foot={`接单时限 ${duty.responseMin} 分 · 整改期限 ${duty.dueMin} 分 · 升级至值班长`} />
+        <Kpi label="未闭环例外" value={sum.open} unit="项" foot={<>{sum.urgent ? <span className="down">● 紧急 {sum.urgent} 项需立即处置</span> : <span className="up">✔ 无紧急项</span>} · 高 {sum.high} 项</>} jump={urgentExc ? excJump(urgentExc.key, `紧急例外【${urgentExc.kind}】${urgentExc.target}：点过去落到这一行，可切断的接入来源与阻断手段都在这一行`) : undefined} />
+        <Kpi label="已阻断接入" value={sum.blocked} unit="项" foot={`其中部分阻断 ${sum.partial.length} 条 · 资源侧缓解 ${sum.mitigated} 项 · 工单可回滚`} jump={blockedExc ? excJump(blockedExc.key, `已阻断的第一条【${blockedExc.kind}】${blockedExc.target}：点过去落到这一行看恢复接入的前提（整改复核通过才允许恢复）`) : undefined} />
+        <Kpi label="整改单未闭环" value={sum.rect.open} unit="张" foot={`待接单 ${sum.rect.wait} · 整改中 ${sum.rect.doing} · 待复核 ${sum.rect.review} · 已关闭 ${sum.rect.closed}`} jump={sum.rect.wait ? excJump(rect.find((r) => r.status === '待接单')!.key, `还有 ${sum.rect.wait} 张整改单没人接单：点过去落到这一行「接单」按钮所在的地方`) : undefined} />
+        <Kpi label="超时升级 / 超期" value={sum.rect.escalated + sum.rect.overdue} unit="张" foot={`接单时限 ${duty.responseMin} 分 · 整改期限 ${duty.dueMin} 分 · 升级至值班长`} jump={escRect ? excJump(escRect.key, `超时升级 / 超期的整改单【${escRect.excKind}】${escRect.target} → ${escRect.assignee}：点过去落到这一行接着办（接单 / 提交复核都在这一行）`) : undefined} />
         <Kpi label="旁路类 / 接管缺口" value={sum.bypass + sum.gap} unit="项" foot={`旁路 ${sum.bypass} · 缺口 ${sum.gap} · 检测数据源 ${sum.probesOn}/3 已接入`} />
         <Kpi label="后台轮扫" value={settings.intervalSec > 0 ? settings.intervalSec : '手动'} unit={settings.intervalSec > 0 ? '秒/轮' : ''} foot={`已扫 ${sum.round} 轮 · 上次 ${sum.lastScanAt} · 自动阻断${settings.autoBlockUrgent ? '已开' : '未开'}`} />
       </div>
@@ -182,16 +199,17 @@ export default function ComputeExceptions() {
             <Table
               minWidth={1300}
               head={['严重度', '例外类型', '例外（对象 / 证据）', '可切断的接入来源', '可用阻断手段', '状态', '整改单', '处置']}
+              rowKeys={list.map((e: ExcView) => e.key)} pick={sel || pick}
               rows={list.map((e: ExcView) => {
                 const rc = rectifyStore.for(e.key)
                 return [
-                  <Badge tone={SEV_TONE[e.severity]}>{e.severity}</Badge>,
+                  <span onClick={() => setSel(e.key)}>{SEV_ALERT[e.severity] ? <AlertBadge tone={SEV_ALERT[e.severity]} jump={excJump(e.key, `这条例外是「${e.severity}」级【${e.kind}】${e.target}：点过去选中这一行，可切断的接入来源与阻断手段就在这一行`)}>{e.severity}</AlertBadge> : <Badge tone={SEV_TONE[e.severity]}>{e.severity}</Badge>}</span>,
                   <span className="tag gray">{e.kind}</span>,
                   <span className="small strong" style={{ maxWidth: 300 }}>{e.target}<div className="tiny faint">{e.evidence.slice(0, 2).map((x, i) => <div key={i}>{x}</div>)}</div></span>,
                   <span className="tiny" style={{ maxWidth: 240 }}>{e.sources.length ? e.sources.slice(0, 2).map((s, i) => <div key={i}>{s.label}</div>) : <span className="faint">—（已处置）</span>}</span>,
                   <span className="tiny">{e.options.filter((o) => o.kind === '阻断接入').map((o) => o.label).join(' / ') || <span className="faint">无接入可切断</span>}</span>,
-                  <Badge tone={STATUS_TONE[e.status]}>{e.status}</Badge>,
-                  rc ? <Badge tone={RECT_TONE[rc.status] ?? 'info'}>{rc.status}<div className="tiny faint">{rc.assignee.split('（')[0]}</div></Badge> : <span className="tiny faint">—</span>,
+                  <span onClick={() => setSel(e.key)}>{STATUS_ALERT[e.status] ? <AlertBadge tone={STATUS_ALERT[e.status]} jump={excJump(e.key, `这条例外「${e.status}」【${e.kind}】${e.target}：点过去选中这一行，分析 / 阻断 / 恢复接入的入口都在这一行`)}>{e.status}</AlertBadge> : <Badge tone={STATUS_TONE[e.status]}>{e.status}</Badge>}</span>,
+                  rc ? <span onClick={() => setSel(e.key)}>{RECT_ALERT[rc.status] ? <AlertBadge tone={RECT_ALERT[rc.status]} jump={excJump(e.key, `这条例外的整改单「${rc.status}」（派给 ${rc.assignee}）：点过去选中这一行，下面的整改台账里接单 / 复核`)}>{rc.status}<div className="tiny faint">{rc.assignee.split('（')[0]}</div></AlertBadge> : <Badge tone={RECT_TONE[rc.status] ?? 'info'}>{rc.status}<div className="tiny faint">{rc.assignee.split('（')[0]}</div></Badge>}</span> : <span className="tiny faint">—</span>,
                   perm.manage ? (
                     <div className="row gap6">
                       <button className="btn sm" onClick={() => { setSel(e.key); setMsg(null) }}>分析</button>
@@ -313,7 +331,7 @@ export default function ComputeExceptions() {
         <div className="panel-body">
           {rect.length === 0 ? <div className="tiny faint">当前没有整改单：做一次阻断处置就会自动开单并派给对应值班角色。
             <Tip label="派单映射" text="旁路接入 → 网络与接入值班 · 接管缺口 / 资源异常 → 算力资源值班 · 配额越界 → 安全值班 · 旁路调用 / 目录不一致 → 应用与智能体值班（映射在值班派单页可改）" /></div> : (
-            <Table minWidth={1260} head={['例外', '处置动作 / 工单', '派给（当班）', '整改状态', '期限', '整改动作与记录']} rows={rectRows} />
+            <Table minWidth={1260} head={['例外', '处置动作 / 工单', '派给（当班）', '整改状态', '期限', '整改动作与记录']} rowKeys={rect.map((r) => r.key)} pick={pick} rows={rectRows} />
           )}
           <div className="tiny faint" style={{ marginTop: 8 }}>派单口径（可在「配置中心 → 排班与派单」改）：{dutyRoutes.map((r) => `${r.kind} → ${r.duty_role}`).join(' · ')}。超时未接单自动升级到该例外类型设定的升级岗位，超整改期限在台账与事件流里同时标出。</div>
         </div>
@@ -428,7 +446,7 @@ export default function ComputeExceptions() {
               const rc = rectifyStore.for(e.key)
               return [
                 <span className="small strong">{e.kind}<div className="tiny faint">{e.target}</div></span>,
-                <Badge tone={e.status === '已阻断' ? 'warn' : e.status === '已缓解' ? 'info' : 'muted'}>{e.status === '已阻断' ? '切断接入' : e.status === '已缓解' ? '资源侧缓解' : '人工放行'}</Badge>,
+                e.status === '已阻断' ? <AlertBadge tone="warn" jump={excJump(e.key, `这条例外已切断接入但还没闭环【${e.kind}】${e.target}：点过去落到例外台账这一行，看整改单与恢复接入的前提`)}>切断接入</AlertBadge> : <Badge tone={e.status === '已缓解' ? 'info' : 'muted'}>{e.status === '已缓解' ? '资源侧缓解' : '人工放行'}</Badge>,
                 <span className="small mono">{e.actionLabel ?? '—'}<div className="tiny faint">{e.orderId ? `工单 ${e.orderId}` : '（无工单）'}</div></span>,
                 <span className="tiny faint mono">{e.handledAt ?? e.lastSeen}</span>,
                 <span className="tiny" style={{ maxWidth: 340 }}>{rc ? `${rc.status} · ${rc.assignee} · ${rc.log[0]?.text ?? ''}` : (e.note ?? e.impact)}</span>,

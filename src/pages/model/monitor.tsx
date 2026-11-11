@@ -6,12 +6,13 @@
  * ===================================================================== */
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
-import {Badge, Callout, Kpi, PageHead, Panel, Progress, State, Table, Tip} from '../../components/ui'
+import {AlertBadge, Badge, Callout, Kpi, PageHead, Panel, Progress, State, Table, Tip} from '../../components/ui'
 import { AXIS_COLOR, CHART_COLORS, Chart, GRID, SPLIT_COLOR, TOOLTIP_STYLE } from '../../components/Chart'
 import { inferenceServices, sourceHint, telemetryStatus, telemetryStore, type InferenceService } from '../../engine/telemetry'
 import { engine, useEngine } from '../../engine/engine'
 import { metricNum, monitorStore, sampleClock, sampleTime, useMonitor, type MetricSample } from '../../engine/monitor'
 import { usePerm } from '../../engine/auth'
+import { Jump, useAlertPick, usePickFlash, type AlertJump } from '../../engine/alertJump'
 
 /* 需要动作的判定口径（与例外监控「资源异常」规则同源） */
 const ERR_MAX = 2.4
@@ -80,13 +81,19 @@ export default function ModelMonitor() {
   const perm = usePerm('gateway')
   const [nonce, setNonce] = useState(0)
   const mon = useMonitor()
+  /* 告警直达：本页红 / 黄提示全部可点，pick 口径写死在一处
+     服务级告警 → pick = 服务名（服务清单那一行 + 「需要动作的服务」那张卡）
+     探针目标级告警 → pick = 监控目标 id（Jump.monitorTarget 同一口径）
+     断连兜底工单 → pick = 兜底工单 id（本页「我接管 / 关闭」就在那一行） */
+  const pick = useAlertPick()
+  usePickFlash(pick)
   const [sideMetric, setSideMetric] = useState<'util' | 'hbm' | 'temp'>('util')
   const bucketMin = pickBucketMinutes(mon.samples)
   const buckets = bucketize(mon.samples, bucketMin)
   const canProbe = usePerm('compute').manage
   const [tgt, setTgt] = useState({ name: '', base: '', api_key_env: '', interval_seconds: 30, window_seconds: 300, metric_format: 'openai', active_probe: 1 })
   const [monMsg, setMonMsg] = useState<{ ok: boolean; text: string } | null>(null)
-  const [msg, setMsg] = useState<{ tone: 'good' | 'bad'; text: string } | null>(null)
+  const [msg, setMsg] = useState<{ tone: 'good' | 'bad'; text: string; jump?: AlertJump } | null>(null)
   const [fbMsg, setFbMsg] = useState<{ ok: boolean; text: string } | null>(null)
 
   /* 采集层落 services.json 后自动切「采集层」：订阅刷新，不改采集层代码 */
@@ -115,6 +122,24 @@ export default function ModelMonitor() {
     if (s.restarts > 0) reasons.push(`容器重启 ${s.restarts} 次`)
     return { s, reasons }
   }).filter((x) => x.reasons.length > 0)
+
+  /* 本页各条红 / 黄告警的落点（口径统一，同一个告警不会跳到两个地方） */
+  const svcJump = (s: InferenceService, label: string): AlertJump => ({ page: '/model/monitor', pick: s.service, label })
+  const worstSvc = (list: InferenceService[], score: (x: InferenceService) => number, label: string): AlertJump | undefined => {
+    const hit = [...list].sort((a, b) => score(b) - score(a))[0]
+    return hit ? svcJump(hit, label) : undefined
+  }
+  const fbJump = (id: string): AlertJump => ({ page: '/model/monitor', pick: id, label: '去这张兜底工单认领或关闭' })
+  const alertTone = (h: InferenceService['health']): 'warn' | 'bad' => (h === 'bad' ? 'bad' : 'warn')
+  const srcJump = Jump.connector('m-mindie', '去外部对接清单看 MindIE 指标源这条接入')
+  const errBadSvcs = svcs.filter((s) => s.errPct >= ERR_MAX)
+  const queueBadSvcs = svcs.filter((s) => s.queueDepth >= QUEUE_MAX)
+  const ttftBadSvcs = svcs.filter((s) => s.ttftMs >= TTFT_MAX)
+  const readyBadSvcs = svcs.filter((s) => s.ready < s.instances)
+  const alertedTargets = mon.targets.filter((t) => t.alert_state === '已告警')
+  const brokenTarget = alertedTargets[0]
+    ?? mon.targets.find((t) => t.last_status && t.last_status !== '已采集')
+    ?? mon.targets[0]
 
   const names = svcs.map((s) => s.service)
   const ttftOpt = {
@@ -161,12 +186,24 @@ export default function ModelMonitor() {
       />
 
       <div className="grid g-6 mt14">
-        <Kpi label="推理服务" value={svcs.length} unit="个" foot={`占用 ${cardsUsed} 卡位 · 就绪 ${svcs.reduce((s, x) => s + x.ready, 0)}/${instances} 实例`} />
+        <Kpi label="推理服务" value={svcs.length} unit="个" foot={readyBadSvcs.length
+          ? <span className="down">{`● 就绪不足：${readyBadSvcs.length} 个服务有副本未起 · 占用 ${cardsUsed} 卡位`}</span>
+          : `占用 ${cardsUsed} 卡位 · 就绪 ${svcs.reduce((s, x) => s + x.ready, 0)}/${instances} 实例`}
+          jump={worstSvc(readyBadSvcs, (x) => x.instances - x.ready, '去这个副本没起齐的服务提交扩容')} />
         <Kpi label="实例总数" value={instances} unit="个" foot="副本数按平台模型台账计" />
         <Kpi label="占用卡位合计" value={cardsUsed} unit="卡" foot="副本 × 每副本卡位 · 与池对照同源" />
-        <Kpi label="平均首包时延" value={avg((s) => s.ttftMs)} unit="ms" foot={`阈值 ${TTFT_MAX}ms · P99 平均 ${avg((s) => s.p99Ms)}ms`} />
-        <Kpi label="平均错误率" value={avg((s) => s.errPct, 1)} unit="%" foot={`动作线 ${ERR_MAX}% · 重启合计 ${svcs.reduce((s, x) => s + x.restarts, 0)} 次`} />
-        <Kpi label="队列深度合计" value={queueTotal} unit="请求" foot={`动作线 ${QUEUE_MAX} · 超线的服务见下方「需要动作的服务」`} />
+        <Kpi label="平均首包时延" value={avg((s) => s.ttftMs)} unit="ms" foot={ttftBadSvcs.length
+          ? <span className="down">{`● ${ttftBadSvcs.length} 个服务 TTFT 超 ${TTFT_MAX}ms`}</span>
+          : `阈值 ${TTFT_MAX}ms · P99 平均 ${avg((s) => s.p99Ms)}ms`}
+          jump={worstSvc(ttftBadSvcs, (x) => x.ttftMs, '去这个 TTFT 超动作线的服务做处置')} />
+        <Kpi label="平均错误率" value={avg((s) => s.errPct, 1)} unit="%" foot={errBadSvcs.length
+          ? <span className="down">{`● ${errBadSvcs.length} 个服务错误率超 ${ERR_MAX}%`}</span>
+          : `动作线 ${ERR_MAX}% · 重启合计 ${svcs.reduce((s, x) => s + x.restarts, 0)} 次`}
+          jump={worstSvc(errBadSvcs, (x) => x.errPct, '去这个错误率超动作线的服务做处置')} />
+        <Kpi label="队列深度合计" value={queueTotal} unit="请求" foot={queueBadSvcs.length
+          ? <span className="down">{`● ${queueBadSvcs.length} 个服务队列超 ${QUEUE_MAX}`}</span>
+          : `动作线 ${QUEUE_MAX} · 超线的服务见下方「需要动作的服务」`}
+          jump={worstSvc(queueBadSvcs, (x) => x.queueDepth, '去这个队列超动作线的服务补承载')} />
       </div>
 
       <Panel className="mt14" title="服务清单（服务级台账）" extra={`${svcs.length} 个服务 · 来源：${tel.mode}`} noPad>
@@ -188,13 +225,17 @@ export default function ModelMonitor() {
               <span className={`num ${s.queueDepth >= QUEUE_MAX ? 'strong' : ''}`}>{s.queueDepth}</span>,
               <span className="num">{s.kvHit}%</span>,
               <div style={{ minWidth: 110 }}>
-                <Progress value={s.hbmPct} tone={s.hbmPct > 95 ? 'bad' : s.hbmPct > 85 ? 'warn' : ''} />
+                <Progress value={s.hbmPct} tone={s.hbmPct > 95 ? 'bad' : s.hbmPct > 85 ? 'warn' : ''}
+                  jump={s.hbmPct > 85 ? svcJump(s, '去这个显存超阈的服务看原因并补承载') : undefined} />
                 <span className="tiny faint num">{s.hbmPct}%</span>
               </div>,
               <span className={`num ${s.errPct >= ERR_MAX ? 'strong' : ''}`}>{s.errPct}%</span>,
               <span className={`num ${s.restarts > 0 ? 'strong' : 'faint'}`}>{s.restarts}</span>,
-              <Badge tone={SVC_TONE[s.health]}>{SVC_TEXT[s.health]}</Badge>,
+              SVC_TONE[s.health] === 'good'
+                ? <Badge tone="good">{SVC_TEXT[s.health]}</Badge>
+                : <AlertBadge tone={alertTone(s.health)} jump={svcJump(s, '去下方「需要动作的服务」这一条：看原因 / 提交副本扩容')}>{SVC_TEXT[s.health]}</AlertBadge>,
             ])}
+            rowKeys={svcs.map((s) => s.service)} pick={pick}
           />
           <div className="tiny faint" style={{ marginTop: 8 }}>
             KV 命中率按 MindIE 原字段 kv_hit_pct 对齐；该指标厂商未开放时在卡位显示 0 并在来源清单标「厂商未开放」，不按经验值猜测。首包时延与队列深度是选型验收要写清的指标。
@@ -225,14 +266,17 @@ export default function ModelMonitor() {
           <div className="small">当前没有需要动作的服务：各服务副本就绪、错误率与队列深度都在动作线内。</div>
         ) : (
           <div className="col gap6">
-            {needAction.map(({ s, reasons }) => (
-              <div key={s.service} style={{ border: '1px solid rgba(var(--line-rgb), .16)', borderRadius: 10, padding: '9px 11px' }}>
+            {needAction.map(({ s, reasons }) => {
+              const hit = pick === s.service
+              return (
+              <div key={s.service} className={hit ? 'row-pick' : undefined}
+                style={{ border: hit ? '1px solid var(--line-strong)' : '1px solid rgba(var(--line-rgb), .16)', boxShadow: hit ? '0 0 0 2px rgba(245,184,61,.35)' : undefined, borderRadius: 10, padding: '9px 11px' }}>
                 <div className="row gap6" style={{ flexWrap: 'wrap' }}>
                   <span className="mono small strong">{s.service}</span>
                   <span className="tag gray">{s.model}</span>
                   <span className="tag gray">{s.version}</span>
                   <span className="small">{s.poolName}</span>
-                  <Badge tone={SVC_TONE[s.health]}>{SVC_TEXT[s.health]}</Badge>
+                  <AlertBadge tone={alertTone(s.health)} jump={svcJump(s, '落在这条处置卡：提交副本扩容 / 看服务清单那一行')}>{SVC_TEXT[s.health]}</AlertBadge>
                   <span className="tiny faint">{s.instances} 副本 / {s.cards} 卡位</span>
                 </div>
                 <div className="small" style={{ marginTop: 5, color: 'var(--table-text)' }}>原因：{reasons.join(' · ')}</div>
@@ -251,8 +295,8 @@ export default function ModelMonitor() {
                       })
                       setMsg(
                         r.precheck.ok
-                          ? { tone: 'good', text: `${r.order.id} 已提交，准入预检通过：${r.precheck.suggest ?? ''}（工单进变更窗口队列，执行后回到本页验收 TTFT 与队列）` }
-                          : { tone: 'bad', text: `${r.order.id} 被准入校验驳回：${r.precheck.reason ?? '未给出理由'}${r.precheck.suggest ? ` · 建议：${r.precheck.suggest}` : ''}` },
+                          ? { tone: 'good', text: `${r.order.id} 已提交，准入预检通过：${r.precheck.suggest ?? ''}（工单进变更窗口队列，执行后回到本页验收 TTFT 与队列）`, jump: Jump.order(r.order.id, '去看这张扩容工单') }
+                          : { tone: 'bad', text: `${r.order.id} 被准入校验驳回：${r.precheck.reason ?? '未给出理由'}${r.precheck.suggest ? ` · 建议：${r.precheck.suggest}` : ''}`, jump: Jump.order(r.order.id, '去看这张被驳回的扩容工单，按理由调整后重提') },
                       )
                     }}
                   >
@@ -262,10 +306,11 @@ export default function ModelMonitor() {
                   <span className="tiny faint">扩容工单只加副本；限流来源与回收空闲卡位在例外监控页做</span>
                 </div>
               </div>
-            ))}
+              )
+            })}
           </div>
         )}
-        {msg ? <div style={{ marginTop: 10 }}><Callout text={msg.text} warn={msg.tone === 'bad'} /></div> : null}
+        {msg ? <div style={{ marginTop: 10 }}><Callout text={msg.text} warn={msg.tone === 'bad'} jump={msg.jump} /></div> : null}
       </Panel>
 
       <Panel className="mt14" title="版本与灰度" extra="当前生效版本与版本清单（灰度放量走部署工单）" noPad>
@@ -301,7 +346,7 @@ export default function ModelMonitor() {
               <span className="num">{hint.every}</span>,
               <span className="mono small">{hint.file}</span>,
               <span className="num">{tel.sources.find((x) => x.id === 'mindie')?.items ?? hint.status.items}</span>,
-              <Badge tone={hint.status.ok ? 'good' : 'bad'}>{hint.status.ok ? '可用' : '取数失败'}</Badge>,
+              hint.status.ok ? <Badge tone="good">可用</Badge> : <AlertBadge tone="bad" jump={srcJump}>取数失败</AlertBadge>,
             ]]}
           />
           <div className="row gap6" style={{ flexWrap: 'wrap', marginTop: 10 }}>
@@ -332,11 +377,20 @@ export default function ModelMonitor() {
           <Tip label="采样口径" text={'库里 ' + mon.total + ' 条采样，保留 ' + mon.retention + ' 小时；探针只读 GET /metrics 与 /health，不会改对方服务'} />
         </span>}>
         <div className="panel-body">
-          {mon.error ? <Callout warn text={'监控读不到：' + mon.error} /> : null}
-          {mon.targets.some((x) => x.alert_state === '已告警') ? (
-            <Callout warn text={'已经告出来的断连：' + mon.targets.filter((x) => x.alert_state === '已告警')
-              .map((x) => x.name + '（连续 ' + x.fail_streak + ' 轮采不到 · 通知已发 · 兜底工单派给 '
-                + ((mon.state?.alerts || {})[x.id]?.owner || '值班岗位') + '）').join('；')} />
+          {mon.error ? <Callout warn text={'监控读不到：' + mon.error}
+            jump={brokenTarget ? Jump.monitorTarget(brokenTarget.id, '去这个采不到的监控目标立即采一轮') : srcJump} /> : null}
+          {alertedTargets.length ? (
+            <Callout warn text={
+              <>
+                已经告出来的断连（点目标名就落到那一行，那里有「立即采一轮」与启停）：
+                {alertedTargets.map((x) => (
+                  <AlertBadge key={x.id} tone="bad" jump={Jump.monitorTarget(x.id, '去这个采不到的监控目标：立即采一轮 / 看最近错误')}>
+                    {x.name} · 连续 {x.fail_streak} 轮采不到
+                  </AlertBadge>
+                ))}
+                <span className="tiny faint">通知已发 · 兜底工单派给 {alertedTargets.map((x) => ((mon.state?.alerts || {})[x.id]?.owner || '值班岗位')).join(' / ')}</span>
+              </>
+            } />
           ) : null}
                     {mon.fallback.length ? (
             <>
@@ -344,8 +398,8 @@ export default function ModelMonitor() {
               <div className="tiny strong" style={{ marginTop: 10 }}>断连兜底工单（谁在处理、有没有闭环）</div>
               <Table minWidth={1000} head={['工单 / 来源', '状态', '现在归谁', '开单时间', '闭环操作']} rows={mon.fallback.map((f) => [
                 <span className="tiny strong">{f.title.slice(0, 46)}<div className="tiny mono faint">{f.id} · {f.ref}</div></span>,
-                <span>{f.status === '待接管' ? <Badge tone="warn">待接管</Badge>
-                  : f.status === '已升级' ? <Badge tone="bad">已升级（没人接管）</Badge>
+                <span>{f.status === '待接管' ? <AlertBadge tone="warn" jump={fbJump(f.id)}>待接管</AlertBadge>
+                  : f.status === '已升级' ? <AlertBadge tone="bad" jump={fbJump(f.id)}>已升级（没人接管）</AlertBadge>
                   : f.status === '已接管' ? <Badge tone="info">已接管</Badge> : <Badge tone="good">已关闭</Badge>}</span>,
                 <span className="tiny">{f.owner}</span>,
                 <span className="tiny faint">{(f.created_at || '').replace('T', ' ').replace('Z', '')}</span>,
@@ -365,7 +419,7 @@ export default function ModelMonitor() {
                       }}>处置完毕 · 关闭</button>
                   ) : null}
                 </div>,
-              ])} />
+              ])} rowKeys={mon.fallback.map((f) => f.id)} pick={pick} />
               {fbMsg ? <div className="tiny" style={{ marginTop: 6, color: fbMsg.ok ? 'var(--ok-text)' : 'var(--bad-text)' }}>{fbMsg.text}</div> : null}
               <div className="tiny faint" style={{ marginTop: 6 }}>
                 「我接管」把这张工单认领到人头上（记录谁、几点）；「处置完毕 · 关闭」必须写原因，而且当目标仍然采不到时会提醒你
@@ -377,15 +431,15 @@ export default function ModelMonitor() {
             <span className="small strong">{t.name}<div className="tiny mono faint">{t.id} · {t.enabled ? '启用' : '已停用'}</div></span>,
             <span className="tiny mono">{t.base}</span>,
             <span className="tiny mono">{t.metric_format === 'openai' ? 'OpenAI 兼容' : t.metric_format === 'prometheus' ? 'Prometheus 文本' : 'JSON 指标'}{t.active_probe ? ' · 主动探测开' : ''}
-              <div className="tiny faint">{t.api_key_env || '不需要密钥'}{mon.keyEnvPresent[t.id] === false && t.api_key_env ? <span style={{ marginLeft: 6, color: '#f5b83d' }}>环境变量没给</span> : null}</div>
+              <div className="tiny faint">{t.api_key_env || '不需要密钥'}{mon.keyEnvPresent[t.id] === false && t.api_key_env ? <AlertBadge tone="warn" jump={Jump.monitorTarget(t.id, '去这一行：补密钥环境变量 / 立即采一轮')}>环境变量没给</AlertBadge> : null}</div>
             </span>,
             <span className="tiny">{t.interval_seconds} 秒 / 窗口 {t.window_seconds} 秒</span>,
-            <span className="tiny">{t.last_status === '已采集' ? <Badge tone="good">已采集</Badge> : t.last_status ? <Badge tone="bad">{t.last_status}</Badge> : <Badge tone="muted">还没采过</Badge>}{t.alert_state === '已告警' ? <Badge tone="bad">已告警 · 连续 {t.fail_streak} 轮采不到</Badge> : null}{t.last_error ? <div className="tiny" style={{ color: 'var(--bad-text)', maxWidth: 260 }}>{t.last_error}</div> : null}</span>,
+            <span className="tiny">{t.last_status === '已采集' ? <Badge tone="good">已采集</Badge> : t.last_status ? <AlertBadge tone="bad" jump={Jump.monitorTarget(t.id, '去这一行：立即采一轮 / 看最近错误')}>{t.last_status}</AlertBadge> : <Badge tone="muted">还没采过</Badge>}{t.alert_state === '已告警' ? <AlertBadge tone="bad" jump={Jump.monitorTarget(t.id, '去这一行：立即采一轮 / 看最近错误')}>已告警 · 连续 {t.fail_streak} 轮采不到</AlertBadge> : null}{t.last_error ? <div className="tiny" style={{ color: 'var(--bad-text)', maxWidth: 260 }}>{t.last_error}</div> : null}</span>,
             <div className="row gap6" style={{ flexWrap: 'wrap' }}>
               <button className="btn sm ghost" disabled={!canProbe} onClick={() => void monitorStore.probe(t.id).then((r) => setMonMsg({ ok: !!r.ok, text: r.ok ? t.name + ' 已采一轮（样本写进 metric_samples）' : '采集被拒：' + (r.error || '') }))}>立即采一轮</button>
               <button className="btn sm ghost" disabled={!canProbe} onClick={() => void monitorStore.saveTarget({ ...t, enabled: t.enabled ? 0 : 1 }).then((r) => setMonMsg({ ok: !!r.ok, text: r.ok ? (t.enabled ? t.name + ' 已停用' : t.name + ' 已启用') : '被拒：' + (r.error || '') }))}>{t.enabled ? '停用' : '启用'}</button>
             </div>,
-          ])} />
+          ])} rowKeys={mon.targets.map((t) => t.id)} pick={pick} />
           {mon.targets.length === 0 ? <div className="tiny faint" style={{ marginTop: 6 }}>还没有监控目标：在下面填一台推理服务。
             <Tip label="怎么填" text="它暴露 /metrics（JSON 或 Prometheus 文本）就选对应口径；只有 OpenAI 兼容接口（/v1/models）就选「只有 OpenAI 兼容接口」，卡指标会标「对方未开放」。填完不用重启，下一轮探针就采。" /></div> : null}
 
@@ -447,7 +501,7 @@ export default function ModelMonitor() {
 
           <Table minWidth={1180} head={['采样时间', '目标 / 状态', 'QPS', '吞吐 tok/s', '首包 TTFT', 'P99', '队列', 'KV 复用命中', '显存 %', '卡温 / 功耗', '窗口内请求']} rows={mon.samples.slice(0, 14).map((x) => [
             <span className="tiny mono">{sampleTime(x.at)}</span>,
-            <span className="tiny">{x.service}{x.status === '取数失败' ? <Badge tone="bad">取数失败</Badge> : null}{x.model ? <div className="tiny faint mono">{x.model}</div> : null}</span>,
+            <span className="tiny">{x.service}{x.status === '取数失败' ? <AlertBadge tone="bad" jump={Jump.monitorTarget(x.target, '去这个采不到的监控目标：立即采一轮 / 看最近错误')}>取数失败</AlertBadge> : null}{x.model ? <div className="tiny faint mono">{x.model}</div> : null}</span>,
             <span className="num small">{metricNum(x.qps)}</span>,
             <span className="num small">{metricNum(x.tokens_per_sec)}</span>,
             <span className="num small">{x.ttft_ms === null ? '对方未开放' : `${x.ttft_ms} ms`}</span>,
@@ -457,7 +511,7 @@ export default function ModelMonitor() {
             <span className="num small">{x.hbm_pct === null ? '对方未开放' : `${x.hbm_pct}%`}</span>,
             <span className="tiny">{x.gpu_temp_c === null ? '卡指标对方未开放' : `${x.gpu_temp_c} ℃ / ${x.gpu_power_w} W`}<div className="tiny faint">{x.gpu_name || '对方未开放卡型'}</div></span>,
             <span className="num small">{metricNum(x.req_window)}{x.status === '取数失败' ? <div className="tiny" style={{ color: 'var(--bad-text)', maxWidth: 240 }}>{(x.note || '').slice(0, 70)}</div> : null}</span>,
-          ])} />
+          ])} rowKeys={mon.samples.slice(0, 14).map((x) => x.target)} pick={pick} />
           <div className="tiny faint" style={{ marginTop: 8 }}>
             探针取数：数据服务自己按目标各自的间隔去拉，口径按目标选（JSON 指标 / Prometheus 文本 / 只有 OpenAI 兼容接口）；
             不向被监控的服务写任何东西；库里 <span className="mono">metric_samples</span> 是权威副本，界面只是读它。

@@ -53,7 +53,7 @@ export default function Briefing() {
   const L = ledgerOf(st)
   const running = st.orders.filter((o) => o.status === 'running')
   const queued = st.orders.filter((o) => o.status === 'queued')
-  const pending = st.orders.filter((o) => o.status === 'submitted')
+  const pending = st.orders.filter((o) => o.status === 'submitted' || o.status === 'to_biz')
   const slot = engine.activeSlot()
   const contained = st.managed.filter((m) => m.status !== '正常')
   const firedRules = rules.filter((r) => r.fired > 0)

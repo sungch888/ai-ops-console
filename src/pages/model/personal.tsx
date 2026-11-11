@@ -4,12 +4,13 @@
  * 数据与组织视角同源：凭证台账 + 实时账本 + 工单引擎
  * ===================================================================== */
 import { useState } from 'react'
-import { Kpi, Panel, PageHead, Badge, State, Table, Callout, Progress } from '../../components/ui'
-import { engine, useEngine } from '../../engine/engine'
+import { Kpi, Panel, PageHead, Badge, State, Table, Callout, Progress, AlertBadge } from '../../components/ui'
+import { engine, useEngine, type Order } from '../../engine/engine'
 import { ledgerOf } from '../../engine/ledger'
 import { useSession, useMatrix, usePerm, ROLE_LABEL } from '../../engine/auth'
 import { notifyStore } from '../../engine/ops'
 import { gatewayEndpoints } from '../../data/mock'
+import { Jump, useAlertPick, usePickFlash, type AlertJump } from '../../engine/alertJump'
 
 const PACKAGES = [
   { name: '配额提升包', detail: '个人密钥 +20 RPM / 30 天', points: 400, kind: 'quota' as const },
@@ -33,6 +34,29 @@ export default function Personal() {
   const [flash, setFlash] = useState<string | null>(null)
   const [openHelp, setOpenHelp] = useState<string | null>(null)
   const cls = acc ? matrix[acc.role].cls.join(' / ') : '—'
+
+  /* 告警直达口径（本页主键：凭证 id / 工单 id）
+     我的凭证红 / 黄 → 落「我的凭证」那一行：这一行就有「申请吊销」，接入示例也在同一行
+     我的工单红 / 黄 → 落「我的工单与兑换记录」那一行：驳回理由与审批动作就在这一屏
+     渠道配额吃紧 → 落「模型中心 · 凭证与配额」那条凭证那一行（提额 / 回收在那一行） */
+  const pick = useAlertPick()
+  usePickFlash(pick)
+  const credJump = (id: string, label: string): AlertJump => ({ page: '/model/personal', pick: id, label })
+  const orderJump = (id: string, label: string): AlertJump => ({ page: '/model/personal', pick: id, label })
+  const myCredAlerts = mine.filter((c) => c.status !== 'ok')
+  const pendingOrders = mineOrders.filter((o) => o.status === 'submitted' || o.status === 'to_biz')
+  const notClosed = mineOrders.filter((o) => o.status !== 'submitted' && o.status !== 'to_biz' && o.status !== 'closed')
+  const orderStateCell = (o: Order) => o.status === 'to_biz'
+    ? <AlertBadge tone="warn" jump={orderJump(o.id, '这张工单先等业务管理审批（业务确认要不要），之后才进平台审批')}>待业务管理审批</AlertBadge>
+    : o.status === 'submitted'
+    ? <AlertBadge tone="warn" jump={orderJump(o.id, '到这张待审批工单那一行：当前角色可审批的「通过」按钮就在这个面板下方')}>待审批</AlertBadge>
+    : o.status === 'rejected'
+      ? <AlertBadge tone="bad" jump={orderJump(o.id, `这张工单已被准入 / 审批驳回${o.rejectReason ? `（${o.rejectReason}）` : ''}：在这一行看理由，改参数重新提交`)}>已驳回</AlertBadge>
+      : o.status === 'queued'
+        ? <AlertBadge tone="warn" jump={orderJump(o.id, '这张工单排队待变更窗口：在这一行看它卡在哪一步，窗口开放后才生效')}>排队中</AlertBadge>
+        : o.status === 'rolled_back'
+          ? <AlertBadge tone="warn" jump={orderJump(o.id, '这张工单已回滚：在这一行看回滚轨迹，要重走就在这一行重提')}>已回滚</AlertBadge>
+          : <State s={o.status === 'running' ? 'run' : 'closed'} />
 
   const redeem = (pkg: typeof PACKAGES[number]) => {
     const live = mine.find((c) => c.status !== 'off')
@@ -80,8 +104,16 @@ export default function Personal() {
         <Kpi label="我的今日调用" value={me ? (me.calls / 10000).toFixed(2) : '0.00'} unit="万次" foot={me ? `占全平台 ${me.share}% · ${me.rpm} RPM 配额` : '当前无有效凭证配额'} />
         <Kpi label="我的今日 Token" value={me ? me.tokens.toLocaleString('zh-CN') : '0'} unit="万" foot={`折算成本 ¥${(me?.cost ?? 0).toLocaleString('zh-CN')}`} />
         <Kpi label="我的积分" value={(me?.points ?? 0).toLocaleString('zh-CN')} unit="分" foot="每 1 万 Token 计 8 分 · 可用于兑换额度" />
-        <Kpi label="我的凭证" value={mine.length} unit="个" foot={`有效 ${mine.filter((c) => c.status !== 'off').length} · 已吊销 ${mine.filter((c) => c.status === 'off').length} · 临期 ${me?.expSoon ?? 0}`} />
-        <Kpi label="我的工单" value={mineOrders.length} unit="项" foot={`待审批 ${mineOrders.filter((o) => o.status === 'submitted').length} · 已闭环 ${mineOrders.filter((o) => o.status === 'closed').length}`} />
+        <Kpi label="我的凭证" value={mine.length} unit="个" foot={myCredAlerts.length
+          ? <span className="down">{`● 已吊销 ${mine.filter((c) => c.status === 'off').length} · 临期 / 需复核 ${mine.filter((c) => c.status === 'warn').length} · 临期计数 ${me?.expSoon ?? 0}`}</span>
+          : `有效 ${mine.filter((c) => c.status !== 'off').length} · 已吊销 ${mine.filter((c) => c.status === 'off').length} · 临期 ${me?.expSoon ?? 0}`}
+          jump={myCredAlerts.length ? credJump(myCredAlerts[0].id, `到 ${myCredAlerts[0].id} 这一行：申请吊销就在这一行，重发要走下方工单`) : undefined} />
+        <Kpi label="我的工单" value={mineOrders.length} unit="项" foot={pendingOrders.length || notClosed.length
+          ? <span className="down">{`● 待审批 ${pendingOrders.length} · 未闭环（排队 / 驳回 / 回滚）${notClosed.length}`}</span>
+          : `待审批 ${pendingOrders.length} · 已闭环 ${mineOrders.filter((o) => o.status === 'closed').length}`}
+          jump={pendingOrders.length
+            ? orderJump(pendingOrders[0].id, `到 ${pendingOrders[0].id} 这一行：看它卡在哪一步，可审批的「通过」就在这个面板下方`)
+            : notClosed.length ? orderJump(notClosed[0].id, `到 ${notClosed[0].id} 这一行：看驳回理由 / 回滚轨迹，改参数重提都在这一屏`) : undefined} />
       </div>
 
       <Panel title="我的凭证（Key 已掩码展示）" extra="完整密钥不在界面与接口暴露；如需变更须走工单" className="mt14" noPad>
@@ -91,6 +123,7 @@ export default function Personal() {
           ) : (
             <Table
               minWidth={1020}
+              rowKeys={mine.map((c) => c.id)} pick={pick}
               head={['凭证', '类型', '绑定应用 / 模型 / 渠道', '配额', 'IP 白名单', '剩余有效期 / 最近使用', '状态', '操作']}
               rows={mine.map((c) => [
                 <span className="mono small strong">{maskKey(c.id)}<div className="tiny faint">{c.id}</div></span>,
@@ -99,7 +132,7 @@ export default function Personal() {
                 <span className="num small">{c.rpm} RPM<div className="tiny faint">{c.tpm} TPM</div></span>,
                 <span className="mono tiny">{c.ip}</span>,
                 <span className="small num">{c.expDays} 天<div className="tiny faint">{c.lastUsedDays === 0 ? '今日已使用' : `最近使用 ${c.lastUsedDays} 天前`}</div></span>,
-                c.status === 'off' ? <Badge tone="bad">已吊销</Badge> : c.status === 'warn' ? <Badge tone="warn">临期 / 需复核</Badge> : <State s="ok" />,
+                c.status === 'off' ? <AlertBadge tone="bad" jump={credJump(c.id, `${c.id} 已吊销（疑似在公用终端使用）：这一行看接入示例，重发要走下方「提交个人密钥申请」`)}>已吊销 · 需重发</AlertBadge> : c.status === 'warn' ? <AlertBadge tone="warn" jump={credJump(c.id, `${c.id} 临期 / 授权范围需复核：这一行直接「申请吊销」，要保留就走下方提额工单`)}>临期 / 需复核</AlertBadge> : <State s="ok" />,
                 <div className="row gap6">
                   <button className="btn sm ghost" onClick={() => setOpenHelp(openHelp === c.id ? null : c.id)}>{openHelp === c.id ? '收起接入示例' : '接入示例'}</button>
                   {c.status !== 'off' ? <button className="btn sm danger" onClick={() => revoke(c.id)}>申请吊销</button> : <span className="tiny faint">已吊销 · 需重新申请</span>}
@@ -158,7 +191,7 @@ export default function Personal() {
                   return (
                     <div key={c.id} style={{ marginTop: 8 }}>
                       <div className="row between small"><span>{c.id} → {ch.name.split('（')[0]}</span><span className="num">{c.rpm} RPM · 渠道已占用 {used}%</span></div>
-                      <Progress value={used} tone={used > 85 ? 'warn' : ''} />
+                      <Progress value={used} tone={used > 85 ? 'warn' : ''} jump={used > 85 ? Jump.credential(c.id, `${ch.name.split('（')[0]} 已占用 ${used}%：到这条凭证那一行提额 / 回收（再提额会被准入拒）`) : undefined} />
                     </div>
                   )
                 })}
@@ -208,19 +241,22 @@ export default function Personal() {
           <div className="panel-body">
             <Table
               minWidth={900}
+              rowKeys={mineOrders.map((o) => o.id)} pick={pick}
               head={['工单', '类型', '对象与数量', '状态', '轨迹']}
               rows={mineOrders.map((o) => [
                 <span className="mono small strong">{o.id}</span>,
                 <span className="small">{o.title.split(' · ')[0]}</span>,
                 <span className="small">{o.target}<div className="tiny faint">{o.amount}</div></span>,
-                <State s={o.status === 'submitted' ? 'pending' : o.status === 'queued' ? 'queued' : o.status === 'running' ? 'run' : o.status === 'rejected' ? 'block' : o.status === 'rolled_back' ? 'rollback' : 'closed'} />,
+                orderStateCell(o),
                 <span className="tiny faint" style={{ maxWidth: 320 }}>{o.trace.map((t) => t.action).join(' → ')}{o.rejectReason ? ` · 驳回：${o.rejectReason}` : ''}</span>,
               ])}
             />
-            {mineOrders.some((o) => o.status === 'submitted') && canApprove ? (
+            {mineOrders.some((o) => o.status === 'submitted' || o.status === 'to_biz') && canApprove ? (
               <div className="row gap6" style={{ marginTop: 10 }}>
                 <span className="small faint">当前角色可审批：</span>
-                {mineOrders.filter((o) => o.status === 'submitted').map((o) => <button key={o.id} className="btn sm primary" onClick={() => engine.approve(o.id)}>通过 {o.id}</button>)}
+                {mineOrders.filter((o) => o.status === 'submitted' || o.status === 'to_biz').map((o) => o.status === 'to_biz'
+                  ? <button key={o.id} className="btn sm primary" onClick={() => engine.bizConfirm(o.id, '业务管理岗（演示）')}>业务确认 {o.id}</button>
+                  : <button key={o.id} className="btn sm primary" onClick={() => engine.approve(o.id)}>通过 {o.id}</button>)}
               </div>
             ) : null}
           </div>

@@ -24,6 +24,7 @@ PAGES = {
  '/ops/analytics': 'src/pages/ops/analytics.tsx', '/ops/records': 'src/pages/ops/records.tsx',
  '/ops/notifications': 'src/pages/ops/notifications.tsx', '/ops/integrations': 'src/pages/ops/integrations.tsx',
  '/ops/apply': 'src/pages/ops/apply.tsx', '/ops/settings': 'src/pages/ops/settings.tsx', '/ops/commands': 'src/pages/ops/commands.tsx',
+ '/ops/opctl': 'src/pages/ops/opctl.tsx', '/ops/opctl-queue': 'src/pages/ops/opctlQueue.tsx', '/ops/opctl-audit': 'src/pages/ops/opctlAudit.tsx', '/ops/opctl-perm': 'src/pages/ops/opctlPerm.tsx',
 }
 PAT = re.compile(r"<Panel(?:(?!<Panel).){0,420}?title=(?:\"([^\"]{2,60})\"|'([^']{2,60})'|\{\s*'([^']{2,60})')", re.S)
 

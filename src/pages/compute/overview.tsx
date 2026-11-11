@@ -1,16 +1,47 @@
 import React from 'react'
-import { Kpi, Panel, PageHead, Badge, State, Table, Progress, Callout } from '../../components/ui'
+import { Kpi, Panel, PageHead, Badge, AlertBadge, State, Table, Progress, Callout } from '../../components/ui'
 import { Chart, CHART_COLORS, AXIS_COLOR, SPLIT_COLOR, TOOLTIP_STYLE, GRID } from '../../components/Chart'
 import { computeCards, computeNodes, computeEvents } from '../../data/mock'
 import { useEngine, poolUtil, freeCards, totalAllocated, totalReplicas, TOTAL_CARDS, rentInfo } from '../../engine/engine'
 import { useGovernViews, governSummary, DEPTH_LABEL } from '../../engine/govern'
 import { Link } from 'react-router-dom'
+import { alertHref, Jump, useAlertPick, usePickFlash, type AlertJump } from '../../engine/alertJump'
+import { npuCards, type NpuCard } from '../../engine/telemetry'
+
+/** 资源类告警口径：落到「资源池与调度」页里的那个池 */
+const poolJump = (id: string, label = '去资源池与调度看这个池'): AlertJump =>
+  ({ page: '/compute/schedule', pick: `pool-${id}`, label })
+
+const cardRank = (c: NpuCard) => (c.health === 'fault' ? 0 : c.health === 'warn' ? 1 : 2)
+
+/** 节点级告警口径：落到「算力卡监控」页里该节点最吃紧的那张卡（卡位主键） */
+function nodeJump(nodeName: string): AlertJump {
+  const hit = npuCards().filter((c) => c.node === nodeName).sort((a, b) => cardRank(a) - cardRank(b) || b.util - a.util)[0]
+  return hit ? Jump.card(hit.id, `去算力卡监控看 ${nodeName} 上的卡（${hit.id}）`) : Jump.card(`${nodeName.replace('AI-', '')}:Card 1`, `去算力卡监控看 ${nodeName} 上的卡`)
+}
+
+/** 厂商级告警口径：落到该型卡里最吃紧的那一张 */
+function cardJumpForModel(type: string): AlertJump {
+  const worst = npuCards().filter((c) => type.includes(c.model)).sort((a, b) => cardRank(a) - cardRank(b) || b.util - a.util)[0]
+  return worst ? Jump.card(worst.id, `去算力卡监控看这张 ${worst.model} 卡`) : Jump.card(type, '去算力卡监控看这型卡')
+}
+
+/** 接管深度缺口口径：能改的是那条接入配置；没绑接入的回到登记册那一行 */
+function govJump(g: { id: string; name: string; connectorId: string; connectorName: string; why: string }): AlertJump {
+  return g.connectorId
+    ? Jump.connector(g.connectorId, `去外部对接清单改「${g.connectorName}」这条接入（${g.why}）`)
+    : { page: '/govern', pick: g.id, label: `去接管登记册给「${g.name}」绑定接入配置` }
+}
 
 export default function ComputeOverview() {
   const st = useEngine()
   const gov = useGovernViews().filter((g) => g.domain === '算力平台' || g.domain === '算力资源')
   const gs = governSummary()
   const rent = rentInfo(st)
+  const pick = useAlertPick()          // 节点级告警跳进来：?pick=<节点名>
+  usePickFlash(pick)
+  const faultNode = computeNodes.find((n) => n.status === 'fault')
+  const nodeOf = (text: string) => computeNodes.find((n) => text.includes(n.name))
   const utilOpt = {
     color: CHART_COLORS,
     tooltip: { ...TOOLTIP_STYLE, trigger: 'axis', axisPointer: { type: 'shadow' } },
@@ -54,14 +85,14 @@ export default function ComputeOverview() {
       <PageHead
         title="算力资源总览"
         desc="88 张国产化 NPU · 8 个训推节点 · 统一纳管与池化调度"
-        extra={<><Badge tone="good">集群健康</Badge><Badge tone="warn">1 节点故障已自愈</Badge></>}
+        extra={<><Badge tone="good">集群健康</Badge>{faultNode ? <AlertBadge tone="warn" jump={nodeJump(faultNode.name)}>1 节点故障已自愈</AlertBadge> : <Badge tone="warn">1 节点故障已自愈</Badge>}</>}
       />
 
       <div className="grid g-6">
         <Kpi label="算力卡总数" value={TOTAL_CARDS} unit="张" foot="昇腾 / 寒武纪 / 海光" />
         <Kpi label="卡位分配率" value={Math.round((totalAllocated(st) / TOTAL_CARDS) * 100)} unit="%" foot={`已分配 ${totalAllocated(st)} · 空闲 ${freeCards(st)}`} />
         <Kpi label="高保集群利用率" value={poolUtil(st, 'hp')} unit="%" foot={`共享 ${poolUtil(st, 'shared')}% · 训练 ${poolUtil(st, 'train')}%`} />
-        <Kpi label="训推节点" value={8} unit="个" foot={<span className="down">● 1 个隔离中</span>} />
+        <Kpi label="训推节点" value={8} unit="个" foot={<span className="down">● 1 个隔离中</span>} jump={faultNode ? nodeJump(faultNode.name) : undefined} />
         <Kpi label="推理副本" value={totalReplicas(st)} unit="个" foot={`${st.models.length} 个在线模型 · 实时`} />
         <Kpi label="平均温度" value={65} unit="℃" foot="阈值 85℃" />
       </div>
@@ -86,15 +117,18 @@ export default function ComputeOverview() {
                 <span className="tag gray">{n.card}</span>,
                 <span className="num">{n.cards}</span>,
                 <div style={{ minWidth: 120 }}>
-                  <Progress value={n.util} tone={n.util > 85 ? 'warn' : n.util === 0 ? 'bad' : ''} />
+                  <Progress value={n.util} tone={n.util > 85 ? 'warn' : n.util === 0 ? 'bad' : ''} jump={n.util > 85 || n.util === 0 ? nodeJump(n.name) : undefined} />
                   <span className="tiny faint">{n.util}%</span>
                 </div>,
                 <span className="num">{n.mem}%</span>,
                 <span className="num">{n.temp}℃</span>,
                 <span className="muted small">{n.pool}</span>,
                 <span className="dim small">{n.net}</span>,
-                <State s={n.status} />,
+                n.status === 'fault' ? <AlertBadge tone="bad" jump={nodeJump(n.name)}>{`节点故障 · 去卡监控处置`}</AlertBadge>
+                  : n.status === 'busy' ? <AlertBadge tone="warn" jump={nodeJump(n.name)}>高负载</AlertBadge>
+                  : <State s={n.status} />,
               ])}
+              rowKeys={computeNodes.map((n) => n.name)} pick={pick}
             />
           </div>
         </Panel>
@@ -104,7 +138,7 @@ export default function ComputeOverview() {
               <li key={e.time}>
                 <div className="tl-time mono">{e.time}</div>
                 <div className="row gap6" style={{ marginBottom: 4 }}>
-                  {e.level === '紧急' ? <Badge tone="bad">紧急</Badge> : e.level === '重要' ? <Badge tone="warn">重要</Badge> : <Badge tone="muted">一般</Badge>}
+                  {e.level === '紧急' ? <AlertBadge tone="bad" jump={nodeJump((nodeOf(e.text) ?? computeNodes[0]).name)}>紧急</AlertBadge> : e.level === '重要' ? <AlertBadge tone="warn" jump={nodeJump((nodeOf(e.text) ?? computeNodes[0]).name)}>重要</AlertBadge> : <Badge tone="muted">一般</Badge>}
                   <Badge tone="good">{e.status}</Badge>
                 </div>
                 <div className="small" style={{ color: 'var(--table-text)', lineHeight: 1.6 }}>{e.text}</div>
@@ -121,7 +155,7 @@ export default function ComputeOverview() {
             <div className="row between small muted"><span>利用率</span><span>{c.util}%</span></div>
             <div style={{ marginTop: 6 }}><Progress value={c.util} /></div>
             <div className="row between small muted" style={{ marginTop: 12 }}><span>显存</span><span>{c.mem}%</span></div>
-            <div style={{ marginTop: 6 }}><Progress value={c.mem} tone={c.mem > 80 ? 'warn' : ''} /></div>
+            <div style={{ marginTop: 6 }}><Progress value={c.mem} tone={c.mem > 80 ? 'warn' : ''} jump={c.mem > 80 ? cardJumpForModel(c.type) : undefined} /></div>
             <div className="row between small muted" style={{ marginTop: 12 }}><span>平均温度</span><span>{c.temp}℃</span></div>
             <div style={{ marginTop: 6 }}><Progress value={c.temp} tone="green" /></div>
           </Panel>
@@ -137,8 +171,10 @@ export default function ComputeOverview() {
               <span className="strong small">{g.name}</span>,
               <span className="small">{g.source}<div className="tiny faint">{g.vendor}</div></span>,
               <span className="small">{g.scale}</span>,
-              <span className={`tag ${g.depth === 4 ? 'green' : g.depth === 3 ? '' : g.depth === 2 ? 'orange' : 'gray'}`}>{DEPTH_LABEL[g.depth]}</span>,
-              g.depth >= 4 ? <State s="ok" /> : g.depth === 3 ? <Badge tone="info">可处置不可调度</Badge> : <Badge tone="warn">不进调度</Badge>,
+              g.depth === 2
+                ? <Link className="tag orange alert-jump" to={alertHref(govJump(g))} title={`${govJump(g).label ?? ''}（${govJump(g).page}）`}>{DEPTH_LABEL[g.depth]}<span className="go">›</span></Link>
+                : <span className={`tag ${g.depth === 4 ? 'green' : g.depth === 3 ? '' : 'gray'}`}>{DEPTH_LABEL[g.depth]}</span>,
+              g.depth >= 4 ? <State s="ok" /> : g.depth === 3 ? <Badge tone="info">可处置不可调度</Badge> : <AlertBadge tone="warn" jump={govJump(g)}>不进调度</AlertBadge>,
               <span className="tiny" style={{ maxWidth: 320 }}>{g.why}</span>,
             ])}
           />

@@ -7,19 +7,20 @@
  *            等价于任务要求的 { view, manage }。
  * ===================================================================== */
 import { useEffect, useState } from 'react'
-import { Badge, Callout, Kpi, PageHead, Panel, Progress, Table } from '../../components/ui'
+import { Badge, Callout, Kpi, PageHead, Panel, Progress, Table, AlertBadge } from '../../components/ui'
 import { Link } from 'react-router-dom'
 import { currentAccount, usePerm, ROLE_LABEL } from '../../engine/auth'
 import { flagsStore } from '../../engine/auth'
 import { consoleStore, useConsole } from '../../engine/console'
 import { useTelemetry } from '../../engine/telemetry'
+import { Jump, useAlertPick, usePickFlash, type AlertJump } from '../../engine/alertJump'
 import {
   ORDER_STATUS_LABEL, TYPE_LABEL, engine, poolFree, poolUtil, useEngine,
   type Order, type OrderStatus, type OrderType, type TrainJob,
 } from '../../engine/engine'
 
-/** 本页受理的三类申请 */
-const APPLY_TYPES: OrderType[] = ['credential_issue', 'train_reserve', 'model_deploy']
+/** 本页受理的申请（含训练产物 → 模型准入链） */
+const APPLY_TYPES: OrderType[] = ['credential_issue', 'train_reserve', 'model_deploy', 'weight_register', 'model_admission']
 const PURPOSES = ['个人调试', '业务系统集成', '批处理任务']
 const EXTRA_MODELS = ['DeepSeek-V3', 'GLM-4', 'Qwen3-32B 微调', 'BGE-M3']
 const FRAMEWORKS = ['MindForm', 'MindForm + MindIE', '其它（PyTorch / Megatron）']
@@ -27,7 +28,7 @@ const DATA_LEVELS = ['内部', '已脱敏', '敏感（专用网络内）']
 const EXP_DAYS = [30, 90, 180]
 
 const STATUS_TONE: Record<OrderStatus, 'good' | 'warn' | 'bad' | 'info' | 'muted' | 'purple'> = {
-  submitted: 'warn', approved: 'info', queued: 'warn', external: 'purple',
+  to_biz: 'purple', submitted: 'warn', approved: 'info', queued: 'warn', external: 'purple',
   running: 'info', closed: 'good', rejected: 'bad', rolled_back: 'muted',
 }
 function utilTone(u: number): '' | 'warn' | 'bad' | 'green' { return u > 90 ? 'bad' : u > 75 ? 'warn' : 'green' }
@@ -44,6 +45,8 @@ function keyParams(o: Order): string {
   if (o.type === 'credential_issue') return `${String(o.spec.kind)} · RPM ${String(o.spec.rpm)} / TPM ${String(o.spec.tpm)} / 期限 ${String(o.spec.expDays ?? 90)} 天 · 渠道 ${String(o.spec.channel)}`
   if (o.type === 'train_reserve') return `${String(o.spec.cards)} 卡 × ${String(o.spec.hours)} 小时 · ${String(o.spec.framework)} · 数据密级 ${String(o.spec.dataLevel)}`
   if (o.type === 'model_deploy') return `${String(o.spec.replicas)} 副本 × ${Number(o.spec.perReplica) || 1} 卡 · 灰度 ${Number(o.spec.gray ?? 100)}% · ${String(o.spec.nodes)}`
+  if (o.type === 'weight_register') return `${String(o.spec.origin ?? '内部训练')} · ${String(o.spec.model)} ${String(o.spec.version)} · 关联 ${String(o.spec.jobId || '—')} · 哈希 ${String(o.spec.hash || '缺')}`
+  if (o.type === 'model_admission') return `权重 ${String(o.spec.artifactId)} 准入审核`
   return '—'
 }
 
@@ -94,7 +97,7 @@ export default function OpsApply() {
       type: 'credential_issue', applicant, dept, level: '共享', reason: credReason,
       spec: { kind, holder: applicant, app: appName, model: keyModel, channel, rpm, tpm, expDays },
     })
-    if (r.precheck.ok) setMsg({ tone: 'good', text: `${r.order.id} Key 申请已提交（${kind} · ${applicant}）· 准入通过：${r.precheck.suggest ?? ''} · 待管理员审批` })
+    if (r.precheck.ok) setMsg({ tone: 'good', text: `${r.order.id} Key 申请已提交（${kind} · ${applicant}）· 准入通过：${r.precheck.suggest ?? ''} · ${r.order.status === 'to_biz' ? '先待业务管理审批（确认业务合理性），再过平台审批' : '待管理员审批'}` })
     else setMsg({ tone: 'bad', text: `${r.order.id} Key 申请被准入校验拒绝：${r.precheck.reason ?? ''}` })
   }
 
@@ -126,7 +129,7 @@ export default function OpsApply() {
       type: 'train_reserve', applicant, dept, level: '共享', reason: jobReason,
       spec: { name: jobName, cards, hours, framework, dataLevel },
     })
-    if (r.precheck.ok) setMsg({ tone: 'good', text: `${r.order.id} 训练算例申请已提交 · 准入通过：${r.precheck.suggest ?? ''} · 待管理员审批` })
+    if (r.precheck.ok) setMsg({ tone: 'good', text: `${r.order.id} 训练算例申请已提交 · 准入通过：${r.precheck.suggest ?? ''} · ${r.order.status === 'to_biz' ? '先待业务管理审批，再过平台审批' : '待管理员审批'}` })
     else setMsg({ tone: 'bad', text: `${r.order.id} 训练算例申请被准入校验拒绝：${r.precheck.reason ?? ''}` })
   }
 
@@ -171,12 +174,53 @@ export default function OpsApply() {
     })
   }
 
+  /* -------- 登记训练产物权重（训练 → 准入 → 部署 链的第一环） -------- */
+  const shortOfJob = (j: TrainJob) => /^[A-Za-z0-9][A-Za-z0-9.+-]*/.exec(j.name)?.[0] || '自研模型'
+  const registerWeight = (j: TrainJob) => {
+    const short = shortOfJob(j)
+    const r = engine.submit({
+      type: 'weight_register', applicant: j.applicant, dept: j.dept, level: '共享',
+      reason: `「${j.name}」阶段性产物保存：登记权重版本与哈希基准，待模型准入审核通过后进入可部署清单`,
+      spec: { model: short, version: 'v1.0', origin: '内部训练', jobId: j.id, hash: `sha256:${(j.id + short).split('').reduce((s, c) => (s * 31 + c.charCodeAt(0)) % 1e8, 7).toString(16).padStart(6, '0')}…${j.cards}b7` },
+    })
+    if (r.precheck.ok) setMsg({ tone: 'good', text: `${r.order.id} 权重登记已提交（${short} v1.0 · ${j.id}）· ${r.precheck.suggest ?? ''}` })
+    else setMsg({ tone: 'bad', text: `${r.order.id} 权重登记被准入校验拒绝：${r.precheck.reason ?? ''}` })
+  }
+
+  /** 演示：提交一个缺哈希基准的登记，展示 2.4-1 硬门拦下 */
+  const demoWeightNoHash = () => {
+    const r = engine.submit({
+      type: 'weight_register', applicant, dept, level: '共享',
+      reason: '演示：权重保存缺哈希基准（准入硬门）',
+      spec: { model: 'Llama-Demo', version: 'v0.1', origin: '内部训练', jobId: 'FT-118', hash: '' },
+    })
+    setMsg({ tone: 'bad', text: r.precheck.ok ? `演示未达预期：${r.order.id} 竟然通过准入` : `演示 ${r.order.id} 被准入拒绝：${r.precheck.reason ?? ''}` })
+  }
+
+  /* -------- 提交模型准入审核（准入通过 = 进可部署清单） -------- */
+  const submitAdmission = (artifactId: string) => {
+    const r = engine.submit({
+      type: 'model_admission', applicant, dept, level: '共享',
+      reason: `权重 ${artifactId} 申请模型准入：请核验哈希基准与训练任务关联（准入通过才进可部署清单）`,
+      spec: { artifactId },
+    })
+    if (r.precheck.ok) setMsg({ tone: 'good', text: `${r.order.id} 准入审核已提交 · ${r.precheck.suggest ?? ''} · 待管理员审批` })
+    else setMsg({ tone: 'bad', text: `${r.order.id} 准入审核被预检拒绝：${r.precheck.reason ?? ''}` })
+  }
+
   const mine = st.orders.filter((o) => o.applicant === applicant)
-  const pending = st.orders.filter((o) => o.status === 'submitted' && APPLY_TYPES.includes(o.type))
+  const pending = st.orders.filter((o) => (o.status === 'submitted' || o.status === 'to_biz') && APPLY_TYPES.includes(o.type))
   const decided = st.orders.filter((o) => APPLY_TYPES.includes(o.type) && (o.status === 'approved' || o.status === 'queued' || o.status === 'running' || o.status === 'closed')).slice(0, 8)
   const jobs = st.jobs ?? []
   const runningJobs = jobs.filter((j) => j.state === '运行中')
   const queuedAll = st.orders.filter((o) => o.status === 'queued')
+  /** 别处点过来的红 / 黄告警：?pick=<工单号>（我的申请 / 审批台 / 审批来源 / 队列）或 ?pick=<训练任务号>（训练台账）→ 高亮那一行 */
+  const pick = useAlertPick()
+  usePickFlash(pick)
+  const approvalJump = (id: string): AlertJump => Jump.approval(id, '点过去落到审批台这一行：审批通过 / 驳回都在这里')
+  const applyRowJump = (id: string): AlertJump => ({ page: '/ops/apply', pick: id, label: '点回来落到这一行：看驳回理由、改参数重新提交都在这上面' })
+  const jobJump = (j?: TrainJob): AlertJump | undefined => (j ? { page: '/ops/apply', pick: j.id, label: '点过去落到训练台账这一行：归还卡位就在这一行' } : undefined)
+  const trainJump = jobJump(runningJobs[0]) ?? (jobs[0] ? jobJump(jobs[0]) : undefined)
 
   return (
     <div>
@@ -185,9 +229,9 @@ export default function OpsApply() {
         desc="普通用户申请 Key、申请训练算例；管理员审批 → 生效 → 到期归还，全程留痕"
         extra={
           <>
-            <Badge tone="warn">待审批 {pending.length}</Badge>
+            {pending.length ? <AlertBadge tone="warn" jump={approvalJump(pending[0].id)}>待审批 {pending.length}</AlertBadge> : <Badge tone="good">待审批 0</Badge>}
             <Badge tone="info">我的申请 {mine.length}</Badge>
-            <Badge tone={trainUtil > 90 ? 'bad' : trainUtil > 75 ? 'warn' : 'good'}>训练池 {trainUtil}%</Badge>
+            {trainUtil > 75 && trainJump ? <AlertBadge tone={trainUtil > 90 ? 'bad' : 'warn'} jump={trainJump}>训练池 {trainUtil}%</AlertBadge> : <Badge tone={trainUtil > 90 ? 'bad' : trainUtil > 75 ? 'warn' : 'good'}>训练池 {trainUtil}%</Badge>}
             <Badge tone={tele.mode === '采集层' ? 'good' : 'muted'}>取数来源：{tele.mode}</Badge>
           </>
         }
@@ -305,7 +349,7 @@ export default function OpsApply() {
               <button className="btn ghost" disabled={!perm.manage} onClick={demoJobOverLimit}>演示：申请 12 卡（超单申请上限）</button>
               {!perm.manage ? <span className="tiny faint">只读</span> : null}
             </div>
-            <Callout warn={cards > trainFree} text={`训练池当前 ${trainPool?.cards ?? 0} 卡 · 空闲 ${trainFree} 卡 · 利用率 ${trainUtil}%。本次要 ${cards} 卡 × ${hours} 小时；不足时准入直接拒绝，可先排队或先归还其他任务卡位。`} />
+            <Callout warn={cards > trainFree} jump={cards > trainFree ? trainJump : undefined} text={`训练池当前 ${trainPool?.cards ?? 0} 卡 · 空闲 ${trainFree} 卡 · 利用率 ${trainUtil}%。本次要 ${cards} 卡 × ${hours} 小时；不足时准入直接拒绝，可先排队或先归还其他任务卡位（点这条直接落到训练台账那一行）。`} />
           </div>
         </Panel>
       </div>
@@ -315,12 +359,17 @@ export default function OpsApply() {
           <Table
             minWidth={1000}
             head={['工单', '类型', '对象', '量', '状态', '提交时间', '驳回理由']}
+            rowKeys={mine.map((o) => o.id)} pick={pick}
             rows={mine.map((o) => [
               <span className="mono small strong">{o.id}{o.auto ? <span className="tag gray" style={{ marginLeft: 6 }}>自动</span> : null}</span>,
               <span className="small">{TYPE_LABEL[o.type]}</span>,
               <span className="small">{o.target}<div className="tiny faint">{o.reason}</div></span>,
               <span className="num small">{o.amount}</span>,
-              <OrderBadge status={o.status} />,
+              o.status === 'to_biz' ? <AlertBadge tone="warn" jump={approvalJump(o.id)}>待业务管理审批</AlertBadge>
+                : o.status === 'submitted' ? <AlertBadge tone="warn" jump={approvalJump(o.id)}>待审批</AlertBadge>
+                : o.status === 'queued' ? <AlertBadge tone="warn" jump={Jump.order(o.id, '这张工单在变更窗口队列里：点过去到工作台那一行（开启窗口 / 撤回）')}>排队中</AlertBadge>
+                : o.status === 'rejected' ? <AlertBadge tone="bad" jump={applyRowJump(o.id)}>已驳回</AlertBadge>
+                : <OrderBadge status={o.status} />,
               <span className="mono tiny faint">{fmtTime(o.createdAt)}</span>,
               <span className="tiny" style={{ color: o.rejectReason ? 'var(--bad-text)' : 'var(--text-dim)', maxWidth: 240 }}>{o.rejectReason ?? '—'}</span>,
             ])}
@@ -339,35 +388,59 @@ export default function OpsApply() {
           <Table
             minWidth={1180}
             head={['工单', '类型', '申请方', '对象', '量', '关键参数', '动作']}
+            rowKeys={pending.map((o) => o.id)} pick={pick}
             rows={pending.map((o) => [
               <span className="mono small strong">{o.id}</span>,
-              <span className="small">{TYPE_LABEL[o.type]}<div className="tiny faint"><OrderBadge status={o.status} /></div></span>,
+              <span className="small">{TYPE_LABEL[o.type]}<div className="tiny faint"><AlertBadge tone="warn" jump={approvalJump(o.id)}>{o.status === 'to_biz' ? '待业务管理审批' : '待审批'}</AlertBadge></div></span>,
               <span className="small">{o.applicant}<div className="tiny faint">{o.dept} · {o.level}</div></span>,
               <span className="small">{o.target}</span>,
               <span className="num small">{o.amount}</span>,
               <span className="small" style={{ maxWidth: 260 }}>{keyParams(o)}<div className="tiny faint">{o.reason}</div></span>,
               <div className="row gap6" style={{ flexWrap: 'wrap' }}>
-                <button
-                  className="btn sm primary"
-                  disabled={!canApprove}
-                  onClick={() => {
-                    engine.approve(o.id)
-                    const after = engine.get().orders.find((x) => x.id === o.id)
-                    const s = after?.status ?? 'approved'
-                    setMsg({
-                      tone: 'good',
-                      text: `${o.id} 审批通过 → 当前状态「${ORDER_STATUS_LABEL[s]}」${
-                        s === 'queued' ? '：已进变更窗口队列，窗口开放后自动接续（可在资源调配工作台 / 变更窗口排期处理）'
-                        : s === 'rejected' ? `：执行前校验失败 —— ${after?.rejectReason ?? ''}`
-                        : s === 'running' ? `：${TYPE_LABEL[o.type]}已执行生效（${o.target} ${o.amount}）`
-                        : '：已审批待执行，可在「待执行与已生效」点执行'
-                      }`,
-                    })
-                  }}
-                >
-                  审批通过
-                </button>
-                <RejectCell id={o.id} manage={canApprove} width={190} />
+                {o.status === 'to_biz' ? (
+                  <>
+                    <button
+                      className="btn sm primary"
+                      disabled={!canApprove}
+                      onClick={() => {
+                        const r = engine.bizConfirm(o.id, account?.name ?? '业务管理岗') as unknown as { ok: boolean; reason?: string }
+                        setMsg({ tone: r.ok ? 'good' : 'bad', text: r.ok ? `${o.id} 业务管理审批通过（需求合理、归口与成本已确认）→ 转平台审批：平台只判能否满足执行，不再改需求参数` : `业务确认失败：${r.reason ?? ''}` })
+                      }}
+                    >
+                      业务管理确认
+                    </button>
+                    <RejectCell id={o.id} manage={canApprove} width={190} />
+                    <span className="tiny faint">先业务后平台 · 顺序不可绕过</span>
+                  </>
+                ) : (
+                  <>
+                    <button
+                      className="btn sm primary"
+                      disabled={!canApprove}
+                      onClick={() => {
+                        const r = engine.approve(o.id) as unknown as { ok: boolean; hold?: boolean; reason?: string }
+                        if (!r.ok) {
+                          setMsg({ tone: 'bad', text: `${o.id} 审批未通过：${r.reason ?? ''}${r.hold ? '（部署单挂起保持待审批，未下发容器平台；资源到位可再审，要改参数请驳回由申请方重提）' : ''}` })
+                          return
+                        }
+                        const after = engine.get().orders.find((x) => x.id === o.id)
+                        const s = after?.status ?? 'approved'
+                        setMsg({
+                          tone: 'good',
+                          text: `${o.id} 审批通过 → 当前状态「${ORDER_STATUS_LABEL[s]}」${
+                            s === 'queued' ? '：已进变更窗口队列，窗口开放后自动接续（可在资源调配工作台 / 变更窗口排期处理）'
+                            : s === 'external' ? '：满足执行、等待下发容器平台（下发时还会按最新资源重验一次）'
+                            : s === 'running' ? `：${TYPE_LABEL[o.type]}已执行生效（${o.target} ${o.amount}）`
+                            : '：已审批待执行，可在「待执行与已生效」点执行'
+                          }`,
+                        })
+                      }}
+                    >
+                      审批通过
+                    </button>
+                    <RejectCell id={o.id} manage={canApprove} width={190} />
+                  </>
+                )}
               </div>,
             ])}
           />
@@ -382,11 +455,11 @@ export default function OpsApply() {
             当前审批来源：<b>{flagsStore.get().config['approval-source'] === 'external' ? '外部审批系统（本系统登记待回写并跟踪超时）' : '平台内审批（本页审批台）'}</b>。
             不论来源是哪边，工单状态机与审计是同一套；外部回写按「工单 + 外部单据号 + 决定」幂等，重复回写只生效一次。
           </div>
-          <Table minWidth={1080} head={['工单', '审批来源', '外部单据号', '状态', '期望回写 / 判定时间', '备注与经办', '动作']} rows={cons.approvals.map((a) => [
+          <Table minWidth={1080} head={['工单', '审批来源', '外部单据号', '状态', '期望回写 / 判定时间', '备注与经办', '动作']} rowKeys={cons.approvals.map((a) => a.order_id)} pick={pick} rows={cons.approvals.map((a) => [
             <span className="mono small strong">{a.order_id}</span>,
             <span className="tiny">{a.source === 'external' ? '外部审批系统' : '平台内'}</span>,
             <span className="tiny mono">{a.external_ref || '—'}</span>,
-            <span>{a.state === '超时' ? <Badge tone="warn">超时未回写</Badge> : a.state === '已审' ? <Badge tone="good">已审</Badge> : a.state === '驳回' ? <Badge tone="bad">驳回</Badge> : <Badge tone="info">待审</Badge>}</span>,
+            <span>{a.state === '超时' ? <AlertBadge tone="warn" jump={approvalJump(a.order_id)}>超时未回写（要人工接管）</AlertBadge> : a.state === '已审' ? <Badge tone="good">已审</Badge> : a.state === '驳回' ? <AlertBadge tone="bad" jump={approvalJump(a.order_id)}>驳回</AlertBadge> : <Badge tone="info">待审</Badge>}</span>,
             <span className="tiny mono">{(a.decided_at || a.due_at || a.at || '').replace('T', ' ').replace('Z', '')}</span>,
             <span className="tiny faint">{(a.note || '').slice(0, 60) || '—'}<div className="tiny faint">{a.actor || ''}</div></span>,
             <div className="row gap6" style={{ flexWrap: 'wrap' }}>
@@ -416,11 +489,12 @@ export default function OpsApply() {
           <Table
             minWidth={1000}
             head={['工单', '类型', '状态', '时间', '关键参数', '动作']}
+            rowKeys={decided.map((o) => o.id)} pick={pick}
             rows={decided.map((o) => [
               <span className="mono small strong">{o.id}<div className="tiny faint">{o.target}</div></span>,
               <span className="small">{TYPE_LABEL[o.type]}<div className="tiny faint">{o.applicant}</div></span>,
               <div className="col gap6">
-                <OrderBadge status={o.status} />
+                {o.status === 'queued' ? <AlertBadge tone="warn" jump={Jump.order(o.id, '已进变更窗口队列：点过去到工作台那一行（开启窗口 / 撤回 / 回滚）')}>排队中</AlertBadge> : <OrderBadge status={o.status} />}
                 {o.status === 'queued' ? <span className="tiny" style={{ color: '#f5b83d' }}>队列位次 {queuedAll.findIndex((q) => q.id === o.id) + 1}</span> : null}
               </div>,
               <span className="mono tiny faint">{fmtTime(o.executedAt ?? o.decidedAt ?? o.createdAt)}</span>,
@@ -475,10 +549,11 @@ export default function OpsApply() {
               <Table
                 minWidth={620}
                 head={['队列位次', '工单 / 类型', '状态', '提交时间']}
+                rowKeys={queuedAll.map((o) => o.id)} pick={pick}
                 rows={queuedAll.map((o, i) => [
                   <span className="num">{i + 1}</span>,
                   <span className="small mono">{o.id} · {TYPE_LABEL[o.type]}<div className="tiny faint">{o.target}</div></span>,
-                  <OrderBadge status={o.status} />,
+                  <AlertBadge tone="warn" jump={Jump.order(o.id, '排队等变更窗口：点过去到工作台那一行（开启窗口 / 撤回）')}>排队中</AlertBadge>,
                   <span className="mono tiny faint">{fmtTime(o.createdAt)}</span>,
                 ])}
               />
@@ -491,19 +566,20 @@ export default function OpsApply() {
         <div className="panel-body">
           <div style={{ padding: 14 }}>
             <div className="grid g-4">
-              <Kpi label="训练池利用率" value={trainUtil} unit="%" foot={`在用 ${ (trainPool?.cards ?? 0) - trainFree } / ${trainPool?.cards ?? 0} 卡`} />
-              <Kpi label="训练池空闲" value={trainFree} unit="卡" foot={trainFree <= 2 ? <span className="down">● 接近耗尽，先归还再申请</span> : '可预留给新算例'} />
-              <Kpi label="运行中算例" value={runningJobs.length} unit="项" foot={`占用 ${runningJobs.reduce((s, j) => s + j.cards, 0)} 卡`} />
+              <Kpi label="训练池利用率" value={trainUtil} unit="%" foot={`在用 ${ (trainPool?.cards ?? 0) - trainFree } / ${trainPool?.cards ?? 0} 卡`} jump={trainUtil > 75 ? trainJump : undefined} />
+              <Kpi label="训练池空闲" value={trainFree} unit="卡" foot={trainFree <= 2 ? <span className="down">● 接近耗尽，先归还再申请</span> : '可预留给新算例'} jump={trainFree <= 2 ? trainJump : undefined} />
+              <Kpi label="运行中算例" value={runningJobs.length} unit="项" foot={`占用 ${runningJobs.reduce((s, j) => s + j.cards, 0)} 卡`} jump={jobJump(runningJobs[0])} />
               <Kpi label="排队 / 已完成" value={`${jobs.filter((j) => j.state === '排队中').length} / ${jobs.filter((j) => j.state === '已完成').length}`} unit="项" foot="排队不占卡位 · 已完成卡位已归还" />
             </div>
             <div style={{ marginTop: 10 }}>
-              <Progress value={trainUtil} tone={utilTone(trainUtil)} />
+              <Progress value={trainUtil} tone={utilTone(trainUtil)} jump={utilTone(trainUtil) !== 'green' ? trainJump : undefined} />
             </div>
           </div>
           <div style={{ padding: '0 0 14px' }}>
             <Table
               minWidth={1180}
               head={['任务号', '名称', '卡数', '归口 / 申请方', '框架', '数据密级', '时长', '到期时间', '状态', '动作']}
+              rowKeys={jobs.map((j) => j.id)} pick={pick}
               rows={jobs.map((j) => [
                 <span className="mono small strong">{j.id}</span>,
                 <span className="small">{j.name}</span>,
@@ -517,9 +593,15 @@ export default function OpsApply() {
                 j.state === '运行中' ? (
                   <div className="col gap6">
                     <button className="btn sm" disabled={!perm.manage} onClick={() => releaseJob(j)}>归还卡位</button>
+                    <button className="btn sm ghost" disabled={!perm.manage} onClick={() => registerWeight(j)}>登记权重</button>
                     {!perm.manage ? <span className="tiny faint">只读</span> : null}
                   </div>
-                ) : <span className="tiny faint">{j.state === '已完成' ? '卡位已归还' : '排队中 · 未占卡位'}</span>,
+                ) : j.state === '已完成' ? (
+                  <div className="col gap6">
+                    <button className="btn sm ghost" disabled={!perm.manage} onClick={() => registerWeight(j)}>登记权重</button>
+                    <span className="tiny faint">卡位已归还</span>
+                  </div>
+                ) : <span className="tiny faint">排队中 · 未占卡位</span>,
               ])}
             />
           </div>
@@ -528,6 +610,45 @@ export default function OpsApply() {
               <>
                 归还卡位走 <b>{TYPE_LABEL.train_release}</b> 工单（引擎只认 spec.jobId），不是直接删任务：提交 → 审批 → 窗口执行 → 台账置「已完成」。
                 归还后训练池空闲立即可见（当前空闲 {trainFree} 卡）；误归还可在工单里回滚恢复任务状态。
+              </>
+            }
+          />
+        </div>
+      </Panel>
+
+      <Panel
+        title="模型准入台账（训练产物 → 可部署清单）"
+        extra={<span>共 {st.artifacts.length} 项 · 准入通过 {st.artifacts.filter((a) => a.state === '准入通过').length} · <button className="btn sm ghost" disabled={!perm.manage} onClick={demoWeightNoHash}>演示：缺哈希登记</button></span>}
+        className="mt14" noPad
+      >
+        <div className="panel-body">
+          <div style={{ padding: '0 0 14px' }}>
+            <Table
+              minWidth={1080}
+              head={['权重号', '模型 · 版本', '来源 / 关联', '保存哈希基准', '登记方', '台账状态', '动作']}
+              rowKeys={st.artifacts.map((a) => a.id)} pick={pick}
+              rows={st.artifacts.map((a) => [
+                <span className="mono small strong">{a.id}</span>,
+                <span className="small strong">{a.model}<div className="tiny faint mono">{a.version}</div></span>,
+                <span className="small">{a.origin}<div className="tiny faint">{a.origin === '内部训练' ? `关联训练任务 ${a.jobId}` : `来源：${a.source} · ${a.manifest}`}</div></span>,
+                <span className="mono tiny">{a.hash || <span className="down">缺（准入硬门）</span>}</span>,
+                <span className="small">{a.dept}<div className="tiny faint">{a.applicant} · {a.savedAt}</div></span>,
+                <Badge tone={a.state === '准入通过' ? 'good' : a.state === '已部署' ? 'info' : 'warn'}>{a.state === '准入通过' ? '可部署' : a.state}</Badge>,
+                a.state === '待审核' ? (
+                  <div className="col gap6">
+                    <button className="btn sm" disabled={!perm.manage} onClick={() => submitAdmission(a.id)}>提交准入审核</button>
+                    {!perm.manage ? <span className="tiny faint">只读</span> : null}
+                  </div>
+                ) : <span className="tiny faint">{a.state === '准入通过' ? '已进可部署清单：去「模型部署」页发部署工单' : '权重留档，审计可追'}</span>,
+              ])}
+            />
+          </div>
+          <Callout
+            text={
+              <>
+                这条链是<b>训练 → 部署之间的手续</b>：训练完成（或阶段性保存）先<b>登记权重</b>（带哈希基准、关联原训练任务）→
+                <b>提交准入审核</b>（管理员审批，核验哈希与来源，登记不等于准入通过）→ 准入通过进入<b>可部署清单</b> →
+                部署工单只能引用准入通过的版本（未过准入的模型在部署预检就会被拦，原文 2.4-1 / 2.5-1）。
               </>
             }
           />

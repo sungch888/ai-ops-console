@@ -1,11 +1,13 @@
 import React, { useEffect, useState } from 'react'
-import { Kpi, Panel, PageHead, Badge, Table, Progress, Callout, State } from '../../components/ui'
+import { Kpi, Panel, PageHead, Badge, Table, Progress, Callout, State, AlertBadge } from '../../components/ui'
 import { Chart, CHART_COLORS, AXIS_COLOR, SPLIT_COLOR, TOOLTIP_STYLE, GRID } from '../../components/Chart'
 import {
   useEngine, engine, poolUtil, freeCards, totalAllocated, totalReplicas, activeCreds,
   TYPE_LABEL, SCENARIO_LABEL, rentInfo, type ScenarioId, type OrderType, type Order, type Level, TOTAL_CARDS,
 } from '../../engine/engine'
 import { Link } from 'react-router-dom'
+import { RENT_ID } from '../../engine/ops'
+import { Jump, useAlertPick, usePickFlash, type AlertJump } from '../../engine/alertJump'
 
 const TYPE_OPTS: OrderType[] = ['pool_expand', 'pool_release', 'preempt', 'replica_scale', 'weight_adjust', 'credential_issue', 'credential_revoke', 'quota_adjust']
 
@@ -69,7 +71,7 @@ export default function OpsWorkflow() {
     setReason('')
   }
 
-  const pending = st.orders.filter((o) => o.status === 'submitted')
+  const pending = st.orders.filter((o) => o.status === 'submitted' || o.status === 'to_biz')
   const running = st.orders.filter((o) => o.status === 'running')
   const windowOrder = running[0]
   const slots = engine.slotList()
@@ -78,6 +80,23 @@ export default function OpsWorkflow() {
   const done = st.orders.filter((o) => o.status === 'approved' || o.status === 'closed' || o.status === 'rolled_back')
   const rejected = st.orders.filter((o) => o.status === 'rejected')
   const selectedOrder = st.orders.find((o) => o.status === 'running' || o.status === 'queued' || o.status === 'submitted') ?? st.orders[0]
+  /** 别处点过来：?pick=<工单号>（工单队列）或 ?pick=<窗口编号>（变更窗口排期）→ 高亮那一行 */
+  const pick = useAlertPick()
+  usePickFlash(pick)
+  const firstPending = pending.find((o) => o.auto) ?? pending[0]
+  const bookedSlot = slots.find((x) => x.status === '已预约')
+  const poolOrder = (poolName: string) =>
+    pending.find((o) => String(o.target).includes(poolName)) ?? queued.find((o) => String(o.target).includes(poolName))
+  const orderJump = (o?: Order): AlertJump | undefined =>
+    o ? Jump.order(o.id, '点过去落到这张工单那一行：审批 / 驳回 / 撤回 / 回滚 / 闭环都在那一行') : undefined
+  const slotJump = (id: string): AlertJump => ({ page: '/ops/workflow', pick: id, label: '点过去落到变更窗口排期这一行：开启窗口 / 取消预约都在这里做' })
+  /** 事件里带工单号就落到那张工单；带资源池名就落到与该池相关的工单；都对不上就不接 */
+  const eventJump = (text: string): AlertJump | undefined => {
+    const m = text.match(/\bWO-\d{3,4}\b/)
+    if (m && st.orders.some((o) => o.id === m[0])) return Jump.order(m[0], '点过去落到这张工单那一行（审批 / 回滚 / 闭环都在那一行）')
+    const p = st.pools.find((x) => text.includes(x.name))
+    return p ? orderJump(poolOrder(p.name)) : undefined
+  }
 
   const utilOpt = {
     color: CHART_COLORS,
@@ -94,7 +113,7 @@ export default function OpsWorkflow() {
   }
 
   const OrderRow = ({ o }: { o: Order }) => (
-    <tr>
+    <tr className={pick && o.id === pick ? 'row-pick' : undefined}>
       <td>
         <span className="mono small">{o.id}</span>
         {o.auto ? <span className="tag gray" style={{ marginLeft: 6 }}>自动建议</span> : null}
@@ -107,13 +126,25 @@ export default function OpsWorkflow() {
       <td className="num small">{o.amount}</td>
       <td><span className={`tag ${o.level === '高保' ? 'green' : 'gray'}`}>{o.level}</span></td>
       <td>
-        <State s={o.status === 'submitted' ? 'pending' : o.status === 'approved' ? 'pass' : o.status === 'queued' ? 'queued' : o.status === 'rejected' ? 'block' : o.status === 'running' ? 'run' : o.status === 'rolled_back' ? 'rollback' : o.status === 'closed' ? 'closed' : 'done'} />
+        {o.status === 'to_biz' ? <AlertBadge tone="warn" jump={orderJump(o)!}>待业务管理审批</AlertBadge>
+          : o.status === 'submitted' ? <AlertBadge tone="warn" jump={orderJump(o)!}>待审批</AlertBadge>
+          : o.status === 'queued' ? <AlertBadge tone="warn" jump={orderJump(o)!}>排队中</AlertBadge>
+          : o.status === 'rejected' ? <AlertBadge tone="bad" jump={orderJump(o)!}>已驳回</AlertBadge>
+          : <State s={o.status === 'approved' ? 'pass' : o.status === 'running' ? 'run' : o.status === 'rolled_back' ? 'rollback' : o.status === 'closed' ? 'closed' : 'done'} />}
         {o.status === 'queued' ? <div className="tiny" style={{ color: 'var(--amber)' }}>变更队列位次 {queued.findIndex((q) => q.id === o.id) + 1}</div> : null}
         {o.rejectReason ? <div className="tiny" style={{ color: 'var(--bad-text)', maxWidth: 200 }}>{o.rejectReason}</div> : null}
         {o.type === 'preempt' && o.spec.affected ? <div className="tiny" style={{ color: 'var(--text-dim)', maxWidth: 220 }}>被抢占：{String(o.spec.affected)}</div> : null}
       </td>
       <td>
         <div className="row gap6" style={{ flexWrap: 'wrap' }}>
+          {o.status === 'to_biz' ? (
+            canApprove ? (
+              <>
+                <button className="btn sm primary" onClick={() => engine.bizConfirm(o.id, '业务管理岗（演示）')}>业务管理确认</button>
+                <button className="btn sm danger" onClick={() => engine.reject(o.id, '业务必要性不足，业务管理审批未通过')}>业务驳回</button>
+              </>
+            ) : <span className="tiny faint">待业务管理审批（当前角色无审批权）</span>
+          ) : null}
           {o.status === 'submitted' ? (
             canApprove ? (
               <>
@@ -162,13 +193,13 @@ export default function OpsWorkflow() {
 
       <div className="grid g-8">
         <Kpi label="全局算力卡位" value={TOTAL_CARDS} unit="张" foot={`已分配 ${totalAllocated(st)} · 空闲 ${freeCards(st)}`} />
-        <Kpi label="可分配余量" value={freeCards(st)} unit="张" foot={freeCards(st) < 4 ? '接近耗尽，触发扩租评估' : '可用于扩容与副本增加'} />
-        <Kpi label="待审批工单" value={pending.length} unit="项" foot={<span className="down">● {pending.filter((o) => o.auto).length} 项自动建议</span>} />
-        <Kpi label="执行中变更" value={running.length} unit="项" foot={windowOrder ? `窗口占用：${windowOrder.id}` : '变更窗口空闲'} />
-        <Kpi label="变更队列深度" value={queued.length} unit="项" foot={queued.length ? <span className="down">● 串行执行 · 按提交顺序</span> : '无排队工单'} />
+        <Kpi label="可分配余量" value={freeCards(st)} unit="张" foot={freeCards(st) < 4 ? '接近耗尽，触发扩租评估' : '可用于扩容与副本增加'} jump={freeCards(st) < 4 ? Jump.connector(RENT_ID, '本地空闲不足：点过去落到「外部算力扩租池」这条接入那一行，开通道与加额度都在那一行') : undefined} />
+        <Kpi label="待审批工单" value={pending.length} unit="项" foot={<span className="down">● {pending.filter((o) => o.auto).length} 项自动建议</span>} jump={orderJump(firstPending)} />
+        <Kpi label="执行中变更" value={running.length} unit="项" foot={windowOrder ? `窗口占用：${windowOrder.id}` : '变更窗口空闲'} jump={orderJump(windowOrder)} />
+        <Kpi label="变更队列深度" value={queued.length} unit="项" foot={queued.length ? <span className="down">● 串行执行 · 按提交顺序</span> : '无排队工单'} jump={orderJump(queued[0])} />
         <Kpi label="推理副本" value={totalReplicas(st)} unit="个" foot={`${st.models.length} 个在线模型`} />
         <Kpi label="活跃凭证" value={activeCreds(st)} unit="个" foot={`已闭环 ${done.length} · 已驳回 ${rejected.length}`} />
-        <Kpi label="变更窗口" value={activeSlot ? activeSlot.id : '未开放'} unit="" foot={activeSlot ? `${activeSlot.date} ${activeSlot.from}-${activeSlot.to} · ${activeSlot.scope}` : <span className="down">● 窗口外提交的变更将排队顺延</span>} />
+        <Kpi label="变更窗口" value={activeSlot ? activeSlot.id : '未开放'} unit="" foot={activeSlot ? `${activeSlot.date} ${activeSlot.from}-${activeSlot.to} · ${activeSlot.scope}` : <span className="down">● 窗口外提交的变更将排队顺延</span>} jump={activeSlot ? undefined : (bookedSlot ? slotJump(bookedSlot.id) : undefined)} />
       </div>
 
       <Panel title="变更窗口排期" extra="预约窗口 → 开启窗口（排队工单按序执行）→ 结束窗口（剩余工单顺延至下一预约）" className="mt14" noPad>
@@ -208,12 +239,13 @@ export default function OpsWorkflow() {
             <Table
               minWidth={900}
               head={['窗口编号', '日期与时段', '影响范围', '事由 / 申请人', '状态', '操作']}
+              rowKeys={slots.map((x) => x.id)} pick={pick}
               rows={slots.map((x) => [
                 <span className="mono small strong">{x.id}</span>,
                 <span className="small">{x.date}<div className="tiny faint mono">{x.from} - {x.to}</div></span>,
                 <span className="tag gray">{x.scope}</span>,
                 <span className="small" style={{ maxWidth: 280 }}>{x.reason}<div className="tiny faint">{x.by}</div></span>,
-                x.status === '使用中' ? <Badge tone="good">使用中</Badge> : x.status === '已预约' ? <Badge tone="info">已预约</Badge> : x.status === '已结束' ? <Badge tone="muted">已结束</Badge> : <Badge tone="bad">已取消</Badge>,
+                x.status === '使用中' ? <Badge tone="good">使用中</Badge> : x.status === '已预约' ? <Badge tone="info">已预约</Badge> : x.status === '已结束' ? <Badge tone="muted">已结束</Badge> : <AlertBadge tone="bad" jump={slotJump(x.id)}>已取消（要重新排期）</AlertBadge>,
                 <div className="row gap6">
                   {x.status === '已预约' && canApprove ? <button className="btn sm primary" onClick={() => { const r = engine.openSlot(x.id); setFlash({ tone: r.ok ? 'good' : 'bad', text: r.ok ? `窗口 ${x.id} 已开启 · 排队工单开始按序执行` : `开启失败：${r.reason}` }) }}>开启窗口</button> : null}
                   {x.status === '使用中' && canApprove ? <button className="btn sm" onClick={() => { const r = engine.closeSlot(x.id); setFlash({ tone: 'good', text: `窗口 ${x.id} 已结束 · 剩余排队工单${queued.length ? `顺延至下一预约窗口（当前排队 ${queued.length} 项）` : '（无排队工单）'}` }) }}>结束窗口</button> : null}
@@ -265,7 +297,7 @@ export default function OpsWorkflow() {
             </div>
             <div className="row gap6">
               <span className="small faint">排队工单</span>
-              <Badge tone={queued.length ? 'warn' : 'muted'}>{queued.length} 项</Badge>
+              {queued.length ? <AlertBadge tone="warn" jump={orderJump(queued[0])!}>{queued.length} 项</AlertBadge> : <Badge tone="muted">{queued.length} 项</Badge>}
             </div>
             {windowOrder && canApprove ? <button className="btn sm ghost" onClick={() => engine.close(windowOrder.id)}>闭环并释放窗口</button> : null}
           </div>
@@ -275,6 +307,7 @@ export default function OpsWorkflow() {
               <Table
                 minWidth={1000}
                 head={['位次', '工单', '类型 / 对象', '准入预检', '审批来源 / 外部回写', '状态']}
+                rowKeys={queued.map((q) => q.id)} pick={pick}
                 rows={queued.map((q, i) => {
                   const ap = cons.approvals.filter((a) => a.order_id === q.id)
                   return [
@@ -282,8 +315,8 @@ export default function OpsWorkflow() {
                   <span className="mono small">{q.id}{q.auto ? <span className="tag gray" style={{ marginLeft: 6 }}>自动建议</span> : null}</span>,
                   <span className="small">{TYPE_LABEL[q.type]} · {q.target} {q.amount}</span>,
                   <span className="tiny faint" style={{ maxWidth: 260 }}>{String(q.spec.affected ?? q.reason).slice(0, 70)}</span>,
-                  <span className="tiny">{ap.length === 0 ? <Badge tone="muted">平台内审批</Badge> : ap.map((a) => <span key={a.id} style={{ marginRight: 6 }}>{a.state === '超时' ? <Badge tone="warn">外部超时未回写</Badge> : a.state === '已审' ? <Badge tone="good">已回写</Badge> : a.state === '驳回' ? <Badge tone="bad">已驳回</Badge> : <Badge tone="info">等外部回写</Badge>}<span className="faint tiny mono"> {a.external_ref}</span></span>)}{ap.length > 0 ? <div className="tiny faint">可在「申请与审批台」人工接管</div> : null}</span>,
-                  <State s="queued" />,
+                  <span className="tiny">{ap.length === 0 ? <Badge tone="muted">平台内审批</Badge> : ap.map((a) => <span key={a.id} style={{ marginRight: 6 }}>{a.state === '超时' ? <AlertBadge tone="warn" jump={Jump.approval(q.id, '外部审批超时未回写：点过去落到审批台这一行，人工审批 / 人工驳回都在这里接管')}>外部超时未回写</AlertBadge> : a.state === '已审' ? <Badge tone="good">已回写</Badge> : a.state === '驳回' ? <AlertBadge tone="bad" jump={Jump.approval(q.id, '外部审批驳回：点过去落到审批台这一行，看理由并决定要不要人工接管')}>已驳回</AlertBadge> : <Badge tone="info">等外部回写</Badge>}<span className="faint tiny mono"> {a.external_ref}</span></span>)}{ap.length > 0 ? <div className="tiny faint">可在「申请与审批台」人工接管</div> : null}</span>,
+                  <AlertBadge tone="warn" jump={orderJump(q)!}>排队中</AlertBadge>,
                   ]
                 })}
               />
@@ -298,10 +331,10 @@ export default function OpsWorkflow() {
         <div className="panel-body">
           <div className="row between wrap" style={{ gap: 12 }}>
             <div className="row gap6 wrap">
-              <Badge tone={rent.enabled ? 'good' : 'warn'}>扩租通道{rent.enabled ? '已启用' : '未启用'}</Badge>
+              {rent.enabled ? <Badge tone="good">扩租通道已启用</Badge> : <AlertBadge tone="warn" jump={Jump.connector(RENT_ID, '扩租通道未启用：点过去落到这条接入那一行，启用通道 / 改额度都在这里做')}>扩租通道未启用</AlertBadge>}
               <Badge tone="info">配置额度 {rent.quota} 卡 · 已启用部分 {rent.liveQuota} 卡 · 已开 {rent.used} 卡 · 可用 {rent.available} 卡</Badge>
               <Badge tone="muted">{rent.price} 元 / 卡 / 日 · 计费方式 {rent.mode}</Badge>
-              <Badge tone={rent.status === '已定' ? 'good' : 'warn'}>接口状态 {rent.status}</Badge>
+              {rent.status === '已定' ? <Badge tone="good">接口状态 已定</Badge> : <AlertBadge tone="warn" jump={Jump.connector(RENT_ID, `接口状态「${rent.status}」：点过去落到这条接入那一行，确认状态与前置条件都在这里做`)}>接口状态 {rent.status}</AlertBadge>}
               <span className="small faint">本地空闲 {freeCards(st)} 卡（本地 {TOTAL_CARDS} 卡已分配 {totalAllocated(st)} 卡）</span>
             </div>
             <div className="row gap6">
@@ -457,7 +490,7 @@ export default function OpsWorkflow() {
                     <span>{p.name} <span className="faint">({p.cards} 卡)</span></span>
                     <span className={u > 90 ? 'strong' : 'muted'} style={{ color: u > 90 ? 'var(--bad-text)' : undefined }}>{u}%</span>
                   </div>
-                  <div style={{ marginTop: 5 }}><Progress value={u} tone={u > 90 ? 'bad' : u > 80 ? 'warn' : 'green'} /></div>
+                  <div style={{ marginTop: 5 }}><Progress value={u} tone={u > 90 ? 'bad' : u > 80 ? 'warn' : 'green'} jump={u > 80 ? orderJump(poolOrder(p.name) ?? firstPending ?? queued[0]) : undefined} /></div>
                 </div>
               )
             })}
@@ -526,7 +559,7 @@ export default function OpsWorkflow() {
           {st.events.slice(0, 8).map((e, i) => (
             <div key={i} style={{ marginBottom: 10 }}>
               <div className="row gap6">
-                {e.level === '紧急' ? <Badge tone="bad">紧急</Badge> : e.level === '重要' ? <Badge tone="warn">重要</Badge> : <Badge tone="muted">一般</Badge>}
+                {e.level === '紧急' ? <AlertBadge tone="bad" jump={eventJump(e.text) ?? Jump.commands()}>紧急</AlertBadge> : e.level === '重要' ? <AlertBadge tone="warn" jump={eventJump(e.text) ?? Jump.commands()}>重要</AlertBadge> : <Badge tone="muted">一般</Badge>}
                 <span className="mono tiny faint">{e.time}</span>
               </div>
               <div className="small" style={{ color: 'var(--text-dim)', marginTop: 3, lineHeight: 1.6 }}>{e.text}</div>

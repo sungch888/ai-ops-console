@@ -6,12 +6,13 @@
  * ===================================================================== */
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
-import { Kpi, Panel, PageHead, Badge, Table, Callout } from '../../components/ui'
+import { Kpi, Panel, PageHead, Badge, Table, Callout, AlertBadge } from '../../components/ui'
 import { managedApps, sourceHint, useTelemetry, type ManagedApp } from '../../engine/telemetry'
 import { connectorStore, readiness, MODE_LABEL, type Connector } from '../../engine/connectors'
 import { governStore, useGovernViews, DEPTH_LABEL, type GovernedView } from '../../engine/govern'
 import { monitorStore, monitorSummary } from '../../engine/exceptions'
 import { usePerm } from '../../engine/auth'
+import { Jump, useAlertPick, usePickFlash } from '../../engine/alertJump'
 
 const STATUS_TONE: Record<string, 'good' | 'warn' | 'muted' | 'purple'> = { 已发布: 'good', 草稿: 'purple', 已下线: 'muted' }
 
@@ -19,8 +20,9 @@ type Msg = { tone: 'good' | 'bad' | 'info'; text: string }
 
 /** 一条接入配置的完整展示（配置项 / 前置条件对照 / 就绪缺口 / 版本与变更历史） */
 function connBlock(c: Connector | undefined) {
-  if (!c) return <Callout warn text="未找到这条接入配置：可在「运营分析 · 外部对接清单」恢复默认配置，或新增同名通道后再看本页。" />
+  if (!c) return <Callout warn jump={{ page: '/ops/integrations', label: '去外部接入配置中心恢复默认配置，或新增同名通道' }} text="未找到这条接入配置：可在「运营分析 · 外部对接清单」恢复默认配置，或新增同名通道后再看本页。" />
   const miss = readiness(c)
+  const toConn = () => Jump.connector(c.id, '点过去落到外部对接清单这一条接入：填地址 / 勾前置条件 / 探活 / 切真实接口都在那一行')
   return (
     <div className="col gap6">
       <div className="row gap6 wrap">
@@ -29,8 +31,8 @@ function connBlock(c: Connector | undefined) {
         <Badge tone="info">{c.kind}</Badge>
         <Badge tone={c.mode === 'real' ? 'good' : 'purple'}>{MODE_LABEL[c.mode]}</Badge>
         <Badge tone={c.enabled ? 'good' : 'muted'}>{c.enabled ? '通道启用' : '通道停用'}</Badge>
-        <Badge tone={c.status === '已定' ? 'good' : c.status === '待商定' ? 'warn' : 'bad'}>{c.status}</Badge>
-        <Badge tone={c.health === 'ok' ? 'good' : c.health === 'warn' ? 'warn' : 'bad'}>{c.health === 'ok' ? '链路正常' : c.health === 'warn' ? '链路异常' : '链路中断'}</Badge>
+        {c.status === '已定' ? <Badge tone="good">已定</Badge> : <AlertBadge tone={c.status === '待商定' ? 'warn' : 'bad'} jump={toConn()}>{c.status}</AlertBadge>}
+        {c.health === 'ok' ? <Badge tone="good">链路正常</Badge> : <AlertBadge tone={c.health === 'warn' ? 'warn' : 'bad'} jump={toConn()}>{c.health === 'warn' ? '链路异常' : '链路中断'}</AlertBadge>}
       </div>
       <div className="small">方向：{c.direction} · 归口：{c.owner}</div>
       <div className="small">地址：<span className="mono">{c.endpoint}</span> · 传输：{c.transport} · 鉴权：{c.auth}</div>
@@ -42,7 +44,7 @@ function connBlock(c: Connector | undefined) {
       <div className="col gap6">
         {c.prereq.map((p) => (
           <div key={p} className="row gap6">
-            <Badge tone={c.prereqDone.includes(p) ? 'good' : 'warn'}>{c.prereqDone.includes(p) ? '已完' : '未完'}</Badge>
+            {c.prereqDone.includes(p) ? <Badge tone="good">已完</Badge> : <AlertBadge tone="warn" jump={toConn()}>未完</AlertBadge>}
             <span className="small">{p}</span>
           </div>
         ))}
@@ -88,6 +90,12 @@ export default function DifyRagflow() {
   const gapDraft = apps.filter((a) => a.status !== '已发布' && a.onPlatform)
   const bothNone = apps.filter((a) => a.status !== '已发布' && !inCatalog(a))
   const diff = gapPublish.length + gapDraft.length
+  /** 别处点过来：?pick=<平台>|<应用名> → 高亮「应用清单」这一行（去接管册登记 / 复核摘除都在那一行） */
+  const jumpPick = useAlertPick()
+  usePickFlash(jumpPick)
+  const appKey = (a: ManagedApp) => `${a.platform}|${a.name}`
+  const toAppRow = (a: ManagedApp) => ({ page: '/app/dify', pick: appKey(a), label: '点过去落到这条应用那一行：登记进接管册 / 复核双侧摘除都在那一行' })
+  const firstGap = gapPublish[0] ?? gapDraft[0]
 
   const doRegister = (a: ManagedApp) => {
     const hit = govHit(a.name)
@@ -139,7 +147,7 @@ export default function DifyRagflow() {
           <>
             <Badge tone="info">纳管应用 {apps.length}</Badge>
             <Badge tone="good">已发布 {published.length}</Badge>
-            <Badge tone={diff ? 'warn' : 'good'}>一致性差异 {diff}</Badge>
+            {diff && firstGap ? <AlertBadge tone="warn" jump={toAppRow(firstGap)}>一致性差异 {diff}</AlertBadge> : <Badge tone="good">一致性差异 {diff}</Badge>}
             <Badge tone={tele.mode === '采集层' ? 'good' : 'muted'}>取数来源：{tele.mode}</Badge>
           </>
         }
@@ -153,7 +161,7 @@ export default function DifyRagflow() {
         <Kpi label="草稿 / 未发布" value={draft.length} unit="个" foot="不该出现在业务使用目录" />
         <Kpi label="已下线" value={offline.length} unit="个" foot="须确认目录入口已双侧摘除" />
         <Kpi label="平台目录已登记" value={onPlat.length} unit="个" foot={`接管册在册 ${apps.filter((a) => inCatalog(a)).length} · 未登记 ${apps.length - onPlat.length}`} />
-        <Kpi label="目录不一致" value={diff} unit="条" foot={`已发布无登记 ${gapPublish.length} · 有登记未发布 ${gapDraft.length}`} />
+        <Kpi label="目录不一致" value={diff} unit="条" foot={`已发布无登记 ${gapPublish.length} · 有登记未发布 ${gapDraft.length}`} jump={diff && firstGap ? toAppRow(firstGap) : undefined} />
       </div>
 
       <Panel
@@ -166,6 +174,7 @@ export default function DifyRagflow() {
           <Table
             minWidth={1250}
             head={['平台', '应用', '类型', '发布状态', '归口', '最近更新', '绑定模型', '调用量 / 文档数', '平台侧登记', '动作']}
+            rowKeys={apps.map((a) => appKey(a))} pick={jumpPick}
             rows={apps.map((a) => {
               const hit = govHit(a.name)
               return [
@@ -181,7 +190,7 @@ export default function DifyRagflow() {
                   ? <Badge tone="good">已登记</Badge>
                   : hit
                     ? <Badge tone="purple">接管册在册</Badge>
-                    : <Badge tone="warn">未登记</Badge>,
+                    : <AlertBadge tone="warn" jump={toAppRow(a)}>未登记</AlertBadge>,
                 <span className="row gap6">
                   {hit ? (
                     <span className="tiny faint">{hit.id} · {DEPTH_LABEL[hit.depth]}</span>
@@ -208,7 +217,7 @@ export default function DifyRagflow() {
         <div className="col gap6">
           <div className="row gap6 wrap">
             <span className="small strong">① 接入侧已发布，平台侧无登记</span>
-            <Badge tone={gapPublish.length ? 'warn' : 'good'}>{gapPublish.length} 条</Badge>
+            {gapPublish.length ? <AlertBadge tone="warn" jump={toAppRow(gapPublish[0])}>{gapPublish.length} 条</AlertBadge> : <Badge tone="good">{gapPublish.length} 条</Badge>}
           </div>
           {gapPublish.length ? (
             <div className="col gap6">
@@ -227,7 +236,7 @@ export default function DifyRagflow() {
 
           <div className="row gap6 wrap">
             <span className="small strong">② 平台侧有登记，接入侧是草稿 / 已下线</span>
-            <Badge tone={gapDraft.length ? 'warn' : 'good'}>{gapDraft.length} 条</Badge>
+            {gapDraft.length ? <AlertBadge tone="warn" jump={toAppRow(gapDraft[0])}>{gapDraft.length} 条</AlertBadge> : <Badge tone="good">{gapDraft.length} 条</Badge>}
           </div>
           {gapDraft.length ? (
             <div className="col gap6">
@@ -236,7 +245,8 @@ export default function DifyRagflow() {
                   <Badge tone={a.platform === 'Dify' ? 'purple' : 'info'}>{a.platform}</Badge>
                   <span className="small">{a.name}</span>
                   <Badge tone={STATUS_TONE[a.status] ?? 'muted'}>{a.status}</Badge>
-                  <span className="tiny" style={{ color: 'var(--warn-text)' }}>建议动作：摘除或复核归口 —— 确认是「还在开发、先从业务目录摘除」还是「已下线但目录没摘」：前者挂为草稿跟踪，后者双侧同步摘除并留处置记录</span>
+                  <AlertBadge tone="warn" jump={toAppRow(a)}>建议动作：摘除 / 复核 → 去这一行</AlertBadge>
+                  <span className="tiny" style={{ color: 'var(--warn-text)' }}>确认是「还在开发、先从业务目录摘除」还是「已下线但目录没摘」：前者挂为草稿跟踪，后者双侧同步摘除并留处置记录</span>
                 </div>
               ))}
             </div>
@@ -322,7 +332,7 @@ export default function DifyRagflow() {
               <div className="tiny faint">字段 fields（按这些名字落盘，平台内部做映射）</div>
               <div className="row wrap gap6">{h.fields.map((f) => <span key={f} className="tag gray mono">{f}</span>)}</div>
               <div className="row gap6">
-                <Badge tone={h.status.ok ? 'good' : 'bad'}>{h.status.ok ? '本轮可取数' : '本轮取数失败'}</Badge>
+                {h.status.ok ? <Badge tone="good">本轮可取数</Badge> : <AlertBadge tone="bad" jump={Jump.connector(h.id === 'dify' ? 'a-dify' : 'a-ragflow', '点过去落到这条接入配置那一行：探活 / 改地址 / 看降级口径都在那一行')}>本轮取数失败</AlertBadge>}
                 <span className="tiny faint">{h.status.at} · {h.status.items} 条</span>
               </div>
               <div className="tiny faint">{h.status.note}</div>

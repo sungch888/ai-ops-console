@@ -1,9 +1,10 @@
-import { useState } from 'react'
-import { Kpi, Panel, PageHead, Badge, Table, Callout, fmt } from '../../components/ui'
+import { useEffect, useState } from 'react'
+import { Kpi, Panel, PageHead, Badge, AlertBadge, Table, Callout, fmtCN } from '../../components/ui'
 import { Chart, CHART_COLORS, AXIS_COLOR, SPLIT_COLOR, TOOLTIP_STYLE, GRID } from '../../components/Chart'
-import { secDetection } from '../../data/mock'
+import { secDetection, traces } from '../../data/mock'
 import { usePolicies, policyStore, POLICY_KINDS, POLICY_ACTIONS, SCOPES, type PolicyKind, type PolicyAction } from '../../engine/policies'
 import { usePerm, useSession } from '../../engine/auth'
+import { useAlertPick, usePickFlash, type AlertJump } from '../../engine/alertJump'
 
 const PIPELINE = [
   { name: '① 请求侧检测', desc: '提示词注入识别 · 敏感词审查 · 越权意图识别，覆盖用户输入与知识片段' },
@@ -26,6 +27,22 @@ export default function Security() {
   const [flash, setFlash] = useState<string | null>(null)
   const cur = policies.find((p) => p.id === sel) ?? policies[0]
   const by = session?.name ?? '运营值班'
+
+  /* 告警直达口径（本页主键：策略 id / 变更单 id）
+     本页红 / 黄 → 落检测策略库那一行（改版 / 提交启停 / 回滚都在这一行）或变更单那一行（通过 / 驳回就在这一行）
+     别处点进来：?pick=P-05 → 选中并高亮那条策略（下方提交面板同步切到它）；?pick=PC-001 → 高亮那张变更单 */
+  const pick = useAlertPick()
+  usePickFlash(pick)
+  const policyJump = (id: string, label: string): AlertJump => ({ page: '/model/security', pick: id, label })
+  const changeJump = (id: string, label: string): AlertJump => ({ page: '/model/security', pick: id, label })
+  const pendingChanges = changes.filter((c) => c.status === '待审批')
+  const injectPolicy = policies.find((p) => p.kind === '注入特征' && p.action === '拦截')
+  const maskPolicy = policies.find((p) => p.kind === '脱敏规则')
+  const reviewPolicy = policies.find((p) => p.action === '转人工')
+  const logJump = (l: { target: string; action: string }): AlertJump => traces.some((t) => t.id === l.target)
+    ? { page: '/model/trace', pick: l.target, label: `到这条调用（${l.target}）那一行：六节点链路与处置结果都在那一行，定责从这一步走` }
+    : { page: '/model/security', pick: l.action.includes('身份证') || l.action.includes('掩码') ? 'P-03' : l.action.includes('越权') ? 'P-06' : 'P-05', label: '这条处置日志对不上具体调用号：到命中的那条策略那一行看命中模式与处置等级' }
+  useEffect(() => { if (pick && policies.some((p) => p.id === pick)) setSel(pick) }, [pick, policies])
 
   const typeOpt = {
     color: CHART_COLORS,
@@ -60,16 +77,21 @@ export default function Security() {
         extra={
           <>
             <Badge tone="good">检测链路正常</Badge>
-            <Badge tone="warn">超时放行 ≤ 5%</Badge>
+            <AlertBadge tone="warn" jump={{ page: '/model/safety-flow', pick: '/api/v1/check/pre', label: '超时到底放行还是拦截，这条口径在检测流程的接口契约那一行定；改超时 ms 在下方面板' }}>超时放行 ≤ 5% · 口径待定</AlertBadge>
           </>
         }
       />
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', gap: 14 }}>
-        <Kpi label="今日输入检测" value={fmt(secDetection.todayInput)} unit="次" foot="请求侧全量检测 · 覆盖率 100%" />
-        <Kpi label="提示词注入命中" value={secDetection.injectHit} unit="次" foot={<span className="down">● 4 类手法 · 误判 {secDetection.injectFalse} 次</span>} />
-        <Kpi label="敏感信息拦截" value={secDetection.inputBlocked + secDetection.outputBlocked} unit="次" foot={`输入 ${secDetection.inputBlocked} · 输出 ${secDetection.outputBlocked}`} />
-        <Kpi label="转人工复核" value={secDetection.queue} unit="起" foot="中危事件 · 复核队列未积压" />
+        <Kpi label="今日输入检测" value={fmtCN(secDetection.todayInput)} unit="次" foot="请求侧全量检测 · 覆盖率 100%" />
+        <Kpi label="提示词注入命中" value={secDetection.injectHit} unit="次" foot={<span className="down">● 4 类手法 · 误判 {secDetection.injectFalse} 次</span>}
+          jump={policyJump(injectPolicy?.id ?? 'P-05', `到「${injectPolicy?.name ?? '角色改写型注入特征'}」这一行：命中模式与处置动作就在这一行，改版 / 启停要走变更单`)} />
+        <Kpi label="敏感信息拦截" value={secDetection.inputBlocked + secDetection.outputBlocked} unit="次" foot={`输入 ${secDetection.inputBlocked} · 输出 ${secDetection.outputBlocked}`}
+          jump={policyJump(maskPolicy?.id ?? 'P-03', `到「${maskPolicy?.name ?? '身份证 / 手机号脱敏'}」这一行：拦截 / 脱敏动作就在这一行，要放宽或收紧都在这上面提交变更单`)} />
+        <Kpi label="转人工复核" value={secDetection.queue} unit="起" foot={secDetection.queue
+          ? <span className="down">{`● ${secDetection.queue} 起中危待复核 · 复核队列未积压`}</span>
+          : '中危事件 · 复核队列未积压'}
+          jump={secDetection.queue ? policyJump(reviewPolicy?.id ?? 'P-06', `到「${reviewPolicy?.name ?? '越权意图识别'}」这一行：处置动作就是「转人工」，命中后怎么派复核都在这一行改`) : undefined} />
       </div>
 
       <div className="grid g-21 mt14">
@@ -82,14 +104,15 @@ export default function Security() {
           <div className="panel-body">
             <Table
               head={['时间', '对象', '处置动作', '等级']}
+              rowKeys={secDetection.policyLogs.map((l) => l.target)} pick={pick}
               rows={secDetection.policyLogs.map((l) => [
                 <span className="mono small">{l.time}</span>,
                 <span className="mono small">{l.target}</span>,
                 l.action,
                 l.level === 'bad'
-                  ? <Badge tone="bad">高危</Badge>
+                  ? <AlertBadge tone="bad" jump={logJump(l)}>高危</AlertBadge>
                   : l.level === 'warn'
-                  ? <Badge tone="warn">中危</Badge>
+                  ? <AlertBadge tone="warn" jump={logJump(l)}>中危 · 待复核</AlertBadge>
                   : <Badge tone="info">记录</Badge>,
               ])}
               minWidth={680}
@@ -115,12 +138,13 @@ export default function Security() {
         <div className="panel-body">
           <Table
             head={['策略', '类型 · 作用域', '命中模式', '处置动作', '今日命中', '状态', '操作']}
+            rowKeys={policies.map((p) => p.id)} pick={pick}
             rows={policies.map((p) => [
               <button className="btn sm ghost" style={{ padding: '2px 8px', textAlign: 'left' }} onClick={() => setSel(p.id)}><span className="strong">{p.id}</span> {p.name}</button>,
               <span className="small">{p.kind}<div className="tiny faint">{p.scope}</div></span>,
               <span className="mono tiny" style={{ maxWidth: 260 }}>{p.pattern}</span>,
               <Badge tone={p.action === '拦截' ? 'bad' : p.action === '转人工' ? 'warn' : p.action === '脱敏' ? 'info' : 'muted'}>{p.action}</Badge>,
-              <span className="num">{fmt(p.hits)}</span>,
+              <span className="num">{fmtCN(p.hits)}</span>,
               p.enabled ? <Badge tone="good">启用</Badge> : <Badge tone="muted">停用</Badge>,
               <div className="row gap6">
                 <button className="btn sm" disabled={!canEdit} onClick={() => { setSel(p.id); setKind(p.kind); setScope(p.scope); setAct(p.action); setPattern(p.pattern); setPname(p.name) }}>改版</button>
@@ -197,6 +221,7 @@ export default function Security() {
             {changes.length === 0 ? <Callout text="暂无策略变更单。提交修改 / 新增 / 启停 / 回滚后会在此进入审批队列。" /> : (
               <Table
                 head={['变更单', '操作 · 对象', '内容', '提交', '状态']}
+                rowKeys={changes.map((c) => c.id)} pick={pick}
                 rows={changes.map((c) => [
                   <span className="mono small">{c.id}</span>,
                   <span className="small">{c.op}<div className="tiny faint">{c.target}</div></span>,
@@ -209,8 +234,8 @@ export default function Security() {
                           <button className="btn sm primary" onClick={() => policyStore.approveChange(c.id, by)}>通过</button>
                           <button className="btn sm danger" onClick={() => policyStore.rejectChange(c.id, by, '变更依据不足，要求补充命中样本与影响评估')}>驳回</button>
                         </>
-                      ) : <Badge tone="warn">待审批</Badge>
-                    ) : c.status === '已生效' ? <Badge tone="good">已生效</Badge> : <Badge tone="bad">已驳回</Badge>}
+                      ) : <AlertBadge tone="warn" jump={changeJump(c.id, `这张变更单 ${c.id} 未闭环（当前角色无审批权）：到这一行看内容与对象，找有审批权的人处理`)}>待审批</AlertBadge>
+                    ) : c.status === '已生效' ? <Badge tone="good">已生效</Badge> : <AlertBadge tone="bad" jump={changeJump(c.id, `变更单 ${c.id} 已驳回${c.note ? `：${c.note}` : ''}：到这一行看理由，补齐命中样本与影响评估后重提`)}>已驳回</AlertBadge>}
                   </div>,
                 ])}
                 minWidth={760}
@@ -243,9 +268,11 @@ export default function Security() {
 
       <div className="mt14">
         <Callout
+          warn={pendingChanges.length > 0}
+          jump={pendingChanges.length ? changeJump(pendingChanges[0].id, `到这张待审批的变更单 ${pendingChanges[0].id} 那一行：通过 / 驳回都在那一行做`) : undefined}
           text={
             <>
-              策略库状态：<b>{policies.length} 条策略</b>（启用 {policies.filter((p) => p.enabled).length} 条 · 累计命中 {fmt(policies.reduce((s, p) => s + p.hits, 0))} 次）· 注入防护覆盖<b>指令绕过 / 提示词泄露 / 越权调用 / 上下文污染</b> 4 类手法 · <b>策略弱化审计每周执行</b>，未经审批的弱化变更自动回滚至上一审批版本并登记审计记录（当前待审批变更 {changes.filter((c) => c.status === '待审批').length} 项）。
+              策略库状态：<b>{policies.length} 条策略</b>（启用 {policies.filter((p) => p.enabled).length} 条 · 累计命中 {fmtCN(policies.reduce((s, p) => s + p.hits, 0))} 次）· 注入防护覆盖<b>指令绕过 / 提示词泄露 / 越权调用 / 上下文污染</b> 4 类手法 · <b>策略弱化审计每周执行</b>，未经审批的弱化变更自动回滚至上一审批版本并登记审计记录（当前待审批变更 {pendingChanges.length} 项{pendingChanges.length ? '：点过去落到要处理的那张变更单那一行' : ''}）。
             </>
           }
         />

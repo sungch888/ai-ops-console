@@ -8,6 +8,11 @@ import { useSyncExternalStore } from 'react'
 import { gatewayChannels, credentials as seedCreds } from '../data/mock'
 import { rentConfig, llmChannelConfig, connectorStore, readiness, type Connector } from './connectors'
 import { dbRead, dbWrite } from './db'
+import { ContainKind, DIRECTORY_KINDS, ContainAction, ManagedStatus } from './types'
+
+// 向后兼容：从 types.ts re-export，使 import { X } from './engine' 继续可用
+export type { ContainKind, ContainAction, ManagedStatus }
+export { DIRECTORY_KINDS }
 
 
 const TOTAL_CARDS = 88
@@ -22,20 +27,17 @@ export const SCENARIO_LABEL: Record<ScenarioId, string> = {
   compliance: '合规抽查与凭证吊销申请',
   nightWindow: '夜间变更窗口与队列接续',
 }
-export type OrderType = 'pool_expand' | 'pool_release' | 'preempt' | 'replica_scale' | 'weight_adjust' | 'credential_issue' | 'credential_revoke' | 'quota_adjust' | 'containment' | 'model_rollback' | 'model_retire' | 'access_block' | 'access_restore' | 'model_deploy' | 'train_reserve' | 'train_release'
+export type OrderType = 'pool_expand' | 'pool_release' | 'preempt' | 'replica_scale' | 'weight_adjust' | 'credential_issue' | 'credential_revoke' | 'quota_adjust' | 'containment' | 'model_rollback' | 'model_retire' | 'access_block' | 'access_restore' | 'model_deploy' | 'train_reserve' | 'train_release' | 'weight_register' | 'model_admission'
 /** 需要外部执行回执的工单：平台发单、容器平台 / 运维执行，回执到位才生效 */
 export const EXTERNAL_TYPES: OrderType[] = ['model_deploy']
 /** 紧急处置类工单：不受变更窗口与执行队列限制（例外监控阻断走这一类） */
 /** 接入阻断范围：全通道 / 只停某几个采集项 / 只停某时段 / 只停某个来源 IP */
 export const BLOCK_SCOPES = ['全通道', '采集项', '时段', '来源 IP']
 export const URGENT_TYPES: OrderType[] = ['containment', 'access_block', 'access_restore', 'credential_revoke', 'quota_adjust']
-
-export type ContainKind = '知识库' | '智能体应用' | 'MCP工具' | '插件' | 'Skill'
-/** 双目录联动范围：MCP 工具 / 插件 / Skill 都在技术注册目录与业务使用目录两侧登记 */
-export const DIRECTORY_KINDS: ContainKind[] = ['MCP工具', '插件', 'Skill']
-export type ContainAction = '暂停入库' | '恢复入库' | '限流保护' | '暂停应用' | '恢复应用' | '隔离出目录' | '重新纳入' | '禁用' | '启用'
-export type ManagedStatus = '正常' | '限流' | '暂停' | '隔离' | '禁用'
-export type OrderStatus = 'submitted' | 'approved' | 'queued' | 'rejected' | 'running' | 'rolled_back' | 'closed' | 'external'
+export type OrderStatus = 'to_biz' | 'submitted' | 'approved' | 'queued' | 'rejected' | 'running' | 'rolled_back' | 'closed' | 'external'
+/** 业务申请单（业务发起、要占平台资源/钱的）：先过业务管理审批，再进平台审批 */
+export const BIZ_TYPES: OrderType[] = ['model_deploy', 'train_reserve', 'credential_issue']
+export const BIZ_APPROVAL_LABEL = '业务管理审批'
 
 export type PoolId = 'hp' | 'shared' | 'train'
 export interface Pool { id: 'hp' | 'shared' | 'train'; name: string; cards: number; policy: string; sla: string }
@@ -68,16 +70,34 @@ export interface Order {
 
 export interface TrainJob { id: string; name: string; pool: PoolId; cards: number; applicant: string; dept: string; framework: string; dataLevel: string; hours: number; dueAt: string; state: '运行中' | '排队中' | '已完成' }
 
+/** 训练产物权重（模型准入台账的一行）：登记 ≠ 准入，准入通过后才进可部署清单 */
+export interface WeightArtifact {
+  id: string
+  model: string            // 模型简称（部署工单按它引用）
+  version: string
+  origin: '内部训练' | '外部引入'
+  jobId: string            // 内部：关联的训练任务号
+  source: string           // 外部：可信来源说明
+  manifest: string         // 外部：文件清单说明
+  hash: string             // 保存哈希基准（准入硬门）
+  savedAt: string
+  applicant: string
+  dept: string
+  state: '待审核' | '准入通过' | '已部署'
+}
+export const ARTIFACT_STATE_LABEL: Record<WeightArtifact['state'], string> = { 待审核: '待审核', 准入通过: '准入通过 · 可部署', 已部署: '已部署' }
+
 export interface EngineState {
   pools: Pool[]
   models: ModelDef[]
   managed: Managed[]
   jobs: TrainJob[]
+  artifacts: WeightArtifact[]
   windowSlots: WindowSlot[]
   channels: Channel[]
   creds: Cred[]
   orders: Order[]
-  events: { time: string; level: '一般' | '重要' | '紧急'; text: string }[]
+  events: { time: string; level: '一般' | '重要' | '紧急'; text: string; cause?: string }[]
   tick: number
   rented: number
   seq: number
@@ -102,9 +122,11 @@ export const TYPE_LABEL: Record<OrderType, string> = {
   model_deploy: '模型部署与发布',
   train_reserve: '训练算例申请',
   train_release: '训练卡位归还',
+  weight_register: '训练产物权重登记',
+  model_admission: '模型准入审核',
 }
 
-export const ORDER_STATUS_LABEL: Record<OrderStatus, string> = { submitted: '待审批', approved: '已审批待执行', queued: '排队待窗口', rejected: '已驳回', running: '执行中', rolled_back: '已回滚', closed: '已闭环', external: '已下发·待回执' }
+export const ORDER_STATUS_LABEL: Record<OrderStatus, string> = { to_biz: '待业务管理审批', submitted: '待审批', approved: '已审批待执行', queued: '排队待窗口', rejected: '已驳回', running: '执行中', rolled_back: '已回滚', closed: '已闭环', external: '已下发·待回执' }
 
 export const KIND_ACTIONS: Record<ContainKind, ContainAction[]> = {
   知识库: ['暂停入库', '恢复入库'],
@@ -193,6 +215,11 @@ const seedCredsLive: Cred[] = seedCreds.map((c) => ({
   status: c.status as Cred['status'],
 }))
 
+const seedArtifacts: WeightArtifact[] = [
+  { id: 'WT-201', model: 'Qwen3-8B', version: 'v1.0', origin: '内部训练', jobId: 'FT-118', source: '', manifest: '', hash: 'sha256:9f2c…b7a1', savedAt: '11-08 21:40', applicant: '示例业务一部 · 示例××', dept: '示例业务一部', state: '待审核' },
+  { id: 'WT-199', model: 'BGE-M3', version: 'v1.6', origin: '内部训练', jobId: 'FT-115', source: '', manifest: '', hash: 'sha256:41ab…07ee', savedAt: '11-05 10:12', applicant: '信息化管理部 · 模型供给运营', dept: '信息化管理部', state: '准入通过' },
+]
+
 function seedState(): EngineState {
   const st: EngineState = {
     pools: seedPools.map((p) => ({ ...p })),
@@ -201,13 +228,15 @@ function seedState(): EngineState {
     jobs: [
       { id: 'FT-118', name: 'Qwen3-8B 业务领域微调（LoRA）', pool: 'train', cards: 8, applicant: '示例业务一部 · 示例××', dept: '示例业务一部', framework: 'MindForm + MindIE', dataLevel: '内部（已脱敏）', hours: 36, dueAt: '11-06 18:00', state: '运行中' },
       { id: 'FT-121', name: 'VL 图像增广数据预处理', pool: 'train', cards: 6, applicant: '示例业务二部 · 示例××', dept: '示例业务二部', framework: 'MindForm', dataLevel: '敏感（专用网络内）', hours: 24, dueAt: '11-07 09:00', state: '排队中' },
+      { id: 'FT-115', name: 'BGE-M3 法规语料增量训练', pool: 'train', cards: 4, applicant: '信息化管理部 · 模型供给运营', dept: '信息化管理部', framework: 'MindForm', dataLevel: '内部（已脱敏）', hours: 18, dueAt: '11-05 12:00', state: '已完成' },
     ],
+    artifacts: seedArtifacts.map((a) => ({ ...a })),
     windowSlots: [{ id: 'CW-01', date: new Date().toISOString().slice(0, 10), from: '02:00', to: '05:00', scope: '全平台', reason: '演示默认开放窗口（可在排期页关闭并预约下一个）', by: '运营值班', status: '使用中' }],
     channels: seedChannels.map((c) => ({ ...c })),
     creds: seedCredsLive.map((c) => ({ ...c })),
     orders: [
       mkOrder(1, 'replica_scale', '共享推理集群 Qwen2.5-VL 副本扩容', '示例业务二部 · 平台代理', '示例业务二部', '灰度', 'Qwen2.5-VL', '+2 副本（+4 卡）', '违法图像审核进入灰度放量，需提升并发承载', 'submitted', false, { model: 'Qwen2.5-VL', delta: 2 }),
-      mkOrder(2, 'credential_issue', '平台代理凭证发放 · 示例业务六部', '示例业务六部 · 示例××', '示例业务四部', '共享', 'SA-0121', 'RPM 120 / TPM 24万', '示例业务六部话术问答助手上线，需绑定 DeepSeek-V3 渠道', 'submitted', false, { kind: '平台代理', holder: '示例业务六部 · 示例××', app: '示例业务六部话术问答助手', model: 'DeepSeek-V3', channel: 'vendor', rpm: 120, tpm: '24万' }),
+      mkOrder(2, 'credential_issue', '平台代理凭证发放 · 示例业务六部', '示例业务六部 · 示例××', '示例业务四部', '共享', 'SA-0121', 'RPM 120 / TPM 24万', '示例业务六部话术问答助手上线，需绑定 DeepSeek-V3 渠道', 'to_biz', false, { kind: '平台代理', holder: '示例业务六部 · 示例××', app: '示例业务六部话术问答助手', model: 'DeepSeek-V3', channel: 'vendor', rpm: 120, tpm: '24万' }),
       mkOrder(3, 'pool_release', '训练池空闲资源回收', '运营值班 · 模型供给运营', '信息化管理部', '共享', '训练资源池', '-2 卡', 'LoRA 微调任务已完成，训练池利用率 50%，回收待变更窗口', 'approved', false, { pool: 'train', cards: 2 }),
     ],
     events: [
@@ -368,6 +397,33 @@ function admission(st: EngineState, o: Order): { ok: boolean; reason?: string; s
       if (delta > 0 && utilAfter > 92) return { ok: false, reason: `执行后 ${pool.name} 利用率将达 ${utilAfter}%，超过 92% 安全上限，须先扩容资源池` }
       return { ok: true, suggest: `执行后 ${m.short} 副本 ${m.replicas} → ${m.replicas + delta}，${pool.name} 利用率 → ${utilAfter}%` }
     }
+    case 'weight_register': {
+      const model = String(o.spec.model ?? '').trim()
+      const version = String(o.spec.version ?? '').trim()
+      const origin = String(o.spec.origin ?? '内部训练')
+      if (!model || !version) return { ok: false, reason: '要写清模型简称与权重版本（准入台账与可部署清单都按它引用）' }
+      const dup = (st.artifacts ?? []).find((a) => a.model === model && a.version === version)
+      if (dup) return { ok: false, reason: `${model} ${version} 已在准入台账（${dup.state}），不得重复登记` }
+      if (!String(o.spec.hash ?? '').trim()) return { ok: false, reason: '缺保存哈希基准：权重保存须带 sha256 基准；外部引入还须可信来源与文件清单（原文 2.4-1）' }
+      if (origin === '内部训练') {
+        const j = (st.jobs ?? []).find((x) => x.id === String(o.spec.jobId))
+        if (!j) return { ok: false, reason: `内部训练权重须关联原训练任务（未找到「${String(o.spec.jobId || '（未填写）')}」）` }
+        if (j.state === '排队中') return { ok: false, reason: `「${j.name}」还在排队未开算，没有可登记的产物` }
+      } else {
+        if (!String(o.spec.source ?? '').trim()) return { ok: false, reason: '外部引入权重须写可信来源（发布方 / 校验渠道，原文 2.4-1）' }
+        if (!String(o.spec.manifest ?? '').trim()) return { ok: false, reason: '外部引入权重须附文件清单（文件名与逐项哈希，原文 2.4-1）' }
+      }
+      return { ok: true, suggest: `登记后进入模型准入台账（待审核）：在审批台提交「${TYPE_LABEL.model_admission}」核验哈希与来源，通过后进入可部署清单（登记不等于准入通过）` }
+    }
+    case 'model_admission': {
+      const a = (st.artifacts ?? []).find((x) => x.id === String(o.spec.artifactId))
+      if (!a) return { ok: false, reason: `未找到权重「${String(o.spec.artifactId)}」（先在训练算例台账登记权重）` }
+      if (a.state === '准入通过') return { ok: false, reason: `${a.model} ${a.version} 已在可部署清单，无需重复审核` }
+      if (a.state === '已部署') return { ok: false, reason: `${a.model} ${a.version} 已部署上线，审核不重复发起` }
+      if (!a.hash) return { ok: false, reason: `${a.id} 缺保存哈希基准，同单补证后再提审核（原文 2.4-1）` }
+      if (a.origin === '内部训练' && !(st.jobs ?? []).some((x) => x.id === a.jobId)) return { ok: false, reason: `${a.id} 关联的训练任务 ${a.jobId} 查无此单，审核不得通过（原文 2.4-1）` }
+      return { ok: true, suggest: `审核「${a.model} ${a.version}」（${a.origin}${a.origin === '内部训练' ? ` · 关联 ${a.jobId}` : ` · 来源 ${a.source}`}）· 哈希基准 ${a.hash} · 通过后进入可部署清单，部署工单才可引用` }
+    }
     case 'model_deploy': {
       const short = String(o.spec.model ?? '').trim()
       if (!short) return { ok: false, reason: '要写明部署哪个模型（模型简称或新模型名称）' }
@@ -376,7 +432,11 @@ function admission(st: EngineState, o: Order): { ok: boolean; reason?: string; s
       if (!(replicas >= 1) || replicas > 8) return { ok: false, reason: '单条部署工单的副本数要在 1–8 之间（更大的发布拆成多条工单，便于逐条回滚）' }
       const m = st.models.find((x) => x.short === short)
       const version = String(o.spec.version ?? '').trim()
-      if (m && version && version !== m.ver && !m.versions.includes(version)) return { ok: false, reason: `${short} 的版本「${version}」不在版本清单（可选：${m.versions.join(' / ')}）；新镜像要先在模型资产里登记版本` }
+      const admitted = (st.artifacts ?? []).filter((a) => a.model === short && (a.state === '准入通过' || a.state === '已部署'))
+      if (m && version && version !== m.ver && !m.versions.includes(version)) {
+        if (!admitted.some((a) => a.version === version)) return { ok: false, reason: `${short} 的版本「${version}」不在版本清单（可选：${m.versions.join(' / ')}），也没有准入通过的权重登记；升级权重要先登记并过准入` }
+      }
+      if (!m && !admitted.length) return { ok: false, reason: `新模型 ${short} 无有效准入入库记录，不得进入部署：先在「申请与审批台 · 训练产物权重」登记权重，再到审批台提「模型准入审核」（原文 2.5-1；未准入模型）` }
       const gray = Number(o.spec.gray ?? 100)
       if (!(gray >= 1) || gray > 100) return { ok: false, reason: '灰度比例要在 1–100 之间（灰度发布要写清放量比例）' }
       const nodes = String(o.spec.nodes ?? '').trim()
@@ -390,7 +450,8 @@ function admission(st: EngineState, o: Order): { ok: boolean; reason?: string; s
       if (need > free) return { ok: false, reason: `${pool.name} 当前空闲 ${free} 卡，本次要 ${need} 卡（${replicas} 副本 × ${per} 卡）；先做池扩容或换空闲更多的池` }
       const utilAfter = Math.round((demandOf(st, pool.id) + need) / pool.cards * 100)
       if (utilAfter > 92) return { ok: false, reason: `部署后 ${pool.name} 利用率将达 ${utilAfter}%，超过 92% 安全上限，须先扩容` }
-      return { ok: true, suggest: `在 ${pool.name}（${nodes}）部署 ${short} ${version || m?.ver || image}：${replicas} 副本 × ${per} 卡 = ${need} 卡 · 灰度 ${gray}% · 池利用率 → ${utilAfter}% · 待容器平台执行回执` }
+      const art = admitted.find((a) => a.state === '准入通过' && (!version || a.version === version)) ?? admitted[0]
+      return { ok: true, suggest: `在 ${pool.name}（${nodes}）部署 ${short} ${version || m?.ver || image}：${replicas} 副本 × ${per} 卡 = ${need} 卡 · 灰度 ${gray}% · 池利用率 → ${utilAfter}% · 待容器平台执行回执${m ? '' : ` · 准入依据 ${art?.id ?? '—'}（${art?.state ?? '—'}）`}` }
     }
     case 'train_reserve': {
       const cards = Number(o.spec.cards)
@@ -548,6 +609,7 @@ class Engine {
       if (!p.managed.some((m: { kind: string }) => m.kind === 'Skill')) return null
       p.rented = Number(p.rented ?? 0)
       p.jobs = Array.isArray(p.jobs) ? p.jobs : seedState().jobs
+      p.artifacts = Array.isArray(p.artifacts) ? p.artifacts : seedArtifacts.map((a) => ({ ...a }))
       return p
     } catch { return null }
   }
@@ -558,8 +620,9 @@ class Engine {
   subscribe = (l: () => void) => { this.listeners.add(l); return () => { this.listeners.delete(l) } }
 
   /** 外部模块（例外监控、接入配置等）写入运行事件并立即广播，通知中心同步 */
-  announce(level: '一般' | '重要' | '紧急', text: string) {
-    this.state.events = [{ time: nowStr(), level, text }, ...this.state.events].slice(0, 80)
+  /** cause：这条事件属于「哪一个原因」。同一 cause 反复出现时，通知中心只留最新一条要处置 */
+  announce(level: '一般' | '重要' | '紧急', text: string, cause?: string) {
+    this.state.events = [{ time: nowStr(), level, text, cause }, ...this.state.events].slice(0, 80)
     this.emit()
   }
   get = () => this.state
@@ -584,6 +647,18 @@ class Engine {
       st.events.unshift({ time: nowStr(), level: '一般', text: `${o.id} 准入校验未通过：${pre.reason}` })
     } else {
       trace(o, '系统准入校验', '预检通过', pre.suggest ?? '', 'good')
+      if (o.type === 'model_deploy') {
+        const short = String(o.spec.model ?? '').trim()
+        const mm = st.models.find((x) => x.short === short)
+        const v = String(o.spec.version ?? '').trim() || mm?.ver || `镜像口径 ${String(o.spec.image ?? '')}`
+        o.spec.resolvedVersion = v
+        trace(o, '参数快照', '需求参数发起即锁定', `模型 ${short} ${v} · ${st.pools.find((x) => x.id === String(o.spec.pool))?.name ?? String(o.spec.pool)} · ${o.spec.replicas} 副本 × ${Number(o.spec.perReplica) || 1} 卡 · 灰度 ${Number(o.spec.gray ?? 100)}% · 节点 ${String(o.spec.nodes)} · 镜像 ${String(o.spec.image)}；审批与下发只判「能否满足执行」并放行，不改参数——要改就驳回重提（口径：需求以发起为准）`, 'info')
+      }
+      if (BIZ_TYPES.includes(o.type) && !o.auto) {
+        o.status = 'to_biz'
+        trace(o, '流程门禁', '进入业务管理审批', `${BIZ_APPROVAL_LABEL}：先由业务管理岗确认「需求合理、归口与成本承担、影响面可接受」，确认后才进平台审批；平台审批只判能否满足执行（口径：业务确认要不要，平台确认可不可行）`, 'info')
+        st.events.unshift({ time: nowStr(), level: '一般', text: `${o.id} ${TYPE_LABEL[o.type]}已提交，待业务管理审批（确认业务合理性后才进平台审批）` })
+      }
     }
     this.emit()
     return { order: o, precheck: pre }
@@ -674,31 +749,60 @@ class Engine {
     this.execute(next.id)
   }
 
+  /** 业务管理审批：业务管理岗确认「要不要」（需求合理、归口与成本、影响面），确认后进平台审批 */
+  bizConfirm(id: string, by: string) {
+    const st = this.state
+    const o = st.orders.find((x) => x.id === id)
+    if (!o) return { ok: false as const, reason: '未找到工单' }
+    if (o.status !== 'to_biz') return { ok: false as const, reason: `工单当前是「${ORDER_STATUS_LABEL[o.status]}」，不在业务管理审批环节` }
+    o.status = 'submitted'
+    o.spec.bizBy = by
+    o.spec.bizAt = nowStr()
+    trace(o, `${BIZ_APPROVAL_LABEL} · ${by}`, '业务确认通过', `业务管理岗确认：需求合理、归口 ${o.dept}、成本与影响面可接受 → 转平台审批（平台只判能否满足执行，不改需求参数）`, 'good')
+    st.events.unshift({ time: nowStr(), level: '一般', text: `${o.id} 业务管理审批通过，转入平台审批（判能否满足执行）` })
+    this.emit()
+    return { ok: true as const }
+  }
+
   approve(id: string) {
     const st = this.state
     const o = st.orders.find((x) => x.id === id)
-    if (!o) return
+    if (!o) return { ok: false as const, reason: '未找到工单' }
+    if (o.status === 'to_biz') {
+      trace(o, '平台审批', '拦下 · 业务管理审批未完成', `${BIZ_APPROVAL_LABEL}未确认：先由业务管理岗点「业务确认」再进平台审批（顺序不可绕过）`, 'warn')
+      this.emit()
+      return { ok: false as const, reason: '业务管理审批未完成：先由业务管理岗确认业务合理性，平台审批才开始判能否执行' }
+    }
     const chk = admission(st, o)
     if (!chk.ok) {
+      if (EXTERNAL_TYPES.includes(o.type)) {
+        // 部署类工单：审批只回答「当前能否满足执行」。不满足 → 工单保持待审批挂起，
+        // 不下发容器平台；是等资源还是驳回改参，由管理员决定（需求参数发起时已锁定，审批不重新选参）
+        trace(o, '运营主管', '审批挂起 · 执行条件不满足', `${chk.reason} · 工单保持「待审批」：资源到位后可再点审批；要改需求参数请驳回由申请方重提（参数以发起时锁定的为准）`, 'warn')
+        st.events.unshift({ time: nowStr(), level: '重要', text: `${o.id} 审批未过：当前无法满足执行（${chk.reason}）· 工单挂起待审批，未下发容器平台` })
+        this.emit()
+        return { ok: false as const, hold: true as const, reason: chk.reason }
+      }
       o.status = 'rejected'
       o.decidedAt = Date.now()
       o.decidedBy = '运营主管'
       o.rejectReason = chk.reason
       trace(o, '运营主管', '审批驳回', chk.reason!, 'bad')
       this.emit()
-      return
+      return { ok: false as const, reason: chk.reason }
     }
     o.status = 'approved'
     o.decidedAt = Date.now()
     o.decidedBy = '运营主管'
     trace(o, '运营主管', '审批通过', chk.suggest ?? '准入计算通过', 'good')
     if (EXTERNAL_TYPES.includes(o.type)) {
-      o.trace.push({ time: nowStr(), actor: '流程门禁', action: '等待下发与执行回执', detail: '这类工单由容器平台 / 运维执行：审批通过后可下发，回执到位才生效', tone: 'info' })
-      st.events.unshift({ time: nowStr(), level: '一般', text: `${o.id} 已审批通过，等待下发外部执行与回执（未回执前不生效、不占卡位）` })
+      o.trace.push({ time: nowStr(), actor: '流程门禁', action: '等待下发与执行回执', detail: '审批结论＝当前能满足执行。下发前还会按最新资源再验一次；下发后由容器平台按工单锁定参数执行，回执到位才生效', tone: 'info' })
+      st.events.unshift({ time: nowStr(), level: '一般', text: `${o.id} 已审批通过（满足执行），等待下发外部执行与回执（未回执前不生效、不占卡位）` })
       this.emit()
-      return
+      return { ok: true as const, suggest: chk.suggest }
     }
     this.execute(id)
+    return { ok: true as const, suggest: chk.suggest }
   }
 
   reject(id: string, reason: string) {
@@ -727,7 +831,9 @@ class Engine {
       if (busy) { this.enqueue(st, o, 'busy'); this.emit(); return }
       if (!this.activeSlot() && !o.auto) { this.enqueue(st, o, 'noslot'); this.emit(); return }
     }
-    const chk = admission(st, o)
+    // 外部执行已回执的单：容器平台已按锁定参数执行完毕，平台按回执如实登记，不再二次拦执行；
+    // 其余单执行前仍按当前资源重验
+    const chk = externallyDone ? { ok: true as const, suggest: '' } : admission(st, o)
     if (!chk.ok) { o.status = 'rejected'; o.rejectReason = chk.reason; trace(o, '执行引擎', '执行前校验失败', chk.reason!, 'bad'); this.emit(); return }
     o.status = 'running'
     o.executedAt = Date.now()
@@ -775,16 +881,23 @@ class Engine {
     this.pumpQueue()
   }
 
-  /** 模型部署工单：审批通过后下发给容器平台执行，回执到位才生效（平台不直接下发部署） */
+  /** 模型部署工单：审批通过后下发给容器平台按「发起时锁定参数」执行，回执到位才生效（平台不代为部署） */
   dispatch(id: string) {
     const st = this.state
     const o = st.orders.find((x) => x.id === id)
     if (!o) return { ok: false as const, reason: '未找到工单' }
     if (!EXTERNAL_TYPES.includes(o.type)) return { ok: false as const, reason: '只有模型部署类工单需要下发外部执行并等回执' }
     if (o.status !== 'approved') return { ok: false as const, reason: `工单当前是「${ORDER_STATUS_LABEL[o.status]}」，须先审批通过才能下发执行` }
+    const chk = admission(st, o)
+    if (!chk.ok) {
+      trace(o, '运营值班', '下发拦下 · 按最新资源重验不满足执行', `${chk.reason} · 未下发容器平台；审批结论按审批时点资源，资源变化后以本次重验为准，条件恢复可再下发`, 'warn')
+      st.events.unshift({ time: nowStr(), level: '重要', text: `${o.id} 下发前重验不满足执行（${chk.reason}）· 已拦下未下发，资源到位后可再下发` })
+      this.emit()
+      return { ok: false as const, reason: `下发前重验：当前无法满足执行 —— ${chk.reason}` }
+    }
     o.status = 'external'
-    trace(o, '运营值班', '已下发容器平台执行', `等待执行回执 · 目标节点 ${String(o.spec.nodes ?? '未指定')} · 镜像 ${String(o.spec.image ?? '未指定')}`, 'info')
-    st.events.unshift({ time: nowStr(), level: '一般', text: `${o.id} ${TYPE_LABEL[o.type]}已下发容器平台执行，等待执行回执（未回执前卡位不占用、副本不变）` })
+    trace(o, '运营值班', '已下发容器平台执行', `按工单发起锁定参数执行 · 模型 ${String(o.spec.model)} ${String(o.spec.resolvedVersion ?? o.spec.version ?? '沿用当前')} · ${Number(o.spec.replicas)} 副本 × ${Number(o.spec.perReplica) || 1} 卡 · 灰度 ${Number(o.spec.gray ?? 100)}% · 目标节点 ${String(o.spec.nodes ?? '未指定')} · 镜像 ${String(o.spec.image ?? '未指定')} · 等待执行回执`, 'info')
+    st.events.unshift({ time: nowStr(), level: '一般', text: `${o.id} ${TYPE_LABEL[o.type]}已按锁定参数下发容器平台执行，等待执行回执（未回执前卡位不占用、副本不变）` })
     this.emit()
     return { ok: true as const }
   }
@@ -1119,6 +1232,8 @@ function describeTarget(st: EngineState, type: OrderType, spec: Record<string, n
   if (type === 'model_deploy') return `${String(spec.model)} → ${st.pools.find((p) => p.id === String(spec.pool))?.name ?? String(spec.pool)}`
   if (type === 'train_reserve') return String(spec.name)
   if (type === 'train_release') return String(spec.jobId)
+  if (type === 'weight_register') return `${String(spec.model)} ${String(spec.version)}`
+  if (type === 'model_admission') return String(spec.artifactId)
   return ''
 }
 function describeAmount(type: OrderType, spec: Record<string, number | string | boolean>) {
@@ -1141,6 +1256,8 @@ function describeAmount(type: OrderType, spec: Record<string, number | string | 
   if (type === 'model_deploy') return `${spec.replicas} 副本 × ${Number(spec.perReplica) || 1} 卡 · 灰度 ${Number(spec.gray ?? 100)}%`
   if (type === 'train_reserve') return `${spec.cards} 卡 × ${spec.hours} 小时`
   if (type === 'train_release') return '归还卡位'
+  if (type === 'weight_register') return `${String(spec.origin ?? '内部训练')} · 哈希基准待核`
+  if (type === 'model_admission') return '准入审核'
   return ''
 }
 
@@ -1186,7 +1303,27 @@ function applyEffect(st: EngineState, o: Order) {
         st.models.push({ name: `${short} · 内网部署`, short, pool: pool.id, replicas, perReplica: per, ver: version, versions: [version], state: '运行中' })
       }
       o.spec.prevPoolCards = pool.cards
+      const art = (st.artifacts ?? []).find((a) => a.model === short && a.state === '准入通过' && (!version || a.version === version)) ?? (st.artifacts ?? []).find((a) => a.model === short && a.state === '准入通过')
+      if (art) { o.spec.artifactId = art.id; art.state = '已部署'; trace(o, '模型资产服务', '准入权重置为已部署', `${art.id}（${art.model} ${art.version}）：可部署清单核销一条，权重留档以备审计（原文 2.7-2）`, 'info') }
       trace(o, '容器平台', '部署执行回执已回填', `实例 ${String(o.spec.instances ?? '未提供清单')} · ${String(o.spec.receiptNote ?? '回执无附加说明')} · 目标节点 ${String(o.spec.nodes)}`, 'good')
+      break
+    }
+    case 'weight_register': {
+      const id = `WT-${210 + (st.artifacts ?? []).length}`
+      st.artifacts = [...(st.artifacts ?? []), {
+        id, model: String(o.spec.model), version: String(o.spec.version), origin: String(o.spec.origin ?? '内部训练') as WeightArtifact['origin'],
+        jobId: String(o.spec.jobId ?? ''), source: String(o.spec.source ?? ''), manifest: String(o.spec.manifest ?? ''),
+        hash: String(o.spec.hash ?? ''), savedAt: nowStr(), applicant: o.applicant, dept: o.dept, state: '待审核',
+      }]
+      o.spec.artifactId = id
+      trace(o, '模型资产服务', '权重已保存入库', `${id} · ${String(o.spec.model)} ${String(o.spec.version)} · 哈希基准 ${String(o.spec.hash)} · 进入准入台账（待审核）；登记不等于准入通过（原文 2.4-1）`, 'info')
+      break
+    }
+    case 'model_admission': {
+      const a = (st.artifacts ?? []).find((x) => x.id === String(o.spec.artifactId))!
+      o.spec.prevArtifactState = a.state
+      a.state = '准入通过'
+      trace(o, '模型准入审核', '准入通过', `${a.model} ${a.version}：哈希基准与${a.origin === '内部训练' ? '原训练任务关联' : '来源与文件清单'}核验一致 → 进入可部署清单，部署工单可引用（原文 2.5-1）`, 'good')
       break
     }
     case 'train_reserve': {
@@ -1323,6 +1460,21 @@ function reverseEffect(st: EngineState, o: Order) {
       break
     }
     case 'train_reserve': { st.jobs = (st.jobs ?? []).filter((x) => !((x.name === String(o.spec.name) && x.cards === Number(o.spec.cards) && x.state === '运行中'))) ; break }
+    case 'weight_register': {
+      const idx = (st.artifacts ?? []).findIndex((a) => a.id === String(o.spec.artifactId))
+      if (idx >= 0 && st.artifacts[idx].state !== '已部署') {
+        const [gone] = st.artifacts.splice(idx, 1)
+        trace(o, '模型资产服务', '权重登记已撤销', `${gone.id}（${gone.model} ${gone.version}）从准入台账移除，哈希基准留审计`, 'warn')
+      } else if (idx >= 0) {
+        trace(o, '模型资产服务', '回滚受阻', `${st.artifacts[idx].id} 已部署上线，只能先走模型下线变更再撤权重`, 'bad')
+      }
+      break
+    }
+    case 'model_admission': {
+      const a = (st.artifacts ?? []).find((x) => x.id === String(o.spec.artifactId))
+      if (a && a.state === '准入通过') { a.state = '待审核'; trace(o, '模型准入审核', '准入已撤销', `${a.model} ${a.version} 退回待审核，退出可部署清单；在途部署单执行时会被准入拦下（原文 2.5-1）`, 'warn') }
+      break
+    }
     case 'train_release': {
       const j = st.jobs.find((x) => x.id === String(o.spec.jobId))
       if (j) { j.state = (o.spec.prevJobState as '运行中') ?? '运行中'; j.cards = Number(o.spec.prevJobCards) || j.cards }
@@ -1400,6 +1552,18 @@ function verifyResult(st: EngineState, o: Order) {
   }
   if (o.type === 'replica_scale') { const m = st.models.find((x) => x.short === o.spec.model)!; return `${m.short} 副本 ${m.replicas} 存活 · 健康探针通过` }
   if (o.type === 'weight_adjust') return st.channels.map((c) => `${c.name.split('（')[0]} ${c.weight}%`).join(' · ')
+  if (o.type === 'train_release') {
+    const j = st.jobs.find((x) => x.id === String(o.spec.jobId))
+    return j ? `「${j.name}」卡位 ${j.cards} 卡已归还训练池（空闲 ${poolFree(st, 'train')} 卡）· 产物可在台账「登记权重」进入准入（原文 2.3-5 / 2.4-1）` : '卡位已归还'
+  }
+  if (o.type === 'weight_register') {
+    const a = st.artifacts.find((x) => x.id === String(o.spec.artifactId))
+    return a ? `${a.id} 已保存 · 哈希 ${a.hash} · 台账状态「待审核」（准入通过前不可部署）` : '权重已保存'
+  }
+  if (o.type === 'model_admission') {
+    const a = st.artifacts.find((x) => x.id === String(o.spec.artifactId))
+    return a ? `${a.model} ${a.version} 准入通过 · 已进入可部署清单（部署工单可引用）` : '准入已通过'
+  }
   if (o.type === 'credential_issue') return '凭证已发放 · 配额与审批单一致 · IP 白名单生效'
   if (o.type === 'credential_revoke') return '凭证已吊销 · 关联授权与路由已清理'
   if (o.type === 'access_block' || o.type === 'access_restore') {

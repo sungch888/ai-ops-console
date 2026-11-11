@@ -8,7 +8,28 @@ import { dbRead, dbWrite, dbSeed } from './db'
 
 
 /* ---------------- 通知中心 ---------------- */
-export interface Notif { id: string; time: string; level: '一般' | '重要' | '紧急'; title: string; text: string; channels: string[]; read: boolean; handled: boolean; source: string }
+export interface Notif {
+  id: string; time: string; level: '一般' | '重要' | '紧急'; title: string; text: string; channels: string[]
+  read: boolean; handled: boolean; source: string
+  /** 这条告警属于「哪一个原因」；同 cause 的旧告警自动完成处置，值班员只处理最新一条 */
+  cause?: string
+  /** 写入这条时自动并入了几条同因旧告警 */
+  merged?: number
+  handled_by?: string
+}
+
+export const AUTO_MERGE_BY = '系统自动并入（同因重复报警）'
+
+/** 同一原因又报一次 → 之前没处置的同因通知自动记为已处置（页面上看得见是被谁并的） */
+function mergeSameCause(cause: string, reason: string): number {
+  if (!cause) return 0
+  const n = notifs.filter((x) => !x.handled && x.cause === cause).length
+  if (!n) return 0
+  notifs = notifs.map((x) => (!x.handled && x.cause === cause)
+    ? { ...x, read: true, handled: true, handled_by: AUTO_MERGE_BY, text: `${x.text}（同因重复报警：${reason} · 自动完成处置，不必逐条点）` }
+    : x)
+  return n
+}
 
 export type RouteRules = Record<Notif['level'], string[]>
 
@@ -34,6 +55,18 @@ function loadNotifs(): Notif[] {
 function loadRoutes(): RouteRules {
   try { const r = dbRead(ROUTE_KEY); return r ? JSON.parse(r) as RouteRules : structuredClone(DEFAULT_ROUTES) } catch { return structuredClone(DEFAULT_ROUTES) }
 }
+/** 没显式给 cause 时，从标题+正文推一个「原因指纹」：
+ *  把轮次 / 百分比 / 时间点这类会变的数字抹掉，让「同一个原因、不同读数」落到同一个 cause 上。 */
+function sigOf(title: string, text: string) {
+  const s = `${title}|${text}`
+    .replace(/\d+:\d{2}(:\d{2})?/g, '#')
+    .replace(/第\s*\d+\s*轮/g, '第#轮')
+    .replace(/\d+(\.\d+)?\s*%/g, '#%')
+    .replace(/\s+/g, ' ')
+    .trim()
+  return 'sig:' + s.slice(0, 160)
+}
+
 function persist() {
   try { dbWrite(NOTIF_KEY, JSON.stringify(notifs.slice(0, 60))); dbWrite(ROUTE_KEY, JSON.stringify(routes)) } catch { /* 落库失败已在数据层记录 */ }
 }
@@ -48,10 +81,18 @@ export const notifyStore = {
   get: () => notifs,
   subscribe: (l: () => void) => { nListeners.add(l); return () => { nListeners.delete(l) } },
   routes: () => routes,
-  push(level: Notif['level'], title: string, text: string, source: string) {
-    const n: Notif = { id: `N-${String(seq++).padStart(4, '0')}`, time: nowStr(), level, title, text, channels: routes[level], read: false, handled: false, source }
+  push(level: Notif['level'], title: string, text: string, source: string, cause = '') {
+    const ck = cause || sigOf(title, text)
+    const merged = mergeSameCause(ck, `最新一条已写入（${title}）`)
+    const n: Notif = { id: `N-${String(seq++).padStart(4, '0')}`, time: nowStr(), level, title, text, channels: routes[level], read: false, handled: false, source, cause: ck, merged }
     notifs = [n, ...notifs].slice(0, 60)
     persist(); emitN()
+  },
+  /** 原因已经处理掉了（例外已处置 / 通道已恢复）→ 该原因下未处置的通知一并闭环 */
+  closeCause(cause: string, note = '原因已处置，同因告警一并闭环') {
+    const n = mergeSameCause(cause, note)
+    if (n) emitN()
+    return n
   },
   markRead(id: string) { notifs = notifs.map((n) => (n.id === id ? { ...n, read: true } : n)); persist(); emitN() },
   markAllRead() { notifs = notifs.map((n) => ({ ...n, read: true })); persist(); emitN() },
@@ -65,21 +106,22 @@ export const notifyStore = {
   reset() { notifs = []; routes = structuredClone(DEFAULT_ROUTES); persist(); emitN() },
 }
 
-/** 引擎事件 → 自动产生通知（按等级路由到渠道） */
+/** 引擎事件 → 自动产生通知（按等级路由到渠道）
+ * 注意：此函数需在 App 挂载后显式调用，避免模块加载时的隐式副作用 */
 let knownEvents = 0
-function hookEngineEvents() {
+export function hookEngineEvents() {
   const st = engine.get()
   knownEvents = st.events.length
   engine.subscribe(() => {
     const cur = engine.get().events
     if (cur.length > knownEvents) {
       const fresh = cur.slice(0, cur.length - knownEvents).reverse()
-      fresh.forEach((e) => notifyStore.push(e.level, e.level === '紧急' ? '紧急安全事件' : e.level === '重要' ? '运行异常与调度建议' : '运行提示', e.text, '模型中心 / 算力中心'))
+      fresh.forEach((e) => notifyStore.push(e.level, e.level === '紧急' ? '紧急安全事件' : e.level === '重要' ? '运行异常与调度建议' : '运行提示', e.text, '模型中心 / 算力中心', e.cause || ''))
     }
     knownEvents = cur.length
   })
 }
-hookEngineEvents()
+
 
 export function useNotifs() {
   return useSyncExternalStore(notifyStore.subscribe, notifyStore.get, notifyStore.get)
@@ -106,8 +148,9 @@ export const intStore = {
     connectorStore.setHealth(id, health)
     const it = connectorStore.find(id)
     if (it) {
-      if (health === 'fault') notifyStore.push('重要', `对接中断：${it.name}`, `${MODE_LABEL[it.mode]}通道不可用，${it.dataItems} 停止采集，纳管数据将出现缺口（降级策略：${it.fallback}）。责任方：${it.owner}`, '外部接入配置')
-      if (health === 'ok') notifyStore.push('一般', `对接恢复：${it.name}`, '通道恢复，纳管数据继续采集', '外部接入配置')
+      // 同一条接入反复好坏切换：cause 相同 → 旧的未处置通知自动并入最新一条
+      if (health === 'fault') notifyStore.push('重要', `对接中断：${it.name}`, `${MODE_LABEL[it.mode]}通道不可用，${it.dataItems} 停止采集，纳管数据将出现缺口（降级策略：${it.fallback}）。责任方：${it.owner}`, '外部接入配置', `CONN:${it.id}`)
+      if (health === 'ok') notifyStore.push('一般', `对接恢复：${it.name}`, '通道恢复，纳管数据继续采集（这条接入之前未处置的中断告警已自动闭环）', '外部接入配置', `CONN:${it.id}`)
     }
   },
   setStatus: connectorStore.setStatus,

@@ -16,8 +16,9 @@ for m in re.finditer(r"'(/[^']*)': \[([^\]]*)\]", view[i:j]):
     FOCUS[m.group(1)] = re.findall(r"'([^']+)'", m.group(2))
 
 PAT = re.compile(r"<Panel(?:(?!<Panel).){0,420}?title=(?:\"([^\"]{2,60})\"|'([^']{2,60})'|\{\s*'([^']{2,60})')", re.S)
-nav = (ROOT / 'src' / 'navCatalog.ts').read_text(encoding='utf-8')
-pages = dict.fromkeys(re.findall(r"to: '([^']+)'", nav))
+# S4 起侧栏菜单由 routeTable 派生，navCatalog 里已没有字面 to: —— 菜单入口改为读路由表
+rt = (ROOT / 'src' / 'routeTable.ts').read_text(encoding='utf-8')
+pages = dict.fromkeys(re.findall(r"\{ path: '([^']+)'", rt))
 pages['/more'] = True
 
 bad = 0

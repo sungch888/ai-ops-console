@@ -330,3 +330,84 @@ CREATE TABLE IF NOT EXISTS collect_payloads(
   sources INTEGER NOT NULL DEFAULT 0,   -- 这个类型由几个源合起来的
   at TEXT NOT NULL
 );
+
+-- ---------------------------------------------------------------------------
+-- 操作控制单元（v3.11）：把「已批准的决策」变成「对资源的真实变更」的那一层
+--   口径：工单是唯一执行通道 / 先预检后下发 / 凭证与额度类必须双人执行复核 /
+--         部署分段成功判定 / 自动执行三态（范围内自动·超范围转人工·未获批或建单失败即阻断）
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS operations(
+  id TEXT PRIMARY KEY,                     -- OP-2101
+  code TEXT NOT NULL,                      -- OC-D-03（操作目录编号）
+  target TEXT NOT NULL,                    -- 被操作对象（资源 + 版本）
+  params TEXT NOT NULL DEFAULT '{}',       -- 表单参数（JSON）
+  ticket_id TEXT NOT NULL,                 -- 关联工单（无单不得执行）
+  ticket_kind TEXT NOT NULL,               -- 服务申请单 / 变更单 / 故障处理单 / 问题分析单 / 运营任务单
+  status TEXT NOT NULL,                    -- 见 opctl.STATUS
+  requested_by TEXT NOT NULL, requested_at TEXT NOT NULL,
+  approved_by TEXT, approved_at TEXT, approval_note TEXT,
+  executed_by TEXT, executed_at TEXT,
+  reviewed_by TEXT, reviewed_at TEXT,      -- 双人复核：不得与 executed_by 相同
+  exec_mode TEXT NOT NULL,                 -- 人工 | 平台自动 | 外部执行需回执 | 待确认
+  precheck_id TEXT, impact TEXT,           -- 预检号与影响面（JSON 数组）
+  before_snap TEXT NOT NULL DEFAULT '', after_snap TEXT,
+  urgent INTEGER NOT NULL DEFAULT 0,       -- 紧急通道（不受变更窗口限制，须补审）
+  external_ref TEXT, receipt_note TEXT,
+  queue_pos INTEGER, window_id TEXT, rollback_of TEXT,
+  emergency_due TEXT, emergency_state TEXT,
+  fail_stage TEXT, fail_reason TEXT,
+  created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_ops_status ON operations(status);
+CREATE INDEX IF NOT EXISTS idx_ops_created ON operations(created_at);
+
+CREATE TABLE IF NOT EXISTS op_stages(
+  op_id TEXT NOT NULL, seq INTEGER NOT NULL, name TEXT NOT NULL,
+  state TEXT NOT NULL, reason TEXT, at TEXT,
+  PRIMARY KEY (op_id, seq)
+);
+
+CREATE TABLE IF NOT EXISTS op_trace(
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  op_id TEXT NOT NULL, at TEXT NOT NULL, actor TEXT NOT NULL,
+  gate TEXT NOT NULL, action TEXT NOT NULL, result TEXT NOT NULL,  -- 通过 | 拦下 | 失败 | 记录
+  reason TEXT, detail TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_optrace_op ON op_trace(op_id);
+
+CREATE TABLE IF NOT EXISTS op_windows(
+  id TEXT PRIMARY KEY, scope TEXT NOT NULL, t_from TEXT NOT NULL, t_to TEXT NOT NULL,
+  reason TEXT NOT NULL, status TEXT NOT NULL, by_id TEXT NOT NULL, created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS op_fallbacks(
+  id TEXT PRIMARY KEY, op_id TEXT NOT NULL, title TEXT NOT NULL, detail TEXT NOT NULL,
+  status TEXT NOT NULL, owner TEXT NOT NULL, at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS op_notify(
+  id INTEGER PRIMARY KEY AUTOINCREMENT, op_id TEXT NOT NULL, to_who TEXT NOT NULL,
+  channel TEXT NOT NULL, at TEXT NOT NULL, state TEXT NOT NULL   -- 已发送 | 已送达 | 未送达
+);
+
+-- 逐账号操作级权限（原文 1.3：不把同角色账号的权限绑成同一集合；权限变更须关联工单）
+CREATE TABLE IF NOT EXISTS op_perms(
+  account_id TEXT NOT NULL, perm TEXT NOT NULL, scope TEXT NOT NULL DEFAULT 'org',
+  granted_by TEXT NOT NULL, ticket_id TEXT NOT NULL, granted_at TEXT NOT NULL, revoked_at TEXT,
+  PRIMARY KEY (account_id, perm)
+);
+CREATE TABLE IF NOT EXISTS op_perm_changes(
+  id INTEGER PRIMARY KEY AUTOINCREMENT, at TEXT NOT NULL, account_id TEXT NOT NULL,
+  perm TEXT NOT NULL, before_val TEXT NOT NULL, after_val TEXT NOT NULL,
+  actor TEXT NOT NULL, ticket_id TEXT NOT NULL, scope TEXT
+);
+CREATE TABLE IF NOT EXISTS op_meta(
+  key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS op_conn(
+  op_id TEXT PRIMARY KEY, connector TEXT NOT NULL,
+  plan_id TEXT, ext_txn_id TEXT, task_id TEXT, action TEXT NOT NULL,
+  stage_names TEXT NOT NULL DEFAULT '[]',
+  dispatched_at TEXT NOT NULL, updated_at TEXT NOT NULL
+);

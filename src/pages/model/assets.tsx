@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Kpi, Panel, PageHead, Badge, State, Table, Progress, Callout, Tabs, fmt } from '../../components/ui'
+import { Kpi, Panel, PageHead, Badge, State, Table, Progress, Callout, Tabs, fmtCN } from '../../components/ui'
 import { models, lifecycleStages } from '../../data/mock'
 import { useEngine, engine, TYPE_LABEL, BASIS_OPTS } from '../../engine/engine'
 import { usePerm, useSession } from '../../engine/auth'
@@ -98,7 +98,7 @@ export default function Assets() {
                     <span className="num">{m.util}%</span>
                   </div>
                 </div>,
-                m.tokens > 0 ? <span className="num">{fmt(m.tokens)}</span> : <span className="muted">—</span>,
+                m.tokens > 0 ? <span className="num">{fmtCN(m.tokens)}</span> : <span className="muted">—</span>,
                 (() => {
                   const em = engineModels.find((x) => m.base.includes(x.short))
                   return em && em.state === '已下线' ? <Badge tone="muted">已下线 · 已摘除目录</Badge> : <State s={m.status} />

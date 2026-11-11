@@ -2,12 +2,14 @@ import React, { useEffect, useState } from 'react'
 import { HashRouter, Routes, Route, useLocation, useNavigate, Navigate } from 'react-router-dom'
 import { auth, useSession, useMatrix, ROLE_LABEL, type PermKey } from './engine/auth'
 import { useExceptions } from './engine/exceptions'
+import { alertHref, excKey, Jump } from './engine/alertJump'
 import { useUnread } from './engine/ops'
 import { liveAlertStore, startLiveAlertPoll, useLiveAlertBadge, useLiveAlerts } from './engine/liveAlerts'
 import { THEMES, setTheme, useTheme } from './engine/ui'
 import { isNavHidden, useView } from './engine/view'
 import { telemetryStore } from './engine/telemetry'
 import { useDbStatus } from './engine/db'
+import { ErrorBoundary } from './components/ErrorBoundary'
 import './engine/alerts'
 
 /* ---------- icons ---------- */
@@ -42,8 +44,13 @@ const ICONS: Record<string, string> = {
 
 /* ---------- nav config ---------- */
 import { NAV, ROUTE_PERM } from './navCatalog'
+import { ROUTE_TABLE, LoginPage } from './routeTable'
 
 const TITLES: Record<string, string> = {
+  '/ops/opctl': '操作控制 · 操作目录与发起',
+  '/ops/opctl-queue': '操作控制 · 执行队列与变更窗口',
+  '/ops/opctl-audit': '操作控制 · 操作审计与回退',
+  '/ops/opctl-perm': '操作控制 · 操作权限（逐账号）',
   '/': '运营总览',
   '/more': '正式实施再启用的功能（演示档收起）',
   '/briefing': '投屏汇报首页（16:9 · 5 页）',
@@ -105,48 +112,7 @@ function useClock() {
   return now
 }
 
-const P_MORE = React.lazy(() => import('./pages/more'))
-const P_OVERVIEW = React.lazy(() => import('./pages/overview'))
-const P_C_OVERVIEW = React.lazy(() => import('./pages/compute/overview'))
-const P_C_SCHEDULE = React.lazy(() => import('./pages/compute/schedule'))
-const P_C_STORAGE = React.lazy(() => import('./pages/compute/storage'))
-const P_M_ASSETS = React.lazy(() => import('./pages/model/assets'))
-const P_M_GATEWAY = React.lazy(() => import('./pages/model/gateway'))
-const P_M_ENGINE = React.lazy(() => import('./pages/model/engine'))
-const P_M_CRED = React.lazy(() => import('./pages/model/credentials'))
-const P_M_PERSONAL = React.lazy(() => import('./pages/model/personal'))
-const P_M_FINE = React.lazy(() => import('./pages/model/fineTune'))
-const P_M_TRACE = React.lazy(() => import('./pages/model/trace'))
-const P_M_AUDIT = React.lazy(() => import('./pages/model/audit'))
-const P_M_SEC = React.lazy(() => import('./pages/model/security'))
-const P_A_MARKET = React.lazy(() => import('./pages/app/market'))
-const P_A_AGENTS = React.lazy(() => import('./pages/app/agents'))
-const P_A_KB = React.lazy(() => import('./pages/app/kb'))
-const P_A_TOOLS = React.lazy(() => import('./pages/app/tools'))
-const P_A_TEMPLATES = React.lazy(() => import('./pages/app/templates'))
-const P_A_SEC = React.lazy(() => import('./pages/app/security'))
-const P_A_ACCT = React.lazy(() => import('./pages/app/accounts'))
-const P_OPS = React.lazy(() => import('./pages/ops/analytics'))
-const P_OPS_WORKFLOW = React.lazy(() => import('./pages/ops/workflow'))
-const P_OPS_ALERTS = React.lazy(() => import('./pages/ops/alertRules'))
-const P_OPS_NOTIF = React.lazy(() => import('./pages/ops/notifications'))
-const P_OPS_INT = React.lazy(() => import('./pages/ops/integrations'))
-const P_LOGIN = React.lazy(() => import('./pages/login'))
-const P_BRIEF = React.lazy(() => import('./pages/briefing'))
-const P_NETWORK = React.lazy(() => import('./pages/network'))
-const P_GOVERN = React.lazy(() => import('./pages/govern'))
-const P_COMPUTE_EXC = React.lazy(() => import('./pages/compute/exceptions'))
-const P_C_CARDS = React.lazy(() => import('./pages/compute/cards'))
-const P_M_DEPLOY = React.lazy(() => import('./pages/model/deploy'))
-const P_M_MONITOR = React.lazy(() => import('./pages/model/monitor'))
-const P_M_LITELLM = React.lazy(() => import('./pages/model/litellm'))
-const P_M_SAFETY = React.lazy(() => import('./pages/model/safetyFlow'))
-const P_A_DIFY = React.lazy(() => import('./pages/app/dify'))
-const P_OPS_APPLY = React.lazy(() => import('./pages/ops/apply'))
-const P_OPS_RECORDS = React.lazy(() => import('./pages/ops/records'))
-const P_ACCOUNT = React.lazy(() => import('./pages/account'))
-const P_OPS_SETTINGS = React.lazy(() => import('./pages/ops/settings'))
-const P_OPS_COMMANDS = React.lazy(() => import('./pages/ops/commands'))
+
 
 function Shell() {
   const loc = useLocation()
@@ -164,6 +130,17 @@ function Shell() {
   useEffect(() => { startLiveAlertPoll(20) }, [])
   const excList = useExceptions()
   const excOpen = excList.filter((e) => e.status === '待分析' && e.severity !== '中').length
+  // 红/黄提示点下去要落到具体那一条：挑最该处理的那条（未处置的真实告警 / 最严重的未分析例外）
+  const pickAlert = liveList.find((a) => !a.handled) || liveList[0] || null
+  const pickExc = excList.find((e) => e.status === '待分析' && e.severity === '紧急')
+    ?? excList.find((e) => e.status === '待分析' && e.severity === '高')
+    ?? excList.find((e) => e.status === '待分析') ?? null
+  const view = useView()   // hook 必须无条件调用：放在条件返回之前，否则登录后 hook 数量变化会崩溃
+  const navHref = (to: string) => {
+    if (to === '/ops/notifications' && pickAlert) return alertHref(Jump.notification(pickAlert.id, '去处置这条告警：' + pickAlert.title.slice(0, 40)))
+    if (to === '/compute/exceptions' && pickExc) return alertHref(Jump.exceptionKey(pickExc.key, '去分析这条例外：' + pickExc.target))
+    return to
+  }
   const db = useDbStatus()
   const dbLabel = db.status === 'online' ? '数据已存库'
     : db.status === 'saving' ? '写入中 ' + db.pending
@@ -172,9 +149,8 @@ function Shell() {
     : '连接数据服务…'
   const dbBad = db.status === 'failed' || db.status === 'offline'
 
-  if (!acc) return <P_LOGIN />
+  if (!acc) return <LoginPage />
 
-  const view = useView()
   const allowed = (to: string) => to === '/account' || matrix[acc.role].view.includes(ROUTE_PERM[to] ?? 'overview')
   const visible = (to: string) => to === '/more' || allowed(to) && !isNavHidden(to)
   const hiddenCount = NAV.reduce((n, g) => n + g.items.filter((it) => allowed(it.to) && isNavHidden(it.to)).length, 0)
@@ -205,12 +181,18 @@ function Shell() {
                 <div
                   key={it.to}
                   className={`nav-item ${loc.pathname === it.to ? 'active' : ''}`}
-                  onClick={() => nav(it.to)}
+                  onClick={() => nav(navHref(it.to))}
                 >
                   {I(ICONS[it.icon])}
                   <span>{it.label}</span>
-                  {it.to === '/ops/notifications' && liveBadge > 0 ? <span className="tag red" style={{ marginLeft: 'auto' }}>{unread}</span> : null}
-                  {it.to === '/compute/exceptions' && excOpen > 0 ? <span className="tag red" style={{ marginLeft: 'auto' }}>{excOpen}</span> : null}
+                  {it.to === '/ops/notifications' && liveBadge > 0
+                    ? <span className="tag red alert-jump" style={{ marginLeft: 'auto' }}
+                        title={'点过去直接处置最该处理的一条' + (pickAlert ? '：' + pickAlert.title.slice(0, 40) : '')}>{unread}</span>
+                    : null}
+                  {it.to === '/compute/exceptions' && excOpen > 0
+                    ? <span className="tag red alert-jump" style={{ marginLeft: 'auto' }}
+                        title={'点过去直接分析最严重的一条' + (pickExc ? '：' + pickExc.target : '')}>{excOpen}</span>
+                    : null}
                 </div>
               ))}
             </div>
@@ -253,8 +235,10 @@ function Shell() {
             <span
               className="row gap6"
               style={{ cursor: 'pointer', position: 'relative' }}
-              onClick={() => nav('/ops/notifications')}
-              title={'通知中心 · 真实告警待处置 ' + liveBadge + ' 条'
+              onClick={() => nav(navHref('/ops/notifications'))}
+              title={liveBadge > 0 && pickAlert
+                ? '点过去直接落到这条告警的处置入口：' + pickAlert.title.slice(0, 60)
+                : '通知中心 · 真实告警待处置 ' + liveBadge + ' 条'
                 + (liveList.length ? '（最近：' + liveList[0].level + ' ' + liveList[0].title.slice(0, 40) + '）' : '')
                 + (liveAlertStore.error() ? ' · ' + liveAlertStore.error() : '')}
             >
@@ -263,7 +247,7 @@ function Shell() {
                 <path d="M10.3 21a2 2 0 003.4 0" />
               </svg>
               {liveBadge > 0
-                ? <span className="tag red">真实告警待处置 {liveBadge}</span>
+                ? <span className="tag red alert-jump">真实告警待处置 {liveBadge} ›</span>
                 : <span className="tiny faint">无待处置告警</span>}
               {liveList.length ? (
                 <span
@@ -306,47 +290,9 @@ function Shell() {
             </div>
           ) : (
           <Routes>
-            <Route path="/more" element={<P_MORE />} />
-            <Route path="/" element={<P_OVERVIEW />} />
-            <Route path="/briefing" element={<P_BRIEF />} />
-            <Route path="/network" element={<P_NETWORK />} />
-            <Route path="/govern" element={<P_GOVERN />} />
-            <Route path="/compute/exceptions" element={<P_COMPUTE_EXC />} />
-            <Route path="/compute/cards" element={<P_C_CARDS />} />
-            <Route path="/model/deploy" element={<P_M_DEPLOY />} />
-            <Route path="/model/monitor" element={<P_M_MONITOR />} />
-            <Route path="/model/litellm" element={<P_M_LITELLM />} />
-            <Route path="/model/safety-flow" element={<P_M_SAFETY />} />
-            <Route path="/app/dify" element={<P_A_DIFY />} />
-            <Route path="/ops/apply" element={<P_OPS_APPLY />} />
-            <Route path="/ops/records" element={<P_OPS_RECORDS />} />
-            <Route path="/account" element={<P_ACCOUNT />} />
-            <Route path="/ops/settings" element={<P_OPS_SETTINGS />} />
-            <Route path="/ops/commands" element={<P_OPS_COMMANDS />} />
-            <Route path="/compute/overview" element={<P_C_OVERVIEW />} />
-            <Route path="/compute/schedule" element={<P_C_SCHEDULE />} />
-            <Route path="/compute/storage" element={<P_C_STORAGE />} />
-            <Route path="/model/assets" element={<P_M_ASSETS />} />
-            <Route path="/model/gateway" element={<P_M_GATEWAY />} />
-            <Route path="/model/engine" element={<P_M_ENGINE />} />
-            <Route path="/model/credentials" element={<P_M_CRED />} />
-            <Route path="/model/personal" element={<P_M_PERSONAL />} />
-            <Route path="/model/fineTune" element={<P_M_FINE />} />
-            <Route path="/model/trace" element={<P_M_TRACE />} />
-            <Route path="/model/audit" element={<P_M_AUDIT />} />
-            <Route path="/model/security" element={<P_M_SEC />} />
-            <Route path="/app/market" element={<P_A_MARKET />} />
-            <Route path="/app/agents" element={<P_A_AGENTS />} />
-            <Route path="/app/kb" element={<P_A_KB />} />
-            <Route path="/app/tools" element={<P_A_TOOLS />} />
-            <Route path="/app/templates" element={<P_A_TEMPLATES />} />
-            <Route path="/app/security" element={<P_A_SEC />} />
-            <Route path="/app/accounts" element={<P_A_ACCT />} />
-            <Route path="/ops/analytics" element={<P_OPS />} />
-            <Route path="/ops/workflow" element={<P_OPS_WORKFLOW />} />
-            <Route path="/ops/alert-rules" element={<P_OPS_ALERTS />} />
-            <Route path="/ops/notifications" element={<P_OPS_NOTIF />} />
-            <Route path="/ops/integrations" element={<P_OPS_INT />} />
+            {ROUTE_TABLE.map((r) => (
+              <Route key={r.path} path={r.path} element={<r.Comp />} />
+            ))}
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
           )}
@@ -359,9 +305,25 @@ function Shell() {
 export default function App() {
   return (
     <HashRouter>
+      <AppInner />
+    </HashRouter>
+  )
+}
+
+/** 路由内的部分：错误边界需要知道当前路由（换路由后自动清掉上次的错误重试） */
+function AppInner() {
+  const loc = useLocation()
+  const acc = useSession()
+  // 路由 + 当前账号：任一变化都让错误边界清空状态重试一次
+  // （登录 / 退出后如果上次是崩的，这里会自动重新渲染一次）
+  const routeKey = loc.pathname + '|' + (acc?.id ?? 'anon')
+  return (
+    // 出错兜底：渲染时抛错若没人接住，React 会把整棵树卸载 —— 页面就成了一片黑。
+    // 这里接住它，显示能看懂的错误面板；换路由后自动重试一次。
+    <ErrorBoundary resetKey={routeKey} title="页面渲染出错" hint="刷新页面通常能恢复；如果反复出现，把控制台里的报错发出来定位。">
       <React.Suspense fallback={<div className="empty">加载中…</div>}>
         <Shell />
       </React.Suspense>
-    </HashRouter>
+    </ErrorBoundary>
   )
 }

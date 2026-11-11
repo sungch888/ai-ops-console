@@ -1,6 +1,7 @@
 import type { CSSProperties } from 'react'
-import { Kpi, Panel, PageHead, Badge, State, Table, Callout } from '../../components/ui'
+import { Kpi, Panel, PageHead, Badge, State, Table, Callout, AlertBadge } from '../../components/ui'
 import { apps } from '../../data/mock'
+import { useAlertPick, usePickFlash } from '../../engine/alertJump'
 
 /* 应用广场（演示数据来自 mock.ts，外部系统已虚拟接入） */
 
@@ -58,6 +59,11 @@ const RELEASE_TIME: Record<string, string> = {
 
 export default function Market() {
   const gray = apps.filter((a) => a.status === 'gray').length
+  /** 别处点过来：?pick=<应用名> → 高亮「发布管理」里这个应用那一行（灰度 / 全量 / 下线都在那一行） */
+  const pick = useAlertPick()
+  usePickFlash(pick)
+  const releaseRows = apps.filter((a) => RELEASE.includes(a.name))
+  const toRelease = (name: string) => ({ page: '/app/market', pick: name, label: '点过去落到「发布管理」这一行：全量发布 / 下线 / 重新上架都在这里做' })
 
   return (
     <div>
@@ -87,7 +93,7 @@ export default function Market() {
                 <div className="row between">
                   <span className="strong">{a.name}</span>
                   {a.status === 'gray' ? (
-                    <Badge tone="warn">灰度中</Badge>
+                    <AlertBadge tone="warn" jump={toRelease(a.name)}>灰度中</AlertBadge>
                   ) : a.status === 'off' ? (
                     <Badge tone="muted">已下线</Badge>
                   ) : (
@@ -118,12 +124,12 @@ export default function Market() {
           <div className="panel-body">
             <Table
               head={['应用', '等级', '灰度状态', '发布时间', '操作']}
-              rows={apps
-                .filter((a) => RELEASE.includes(a.name))
+              rowKeys={releaseRows.map((a) => a.name)} pick={pick}
+              rows={releaseRows
                 .map((a) => [
                   <span className="strong">{a.name}</span>,
                   a.level === '高保' ? <Badge tone="info">高保</Badge> : <Badge tone="muted">{a.level}</Badge>,
-                  <State s={a.status} />,
+                  a.status === 'gray' ? <AlertBadge tone="warn" jump={toRelease(a.name)}>灰度观察中</AlertBadge> : <State s={a.status} />,
                   <span className="mono small">{RELEASE_TIME[a.name] ?? '—'}</span>,
                   a.status === 'gray' ? (
                     <Btn label="全量发布" tone="good" />

@@ -4,7 +4,7 @@
  *   留哪些摆在侧栏上，是「配置中心 · 演示视图」里的配置项。
  * ===================================================================== */
 import { useNavigate } from 'react-router-dom'
-import { Badge, Callout, PageHead, Panel } from '../components/ui'
+import { Badge, AlertBadge, Callout, PageHead, Panel } from '../components/ui'
 import { DEMO_NAV, setView, useView } from '../engine/view'
 
 /** 与外壳同一份菜单定义（App.tsx 导出），保证这里不会跟侧栏长歪 */
@@ -42,7 +42,7 @@ export default function MorePage() {
                     title={noPerm ? '当前角色没有这个页面的查看权' : hidden ? '演示档已收起 · 点这里进入' : '侧栏上也有'}>
                     {it.label}
                   </button>
-                  {noPerm ? <Badge tone="muted">无查看权</Badge> : hidden ? <Badge tone="warn">演示档收起</Badge> : <Badge tone="good">侧栏在列</Badge>}
+                  {noPerm ? <Badge tone="muted">无查看权</Badge> : hidden ? <AlertBadge tone="warn" jump={{ page: it.to, label: `「${it.label}」在演示档被收起：点过去直接进入这个页面，功能照常在（要长期摆回侧栏在配置中心 · 演示视图勾）` }}>演示档收起</AlertBadge> : <Badge tone="good">侧栏在列</Badge>}
                 </span>
               )
             })}

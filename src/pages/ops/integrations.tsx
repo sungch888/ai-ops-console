@@ -4,16 +4,17 @@
  * 频率 / 超时重试 / 降级策略 / 配额与计费 / 前置条件。虚拟与真实只差 mode 与地址。
  * 其中两项配置会直接改变平台能力：外部算力扩租通道、外部模型渠道开关。
  * ===================================================================== */
-import { useState } from 'react'
-import { Kpi, Panel, PageHead, Badge, State, Table, Callout, Tabs } from '../../components/ui'
+import { useEffect, useState } from 'react'
+import { Kpi, Panel, PageHead, Badge, AlertBadge, State, Table, Callout, Tabs } from '../../components/ui'
 import { Link } from 'react-router-dom'
 import {
   useConnectors, connectorStore, intStore, notifyStore, downloadCsv, readiness, MODE_LABEL,
-  TRANSPORTS, AUTHS, FALLBACKS, KIND_GROUP, rentConfig, llmChannelConfig,
+  TRANSPORTS, AUTHS, FALLBACKS, KIND_GROUP, rentConfig, llmChannelConfig, RENT_ID, LLM_CHANNEL_ID,
   type Connector, type IntStatus, type ConnKind,
 } from '../../engine/ops'
 import { usePerm } from '../../engine/auth'
 import { useEngine, rentInfo } from '../../engine/engine'
+import { Jump, useAlertPick, usePickFlash } from '../../engine/alertJump'
 
 const STATUSES: IntStatus[] = ['已定', '待商定', '待客户方提供']
 const TABS = ['接入配置', '新增接入', '状态清单', '配置字段与导入导出']
@@ -70,9 +71,22 @@ export default function OpsIntegrations() {
   const llm = llmChannelConfig()
   const missing = readiness(cur)
   const readyReal = ints.filter((c) => readiness(c).length === 0).length
+  /* 告警直达口径：本页主键 = 接入 id（Jump.connector 同一口径）。
+     跳进来时不只是高亮那一行，还直接把这条接入载进右边的编辑面板 —— 落点就是能动手的地方 */
+  const jumpPick = useAlertPick()
+  usePickFlash(jumpPick)
+  const connJump = (id: string, label: string) => Jump.connector(id, label)
+  const offList = ints.filter((c) => !c.enabled)
+  const badList = ints.filter((c) => c.health !== 'ok')
+  const pendingList = ints.filter((c) => c.status !== '已定')
 
   const pick = (c: Connector) => { setSel(c.id); setDraft(toDraft(c)); setMsg(null) }
   const set = (patch: Partial<Draft>) => setDraft((d) => ({ ...d, ...patch }))
+  useEffect(() => {
+    if (!jumpPick) return
+    const hit = connectorStore.find(jumpPick)
+    if (hit) { setSel(hit.id); setDraft(toDraft(hit)) }
+  }, [jumpPick])
 
   const save = () => {
     const quota: Connector['quota'] = cur.quota
@@ -127,7 +141,7 @@ export default function OpsIntegrations() {
         extra={
           <>
             <Badge tone="info">虚拟模拟 {ints.filter((c) => c.mode === 'virtual').length} / 真实接口 {ints.filter((c) => c.mode === 'real').length}</Badge>
-            <Badge tone="warn">{ints.filter((c) => !c.enabled).length} 项通道未启用</Badge>
+            {offList.length ? <AlertBadge tone="warn" jump={connJump(offList[0].id, `通道未启用的第一条是「${offList[0].name}」：点过去落到这一行，启用它 / 填地址 / 切真实接口都在这一行（编辑面板会直接载它）`)}>{offList.length} 项通道未启用</AlertBadge> : <Badge tone="good">通道全部已启用</Badge>}
             <button className="btn sm ghost" onClick={() => { connectorStore.reset(); pick(connectorStore.find('r-gpu')!); setMsg({ tone: 'good', text: '接入配置已恢复默认演示值' }) }}>恢复默认配置</button>
           </>
         }
@@ -143,8 +157,8 @@ export default function OpsIntegrations() {
       <div className="grid g-6">
         <Kpi label="接入配置项" value={ints.length} unit="条" foot={`外部系统 ${sysCount} · 外部资源 ${resCount}`} />
         <Kpi label="可直接切真实接口" value={readyReal} unit="条" foot="就绪校验通过（地址 + 状态 + 前置条件）" />
-        <Kpi label="扩租算力额度" value={rent.quota} unit="卡" foot={<>{rent.enabled ? <span className="up">✔ 通道已启用</span> : <span className="down">● 未启用</span>} · {rent.price} 元/卡/日 · 已开 {engRent.used} 卡 · 剩 {engRent.available} 卡</>} />
-        <Kpi label="外部 Token 配额" value={llm.quotaTokensWan.toLocaleString('zh-CN')} unit="万/日" foot={`${llm.price} 元/万 token · ${llm.enabled ? '渠道已启用' : '渠道未启用（权重不可上调）'}`} />
+        <Kpi label="扩租算力额度" value={rent.quota} unit="卡" foot={<>{rent.enabled ? <span className="up">✔ 通道已启用</span> : <span className="down">● 未启用</span>} · {rent.price} 元/卡/日 · 已开 {engRent.used} 卡 · 剩 {engRent.available} 卡</>} jump={rent.enabled ? undefined : connJump(RENT_ID, '扩租通道未启用：点过去落到「外部算力扩租池」这一行，启用通道 / 加额度 / 勾前置条件都在这一行')} />
+        <Kpi label="外部 Token 配额" value={llm.quotaTokensWan.toLocaleString('zh-CN')} unit="万/日" foot={`${llm.price} 元/万 token · ${llm.enabled ? '渠道已启用' : '渠道未启用（权重不可上调）'}`} jump={llm.enabled ? undefined : connJump(LLM_CHANNEL_ID, '外部模型渠道未启用：点过去落到这条接入那一行，权重上调的前提（启用通道）在这一行')} />
         <Kpi label="平均采集频率" value={Math.round(ints.reduce((s, c) => s + (c.intervalSec || 60), 0) / Math.max(1, ints.length))} unit="秒" foot="事件触发按 60 秒折算" />
         <Kpi label="可切协议种类" value={TRANSPORTS.length} unit="种" foot="REST / SOAP / MCP / Kafka / Syslog / 视图 / SFTP / gRPC" />
       </div>
@@ -160,6 +174,7 @@ export default function OpsIntegrations() {
             <Table
               minWidth={1180}
               head={['接入对象', '类别 / 方向', '接入方式', '协议 / 地址', '采集项', '频率 · 超时 · 重试', '降级策略', '配额 / 计费', '状态 · 版本', '通道', '操作']}
+              rowKeys={list.map((c) => c.id)} pick={jumpPick}
               rows={list.map((c) => [
                 <button className="btn sm ghost" style={{ textAlign: 'left', maxWidth: 210 }} onClick={() => pick(c)}><span className="strong small">{c.name}</span></button>,
                 <span className="small">{c.kind}<div className="tiny faint">{c.direction}</div></span>,
@@ -169,8 +184,10 @@ export default function OpsIntegrations() {
                 <span className="num small">{freqLabel(c.intervalSec)}<div className="tiny faint">{c.timeoutMs} ms · 重试 {c.retries}</div></span>,
                 <span className="tag gray">{c.fallback}</span>,
                 <span className="small">{quotaLabel(c)}</span>,
-                <span className="small">{c.status}<div className="tiny faint mono">v{c.version} · {c.updatedAt}</div></span>,
-                <State s={c.enabled ? (c.health === 'ok' ? 'good' : c.health === 'warn' ? 'warn' : 'fault') : 'off'} />,
+                <span className="small">{c.status}<div className="tiny faint mono">v{c.version} · {c.updatedAt}</div>{c.status !== '已定' ? <AlertBadge tone={c.status === '待商定' ? 'warn' : 'bad'} jump={connJump(c.id, `接口状态「${c.status}」（卡点：${c.blocking}）：点过去落到这一行，改状态 / 勾前置条件 / 填地址都在这一行`)}>接口{c.status}</AlertBadge> : null}</span>,
+                c.enabled
+                  ? (c.health === 'ok' ? <State s="good" /> : <AlertBadge tone={c.health === 'warn' ? 'warn' : 'bad'} jump={connJump(c.id, `通道${c.health === 'warn' ? '异常' : '中断'}（${c.name}）：点过去落到这一行，「探活」与「配置」都在这一行（右侧面板会直接载它）`)}>{c.health === 'warn' ? '通道异常' : '通道中断'}</AlertBadge>)
+                  : <AlertBadge tone="warn" jump={connJump(c.id, `「${c.name}」通道未启用：点过去落到这一行，「配置」按钮就在这一行（右侧面板会直接载它，启用它 / 填地址都在那里）`)}>通道未启用</AlertBadge>,
                 perm.manage ? (
                   <div className="row gap6">
                     <button className="btn sm" onClick={() => { pick(c); setTab('接入配置') }}>配置</button>
@@ -393,6 +410,7 @@ export default function OpsIntegrations() {
               <Table
                 minWidth={900}
                 head={['接入对象', '类型', '接口状态', '卡点（blocking）', '责任方', '通道状态', '操作']}
+                rowKeys={ints.map((c) => c.id)} pick={jumpPick}
                 rows={ints.map((c) => [
                   <span className="strong small">{c.name}</span>,
                   <span className="tag gray">{c.kind}</span>,
@@ -400,10 +418,12 @@ export default function OpsIntegrations() {
                     <select className="btn sm" value={c.status} onChange={(e) => connectorStore.setStatus(c.id, e.target.value as IntStatus)}>
                       {STATUSES.map((s) => <option key={s} value={s}>{s}</option>)}
                     </select>
-                  ) : <Badge tone={c.status === '已定' ? 'good' : c.status === '待商定' ? 'warn' : 'bad'}>{c.status}</Badge>,
+                  ) : c.status === '已定' ? <Badge tone="good">已定</Badge> : <AlertBadge tone={c.status === '待商定' ? 'warn' : 'bad'} jump={connJump(c.id, `接口状态「${c.status}」（卡点：${c.blocking}）：点过去落到这一行，与责任方确认后再改状态`)}>{c.status}</AlertBadge>,
                   <span className="tiny" style={{ maxWidth: 320 }}>{c.blocking}</span>,
                   <span className="small faint">{c.owner}</span>,
-                  <State s={c.enabled ? (c.health === 'ok' ? 'good' : c.health === 'warn' ? 'warn' : 'fault') : 'off'} />,
+                  c.enabled
+                    ? (c.health === 'ok' ? <State s="good" /> : <AlertBadge tone={c.health === 'warn' ? 'warn' : 'bad'} jump={connJump(c.id, `通道${c.health === 'warn' ? '异常' : '中断'}（${c.name}）：点过去落到这一行，「恢复通道」按钮就在这一行`)}>{c.health === 'warn' ? '通道异常' : '通道中断'}</AlertBadge>)
+                    : <AlertBadge tone="warn" jump={connJump(c.id, `「${c.name}」通道未启用：点过去落到这一行，并在右侧编辑面板「启用它」/ 填地址 / 勾前置条件`)}>通道未启用</AlertBadge>,
                   perm.manage ? (
                     <div className="row gap6">
                       {c.health === 'fault'
@@ -422,13 +442,13 @@ export default function OpsIntegrations() {
               <div>
                 {ints.filter((c) => c.health !== 'ok').map((c) => (
                   <div key={c.id} style={{ marginBottom: 10 }}>
-                    <div className="row gap6"><span className="small strong">{c.name}</span><State s={c.health === 'warn' ? 'warn' : 'fault'} /></div>
+                    <div className="row gap6"><span className="small strong">{c.name}</span><AlertBadge tone={c.health === 'warn' ? 'warn' : 'bad'} jump={connJump(c.id, `这条接入采不到数（${c.name}）：点过去落到这一行，探活 / 恢复通道 / 看降级口径都在这一行`)}>{c.health === 'warn' ? '链路异常' : '链路中断'}</AlertBadge></div>
                     <div className="tiny" style={{ color: 'var(--bad-text)', marginTop: 3 }}>缺口：{c.dataItems} · 降级策略：{c.fallback}</div>
                   </div>
                 ))}
               </div>
             )}
-            <Callout warn text="待定接口在这里变成可视化议题清单，确认为「已定」后，同一接入在配置页即可切换真实通道，不需要再改平台代码。" />
+            <Callout warn jump={pendingList.length ? connJump(pendingList[0].id, `还没确认为「已定」的第一条是「${pendingList[0].name}」（卡点：${pendingList[0].blocking}）：点过去落到这一行，改接口状态 / 勾前置条件都在这一行`) : undefined} text="待定接口在这里变成可视化议题清单，确认为「已定」后，同一接入在配置页即可切换真实通道，不需要再改平台代码。" />
           </Panel>
         </div>
       ) : null}
@@ -482,9 +502,9 @@ export default function OpsIntegrations() {
             minWidth={900}
             head={['配置项', '当前值', '对平台的真实影响', '怎么现场验证']}
             rows={[
-              [<span className="small strong">外部算力扩租通道</span>, <span className="small">{rent.enabled ? '已启用' : '未启用'} · 额度 {rent.quota} 卡 · {rent.price} 元/卡/日 · 已开 {engRent.used} 卡 / 剩 {engRent.available} 卡</span>, <span className="small">启用后，本地空闲不足时扩容工单可用「外部扩租」补足卡位，成本按这里的单价计入外部成本；未启用则扩容被准入拒绝并写明缺什么</span>, <Link to="/ops/workflow" className="small">去资源调配工作台提交一笔超出空闲的扩容</Link>],
-              [<span className="small strong">外部模型渠道接入</span>, <span className="small">{llm.enabled ? '已启用' : '未启用'} · 配额 {llm.quotaTokensWan.toLocaleString('zh-CN')} 万 token/日 · {llm.price} 元/万 token</span>, <span className="small">未启用时，路由权重不允许上调到外部厂商渠道（准入直接拒），外部 Token 成本随之为 0</span>, <Link to="/model/gateway" className="small">去推理网关做一次权重调整</Link>],
-              [<span className="small strong">通道健康与降级策略</span>, <span className="small">{ints.filter((c) => c.health !== 'ok').length} 项异常 · 降级方式逐条配置</span>, <span className="small">中断后对应纳管页面出现数据缺口提示、生成通知，报表按「保留最近一次」或「标记不可采集」口径出数</span>, <Link to="/app/agents" className="small">去智能体纳管页看缺口提示</Link>],
+              [<span className="small strong">外部算力扩租通道</span>, <span className="small">{rent.enabled ? '已启用' : '未启用'} · 额度 {rent.quota} 卡 · {rent.price} 元/卡/日 · 已开 {engRent.used} 卡 / 剩 {engRent.available} 卡{rent.enabled ? null : <AlertBadge tone="warn" jump={connJump(RENT_ID, '扩租通道未启用：扩容补卡位会被准入拒绝；点过去落到这条接入那一行，启用与加额度都在那一行')}>通道未启用</AlertBadge>}</span>, <span className="small">启用后，本地空闲不足时扩容工单可用「外部扩租」补足卡位，成本按这里的单价计入外部成本；未启用则扩容被准入拒绝并写明缺什么</span>, <Link to="/ops/workflow" className="small">去资源调配工作台提交一笔超出空闲的扩容</Link>],
+              [<span className="small strong">外部模型渠道接入</span>, <span className="small">{llm.enabled ? '已启用' : '未启用'} · 配额 {llm.quotaTokensWan.toLocaleString('zh-CN')} 万 token/日 · {llm.price} 元/万 token{llm.enabled ? null : <AlertBadge tone="warn" jump={connJump(LLM_CHANNEL_ID, '外部渠道未启用：路由权重不允许上调到外部厂商渠道；点过去落到这条接入那一行，启用与配额都在那一行')}>渠道未启用</AlertBadge>}</span>, <span className="small">未启用时，路由权重不允许上调到外部厂商渠道（准入直接拒），外部 Token 成本随之为 0</span>, <Link to="/model/gateway" className="small">去推理网关做一次权重调整</Link>],
+              [<span className="small strong">通道健康与降级策略</span>, <span className="small">{ints.filter((c) => c.health !== 'ok').length} 项异常 · 降级方式逐条配置{badList.length ? ' ' : ''}{badList.length ? <AlertBadge tone={badList.some((c) => c.health === 'fault') ? 'bad' : 'warn'} jump={connJump(badList[0].id, `中断的第一条是「${badList[0].name}」：点过去落到这一行，探活 / 恢复通道都在这一行`)}>有通道中断</AlertBadge> : null}</span>, <span className="small">中断后对应纳管页面出现数据缺口提示、生成通知，报表按「保留最近一次」或「标记不可采集」口径出数</span>, <Link to="/app/agents" className="small">去智能体纳管页看缺口提示</Link>],
             ]}
           />
           <Callout text="这就是「以配置方式解决接入」：今天这些对象是虚拟模拟的数据源，真实资源到位后把 mode 改成真实接口、填地址、勾完前置条件即可，采集实现与费用口径都从配置读；协议与字段在版本迭代里逐版补齐，历史可追溯。" />

@@ -2,11 +2,12 @@
  * 推理引擎运行指标（需求 模型 7：前缀缓存命中率、容器 / 进程监控）
  * 指标由副本、卡位、池利用率、渠道配额与引擎配置推导，配置开关改完即生效
  * ===================================================================== */
-import { Kpi, Panel, PageHead, Badge, State, Table, Callout, Progress } from '../../components/ui'
+import { Kpi, Panel, PageHead, Badge, State, Table, Callout, Progress, AlertBadge } from '../../components/ui'
 import { Chart, CHART_COLORS, AXIS_COLOR, SPLIT_COLOR, TOOLTIP_STYLE, GRID } from '../../components/Chart'
 import { useEngine, engine } from '../../engine/engine'
 import { useInference, inferenceStore, metricsOf, containersOf, clusterSummary, type Quantization } from '../../engine/inference'
 import { usePerm } from '../../engine/auth'
+import { Jump, useAlertPick, usePickFlash, type AlertJump } from '../../engine/alertJump'
 
 export default function EngineMetrics() {
   const st = useEngine()
@@ -15,6 +16,20 @@ export default function EngineMetrics() {
   const ms = metricsOf(st)
   const cs = clusterSummary(st)
   const containers = containersOf(st)
+
+  /* 告警直达口径（本页主键：模型 short / 容器实例名）
+     模型级红 / 黄 → 落「模型级运行指标」那一行：这一行有「重启实例」，扩副本 / 降权重走工作台
+     容器级红 / 黄 → 落「容器与进程监控」那一行：显存吃满 / 冷启动 / 已摘除都在这一行
+     引擎口径未接 → 落「外部对接清单」的 MindIE 指标源那条接入 */
+  const pick = useAlertPick()
+  usePickFlash(pick)
+  const modelJump = (m: { short: string }, label: string): AlertJump => ({ page: '/model/engine', pick: m.short, label })
+  const containerJump = (c: { instance: string }, label: string): AlertJump => ({ page: '/model/engine', pick: c.instance, label })
+  const badCacheModels = ms.filter((m) => m.cacheHit < 35)
+  const worstCache = [...ms].sort((a, b) => a.cacheHit - b.cacheHit)[0]
+  const hotContainers = containers.filter((c) => c.vramGB / c.vramTotal > 0.75)
+  const droppedContainers = containers.filter((c) => c.state === '已摘除')
+  const srcJump = Jump.connector('m-mindie', '去外部对接清单看 MindIE 推理服务指标源这条接入：真实引擎口径与字段清单在这里跟催')
 
   const last = st.history.length ? st.history[st.history.length - 1].util.hp : 60
   const trend = st.history.slice(-12)
@@ -39,14 +54,28 @@ export default function EngineMetrics() {
       <PageHead
         title="推理引擎运行指标"
         desc="前缀缓存命中率 · KV 缓存占用 · 首 Token 时延 · 批处理并发 · 容器与进程监控"
-        extra={<><Badge tone="info">指标由副本 / 卡位 / 利用率推导</Badge><Badge tone="warn">演示口径 · 不接真实推理引擎</Badge></>}
+        extra={<><Badge tone="info">指标由副本 / 卡位 / 利用率推导</Badge><AlertBadge tone="warn" jump={srcJump}>演示口径 · 未接真实推理引擎</AlertBadge></>}
       />
 
       <div className="grid g-6">
         <Kpi label="在线推理实例" value={cs.instances} unit="个" foot={`${cs.models} 个模型 · ${cs.cards} 卡承载`} />
-        <Kpi label="平均前缀缓存命中率" value={cs.cacheHit} unit="%" foot={cfg.prefixCache ? '前缀缓存已开启' : <span className="down">● 前缀缓存已关闭</span>} />
+        <Kpi label="平均前缀缓存命中率" value={cs.cacheHit} unit="%"
+          foot={!cfg.prefixCache
+            ? <span className="down">{`● 前缀缓存已关闭：平均命中率 ${cs.cacheHit}%${badCacheModels.length ? ` · ${badCacheModels.length} 个模型 < 35%` : ''}`}</span>
+            : badCacheModels.length
+              ? <span className="down">{`● ${badCacheModels.length} 个模型命中率 < 35%`}</span>
+              : '前缀缓存已开启'}
+          jump={!cfg.prefixCache && worstCache
+            ? modelJump(worstCache, `到命中率最低的模型（${worstCache.short} ${worstCache.cacheHit}%）那一行：开关在上方「引擎配置」，重启实例就在这一行`)
+            : badCacheModels.length
+              ? modelJump(badCacheModels[0], `到命中率最低的模型（${badCacheModels[0].short} ${badCacheModels[0].cacheHit}%）那一行：重启实例就在这一行`)
+              : undefined} />
         <Kpi label="平均首 Token 时延" value={cs.ttft} unit="ms" foot={`批处理窗口 ${cfg.batchWindowMs}ms · 最大并发 ${cfg.maxNumSeqs}`} />
-        <Kpi label="KV 缓存占用" value={cs.kvUsed} unit="GB" foot={`可用 ${cs.kvTotal} GB · 量化 ${cfg.quantization}`} />
+        <Kpi label="KV 缓存占用" value={cs.kvUsed} unit="GB"
+          foot={hotContainers.length
+            ? <span className="down">{`● ${hotContainers.length} 个容器显存占用 > 75%（可用 ${cs.kvTotal} GB · 量化 ${cfg.quantization}）`}</span>
+            : `可用 ${cs.kvTotal} GB · 量化 ${cfg.quantization}`}
+          jump={hotContainers.length ? containerJump(hotContainers[0], `到显存最紧的那个容器（${hotContainers[0].instance}）那一行：重启实例在上方模型表那一行做`) : undefined} />
         <Kpi label="集群生成吞吐" value={cs.tokensPerSec.toLocaleString('zh-CN')} unit="token/s" foot={`平均 batch ${ms.length ? Math.round(ms.reduce((s, m) => s + m.avgBatch, 0) / ms.length) : 0} 条 / 批`} />
         <Kpi label="缓存节省折算" value={cs.savedCost.toLocaleString('zh-CN')} unit="元/日" foot={<><span className="up">✔ 已计入当日成本</span> 少生成 {cs.savedTokensWan.toLocaleString('zh-CN')} 万 token</>} />
       </div>
@@ -93,24 +122,25 @@ export default function EngineMetrics() {
         <div className="panel-body">
           <Table
             minWidth={1120}
+            rowKeys={ms.map((m) => m.short)} pick={pick}
             head={['模型', '实例 / 卡位', 'GPU 利用率', 'KV 缓存占用', '前缀缓存命中率', '首 Token 时延', '生成吞吐', '平均 batch', '请求队列', '重启次数', '判定', '操作']}
             rows={ms.map((m) => [
               <span className="strong small">{m.short}<div className="tiny faint">{m.name}</div></span>,
               <span className="num small">{m.instances} 实例 · {m.cards} 卡<div className="tiny faint">{m.rpm} RPM</div></span>,
-              <div style={{ minWidth: 90 }}><span className="num small">{m.gpuUtil}%</span><Progress value={m.gpuUtil} tone={m.gpuUtil > 90 ? 'bad' : m.gpuUtil > 78 ? 'warn' : ''} /></div>,
+              <div style={{ minWidth: 90 }}><span className="num small">{m.gpuUtil}%</span><Progress value={m.gpuUtil} tone={m.gpuUtil > 90 ? 'bad' : m.gpuUtil > 78 ? 'warn' : ''} jump={m.gpuUtil > 78 ? modelJump(m, m.gpuUtil > 90 ? `这一行有「重启实例」；${m.gpuUtil}% 已接近上限，扩副本 / 降权重走资源调配工作台` : `这一行有「重启实例」；利用率偏高，先看请求队列与副本`) : undefined} /></div>,
               <span className="num small">{m.kvUsedGB} / {m.kvTotalGB} GB<div className="tiny faint">{Math.round((m.kvUsedGB / m.kvTotalGB) * 100)}% 显存</div></span>,
-              <span className="num" style={{ color: m.cacheHit < 35 ? 'var(--bad-text)' : undefined }}>{m.cacheHit}%</span>,
+              m.cacheHit < 35 ? <AlertBadge tone="bad" jump={modelJump(m, `命中率只有 ${m.cacheHit}%：这一行「重启实例」预热缓存，前缀缓存开关在上方引擎配置`)}>命中率 {m.cacheHit}%</AlertBadge> : <span className="num">{m.cacheHit}%</span>,
               <span className="num">{m.ttftMs} ms</span>,
               <span className="num small">{m.tokensPerSec.toLocaleString('zh-CN')}</span>,
               <span className="num small">{m.avgBatch}</span>,
               <span className="num small">{m.queueDepth}</span>,
-              <span className="num small">{m.restarts}</span>,
-              <span className="small">{m.health === 'ok' ? <Badge tone="good">{m.note}</Badge> : m.health === 'warn' ? <Badge tone="warn">{m.note}</Badge> : <Badge tone="bad">{m.note}</Badge>}</span>,
+              m.restarts ? <AlertBadge tone="warn" jump={modelJump(m, `已重启 ${m.restarts} 次：这一行再重启一次会触发冷启动（缓存重建），先确认不是显存打满`)}>重启 {m.restarts} 次</AlertBadge> : <span className="num small">{m.restarts}</span>,
+              m.health === 'ok' ? <Badge tone="good">{m.note}</Badge> : m.health === 'warn' ? <AlertBadge tone="warn" jump={modelJump(m, `到这一行动手：「重启实例」就在旁边；扩副本 / 降权重走资源调配工作台`)}>{m.note}</AlertBadge> : <AlertBadge tone="bad" jump={modelJump(m, `到这一行动手：「重启实例」就在旁边；扩副本 / 降权重走资源调配工作台`)}>{m.note}</AlertBadge>,
               <button className="btn sm ghost" disabled={!gate.manage} onClick={() => inferenceStore.restart(m.short)}>重启实例</button>,
             ])}
           />
           {st.models.filter((m) => m.state === '已下线' || m.replicas === 0).length ? (
-            <Callout text={`已下线或无存活副本的模型：${st.models.filter((m) => m.state === '已下线' || m.replicas === 0).map((m) => m.short).join(' / ')} —— 实例已全部摘除，KV 缓存释放，本表不再计入。`} />
+            <Callout warn jump={droppedContainers.length ? containerJump(droppedContainers[0], `到被摘除的那个容器（${droppedContainers[0].instance}）那一行：要恢复走模型部署与发布重新上线`) : undefined} text={`已下线或无存活副本的模型：${st.models.filter((m) => m.state === '已下线' || m.replicas === 0).map((m) => m.short).join(' / ')} —— 实例已全部摘除，KV 缓存释放，本表不再计入；要恢复须在「模型部署与发布」重新上线。`} />
           ) : null}
         </div>
       </Panel>
@@ -123,16 +153,17 @@ export default function EngineMetrics() {
         <div className="panel-body">
           <Table
             minWidth={1020}
+            rowKeys={containers.map((c) => c.instance)} pick={pick}
             head={['容器名', '所属模型', 'CPU 占用', '内存', '显存占用', '重启次数', '已运行', '状态']}
             rows={containers.map((c) => [
               <span className="mono small">{c.instance}</span>,
               <span className="small">{c.model}</span>,
               <span className="num small">{c.cpu}%</span>,
               <span className="num small">{c.memGB} GB</span>,
-              <div style={{ minWidth: 110 }}><span className="num small">{c.vramGB} / {c.vramTotal} GB</span><Progress value={Math.round((c.vramGB / c.vramTotal) * 100)} tone={c.vramGB / c.vramTotal > 0.9 ? 'bad' : c.vramGB / c.vramTotal > 0.75 ? 'warn' : ''} /></div>,
+              <div style={{ minWidth: 110 }}><span className="num small">{c.vramGB} / {c.vramTotal} GB</span><Progress value={Math.round((c.vramGB / c.vramTotal) * 100)} tone={c.vramGB / c.vramTotal > 0.9 ? 'bad' : c.vramGB / c.vramTotal > 0.75 ? 'warn' : ''} jump={c.vramGB / c.vramTotal > 0.75 ? containerJump(c, c.vramGB / c.vramTotal > 0.9 ? `这个容器显存已用 ${Math.round((c.vramGB / c.vramTotal) * 100)}%：到所属模型 ${c.model} 那一行重启实例 / 扩副本（工作台发卡位工单）` : `这个容器显存偏高（${Math.round((c.vramGB / c.vramTotal) * 100)}%）：到所属模型 ${c.model} 那一行看队列与副本`) : undefined} /></div>,
               <span className="num small">{c.restarts}</span>,
               <span className="num small">{c.uptimeMin ? `${Math.floor(c.uptimeMin / 60)} 小时 ${c.uptimeMin % 60} 分` : '—'}</span>,
-              c.state === '运行中' ? <State s="run" /> : c.state === '冷启动' ? <Badge tone="warn">冷启动 · 缓存重建中</Badge> : <Badge tone="muted">已摘除</Badge>,
+              c.state === '运行中' ? <State s="run" /> : c.state === '冷启动' ? <AlertBadge tone="warn" jump={containerJump(c, '这个容器刚重启、前缀缓存正在重建：到所属模型那一行看命中率是否已掉下来')}>冷启动 · 缓存重建中</AlertBadge> : <Badge tone="muted">已摘除</Badge>,
             ])}
           />
           <div className="row gap6" style={{ marginTop: 10 }}>

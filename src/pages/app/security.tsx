@@ -1,10 +1,11 @@
-import React, { useState } from 'react'
-import { Kpi, Panel, PageHead, Badge, State, Table, Progress, Callout } from '../../components/ui'
+import React, { useEffect, useState } from 'react'
+import { Kpi, Panel, PageHead, Badge, State, Table, Progress, Callout, AlertBadge } from '../../components/ui'
 import { Chart, CHART_COLORS, AXIS_COLOR, SPLIT_COLOR, TOOLTIP_STYLE, GRID } from '../../components/Chart'
 import { secEvents, secDefenses } from '../../data/mock'
 import { engine, useEngine, KIND_ACTIONS, BASIS_OPTS, type ContainKind, type ContainAction } from '../../engine/engine'
 import { usePerm, useSession, useMatrix } from '../../engine/auth'
 import { usePolicies } from '../../engine/policies'
+import { Jump, useAlertPick, usePickFlash } from '../../engine/alertJump'
 
 const ACTIONS = [
   { name: '凭证吊销', desc: '即时吊销并重发，15 分钟内完成', tone: 'bad' as const },
@@ -26,6 +27,21 @@ export default function AppSecurity() {
   const [reason, setReason] = useState('')
   const [flash, setFlash] = useState<string | null>(null)
   const containments = st.orders.filter((o) => o.type === 'containment')
+  /** 任何红 / 黄告警点过来：?pick=<事件编号>（安全事件台账）或 ?pick=<处置工单号>（处置工单） */
+  const pick = useAlertPick()
+  usePickFlash(pick)
+  const openEvents = secEvents.filter((e) => e.status !== '已闭环')
+  const urgentOpen = openEvents.find((e) => e.level === '紧急') ?? openEvents[0]
+  useEffect(() => {
+    if (!pick) return
+    const hit = containments.find((o) => o.id === pick)
+    if (!hit) return
+    const k = (hit.spec.kind as ContainKind) ?? kind
+    setKind(k)
+    setName(String(hit.spec.name ?? hit.target))
+    setAction((hit.spec.action as ContainAction) ?? KIND_ACTIONS[k][0])
+    setBasis(String(hit.spec.basis ?? '告警触发'))
+  }, [pick])
 
   const submitAction = () => {
     const r = engine.submit({ type: 'containment', applicant: session?.name ?? '运营值班', dept: session?.dept ?? '应用中心', level: st.managed.find((m) => m.name === name)?.level ?? '共享', reason: reason || '（未填写业务影响说明）', spec: { kind, name, action, basis } })
@@ -52,7 +68,7 @@ export default function AppSecurity() {
       <PageHead
         title="安全事件处置"
         desc="四条防护域值守 · 分析定级 · 应急处置 · 复盘改进"
-        extra={<><Badge tone="bad">1 起紧急处置中</Badge><Badge tone="good">闭环率 80%</Badge></>}
+        extra={<>{urgentOpen ? <AlertBadge tone="bad" jump={Jump.securityEvent(urgentOpen.id, '点过去直接落到这起还在处置中的紧急事件')}>{openEvents.filter((e) => e.level === '紧急').length} 起紧急处置中</AlertBadge> : <Badge tone="good">无紧急事件</Badge>}<Badge tone="good">闭环率 80%</Badge></>}
       />
 
       <div className="grid g-5">
@@ -74,7 +90,7 @@ export default function AppSecurity() {
                 <span>{d.name}</span>
                 <span className="muted">{d.handled} / {d.alerts} · {d.rate}</span>
               </div>
-              <div style={{ marginTop: 5 }}><Progress value={parseFloat(d.rate)} tone={d.rate === '100%' ? 'green' : 'warn'} /></div>
+              <div style={{ marginTop: 5 }}><Progress value={parseFloat(d.rate)} tone={d.rate === '100%' ? 'green' : 'warn'} jump={d.rate === '100%' ? undefined : Jump.securityEvent((openEvents[0] ?? secEvents[0]).id, `这条防线还有 ${d.alerts - d.handled} 起未闭环：点过去看还在处置中的这起事件`)}/></div>
             </div>
           ))}
         </Panel>
@@ -85,14 +101,15 @@ export default function AppSecurity() {
           <Table
             minWidth={940}
             head={['事件编号', '时间', '等级', '类型', '事件描述', '处置措施', '状态']}
+            rowKeys={secEvents.map((e) => e.id)} pick={pick}
             rows={secEvents.map((e) => [
               <span className="mono small">{e.id}</span>,
               <span className="mono small">{e.time}</span>,
-              e.level === '紧急' ? <Badge tone="bad">紧急</Badge> : e.level === '重要' ? <Badge tone="warn">重要</Badge> : <Badge tone="muted">一般</Badge>,
+              e.level === '紧急' ? <AlertBadge tone="bad" jump={Jump.securityEvent(e.id, '点过去高亮这起事件，下面「处置动作执行」就是动手的地方')}>紧急</AlertBadge> : e.level === '重要' ? <AlertBadge tone="warn" jump={Jump.securityEvent(e.id, '点过去高亮这起事件，下面「处置动作执行」就是动手的地方')}>重要</AlertBadge> : <Badge tone="muted">一般</Badge>,
               <span className="strong small">{e.type}</span>,
               <span className="muted small" style={{ maxWidth: 260 }}>{e.desc}</span>,
               <span className="small" style={{ color: 'var(--text-dim)' }}>{e.action}</span>,
-              e.status === '处置中' ? <Badge tone="warn">处置中</Badge> : <Badge tone="good">已闭环</Badge>,
+              e.status === '处置中' ? <AlertBadge tone="warn" jump={Jump.securityEvent(e.id, '这起事件未闭环：点过去看这一行并做处置')}>处置中</AlertBadge> : <Badge tone="good">已闭环</Badge>,
             ])}
           />
         </div>
@@ -142,11 +159,15 @@ export default function AppSecurity() {
           <div style={{ marginTop: 12 }}>
             <Table
               head={['处置工单', '对象 · 动作', '依据', '状态', '生效结果与通知']}
+              rowKeys={containments.map((o) => o.id)} pick={pick}
               rows={containments.map((o) => [
                 <span className="mono small">{o.id}{o.auto ? <span className="tag gray" style={{ marginLeft: 6 }}>自动</span> : null}</span>,
                 <span className="small">{o.target}<div className="tiny faint">{o.applicant} · {o.dept}</div></span>,
                 <span className="tag amber">{String(o.spec.basis ?? '—')}</span>,
-                <State s={o.status === 'submitted' ? 'pending' : o.status === 'queued' ? 'queued' : o.status === 'running' ? 'run' : o.status === 'rejected' ? 'block' : o.status === 'rolled_back' ? 'rollback' : 'closed'} />,
+                o.status === 'submitted' ? <AlertBadge tone="warn" jump={Jump.approval(o.id, '这张处置工单待审批：点过去到审批台那一行通过 / 驳回')}>待处理</AlertBadge>
+                  : o.status === 'queued' ? <AlertBadge tone="warn" jump={Jump.order(o.id, '这张处置工单在变更窗口队列里：点过去看这一行（开启窗口 / 撤回）')}>排队中</AlertBadge>
+                  : o.status === 'rejected' ? <AlertBadge tone="bad" jump={{ page: '/app/security', pick: o.id, label: '这张处置工单被驳回：点回来这一行，上面就是补充依据重新提交的表单' }}>已拦截</AlertBadge>
+                  : <State s={o.status === 'running' ? 'run' : o.status === 'rolled_back' ? 'rollback' : 'closed'} />,
                 <span className="tiny faint" style={{ maxWidth: 320 }}>{o.trace.map((t) => t.action).join(' → ')}</span>,
               ])}
               minWidth={900}
@@ -207,11 +228,13 @@ export default function AppSecurity() {
             ].map((r) => [
               <span className="small">{r[0]}</span>,
               <span className="small num">{r[1]}</span>,
-              <span className="tiny" style={{ color: 'var(--text-dim)' }}>{r[2]}</span>,
+              (r[2] === '存在无版本记录策略' || r[2] === '待安全审批人处理')
+                ? <AlertBadge tone="warn" jump={Jump.modelSecurity('点过去到模型安全检测这一屏：审批策略变更、补版本记录就在那里做')}>{r[2]}</AlertBadge>
+                : <span className="tiny" style={{ color: 'var(--text-dim)' }}>{r[2]}</span>,
             ])}
             minWidth={420}
           />
-          <Callout warn text="策略弱化审计：未经审批下调处置等级或放宽拦截范围的变更，系统自动回滚至上一审批版本并登记审计记录。" />
+          <Callout warn jump={Jump.modelSecurity('点过去看这些被自动回滚的策略变更（含待审批的变更单）')} text="策略弱化审计：未经审批下调处置等级或放宽拦截范围的变更，系统自动回滚至上一审批版本并登记审计记录。" />
         </Panel>
       </div>
     </div>
